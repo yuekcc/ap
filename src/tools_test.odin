@@ -244,6 +244,16 @@ test_bash_timeout_kills_tree :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_bash_large_output_not_truncated :: proc(t: ^testing.T) {
+	ctx, dir := tool_test_context(t, "tool-bash-large")
+	defer test_cleanup(dir)
+	res := tool_execute("bash", json.Value(json_obj(`{"command":"seq 1 60000"}`)), &ctx)
+	testing.expect(t, res.ok)
+	testing.expect(t, len(res.content) > 250000)
+	testing.expect(t, test_contains(res.content, "\n60000"))
+}
+
+@(test)
 test_bash_output_limit :: proc(t: ^testing.T) {
 	ctx, dir := tool_test_context(t, "tool-bash-limit")
 	defer test_cleanup(dir)

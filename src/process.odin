@@ -248,7 +248,7 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 
 		if process_exited {
 			// 直接子进程退出后只排空当前可用数据，不等待后台后代持有的管道 EOF。
-			for _ in 0 ..< 4 {
+			for {
 				read_any := false
 				if child.stdout != nil {
 					data, done, _ := read_available(child.stdout, read_buf[:])
@@ -279,6 +279,10 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 						os.close(child.stderr)
 						child.stderr = nil
 					}
+				}
+				if len(combined) > opts.max_capture_bytes {
+					result.overflow = true
+					break
 				}
 				if !read_any {
 					break

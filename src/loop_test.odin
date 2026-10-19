@@ -135,6 +135,41 @@ loop_test_finish :: proc(l: ^Loop, dir: string) {
 }
 
 @(test)
+test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-blob-output")
+	args := make(json.Object)
+	args["command"] = json.String("seq 1 60000")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{tool_name = "bash", tool_id = "call_out", tool_input = args, stop = .Tool_Use},
+			{text = "done", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "run big output")
+	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	found_ref := false
+	found_size := 0
+	for ev in events {
+		if ev.type != "tool_execution_end" {
+			continue
+		}
+		end: Tool_Execution_End_Event
+		json.unmarshal_string(ev.line, &end)
+		if ref, ok := end.content_ref.?; ok {
+			found_ref = true
+			data, berr := blob_read(loop.project, ref)
+			testing.expect_value(t, berr.code, Exit_Code.OK)
+			found_size = len(data)
+		}
+	}
+	testing.expect(t, found_ref)
+	testing.expect(t, found_size > 250000)
+	loop_test_finish(&loop, dir)
+}
+
+@(test)
 test_loop_blobs_large_tool_input :: proc(t: ^testing.T) {
 	loop, _, dir := loop_test_setup(t, "loop-blob-input")
 	target := fmt.tprintf("%s/big.txt", dir)

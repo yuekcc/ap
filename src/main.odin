@@ -365,6 +365,7 @@ main :: proc() {
 		result.cancelled = true
 		result.stop_reason = "cancelled"
 	}
+	cleanup_jobs()
 	reason := "exit"
 	if result.cancelled {
 		reason = "signal"
@@ -388,7 +389,6 @@ main :: proc() {
 	if !is_ok(end_err) {
 		log_error(end_err.message)
 		transcript_close(&store)
-		cleanup_jobs()
 		os.exit(int(Exit_Code.Internal))
 	}
 	if out.format == .Stream_Json {
@@ -403,7 +403,6 @@ main :: proc() {
 		exit_code = signal_code if signal_code != 0 else 130
 	}
 	transcript_close(&store)
-	cleanup_jobs()
 	loop_destroy(&loop)
 	os.exit(exit_code)
 }

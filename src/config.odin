@@ -240,7 +240,26 @@ agent_file_path :: proc(config_dir, name: string) -> string {
 	return fmt.tprintf("%s/agents/%s.md", config_dir, name)
 }
 
+agent_name_safe :: proc(name: string) -> bool {
+	if len(name) == 0 || name == "." || name == ".." {
+		return false
+	}
+	for ch in name {
+		valid := (ch >= 'a' && ch <= 'z') ||
+		         (ch >= 'A' && ch <= 'Z') ||
+		         (ch >= '0' && ch <= '9') ||
+		         ch == '-' || ch == '_'
+		if !valid {
+			return false
+		}
+	}
+	return true
+}
+
 load_agent :: proc(config_dir, name: string) -> (Agent_Def, Error) {
+	if !agent_name_safe(name) {
+		return {}, make_error(.Usage, "invalid agent name %q", name)
+	}
 	path := agent_file_path(config_dir, name)
 	if os.exists(path) {
 		data, derr := os.read_entire_file_from_path(path, context.allocator)

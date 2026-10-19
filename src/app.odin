@@ -85,16 +85,30 @@ write_stdout :: proc(data: []byte) -> bool {
 	if len(data) == 0 {
 		return true
 	}
-	n, err := os.write(os.stdout, data)
-	return err == nil && n == len(data)
+	total := 0
+	for total < len(data) {
+		n, err := os.write(os.stdout, data[total:])
+		if err != nil || n <= 0 {
+			return false
+		}
+		total += n
+	}
+	return true
 }
 
 write_stderr :: proc(data: []byte) -> bool {
 	if len(data) == 0 {
 		return true
 	}
-	n, err := os.write(os.stderr, data)
-	return err == nil && n == len(data)
+	total := 0
+	for total < len(data) {
+		n, err := os.write(os.stderr, data[total:])
+		if err != nil || n <= 0 {
+			return false
+		}
+		total += n
+	}
+	return true
 }
 
 USAGE_TEXT :: `ap - 一次性命令行 coding agent

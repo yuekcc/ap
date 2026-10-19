@@ -360,9 +360,8 @@ transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string,
 	if merr != nil {
 		return "", make_error(.Internal, "cannot serialize transcript event: %v", merr)
 	}
-	n, werr := os.write(store.file, normalized)
-	if werr != nil || n != len(normalized) {
-		return "", make_error(.Internal, "cannot write transcript %s: %v", store.path, werr)
+	if !write_all_file(store.file, normalized) {
+		return "", make_error(.Internal, "cannot write transcript %s", store.path)
 	}
 	nl: []byte = transmute([]byte)string("\n")
 	n2, werr2 := os.write(store.file, nl)
