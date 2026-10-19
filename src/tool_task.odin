@@ -225,6 +225,11 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		res.metadata = task_metadata(state, run.duration_ms)
 		return res
 	}
+	if run.overflow {
+		res := tool_fail("subagent output exceeded max_capture_bytes")
+		res.metadata = task_metadata(state, run.duration_ms)
+		return res
+	}
 	if !state.saw_session_start {
 		res := tool_fail(fmt.tprintf("subagent exited before session_start; stderr: %s", task_sanitize_tail(state.stderr_ring[:], 2000)))
 		res.metadata = task_metadata(state, run.duration_ms)

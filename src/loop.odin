@@ -598,6 +598,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if err := loop_append(l, Step_Start_Event{header = h_step, step = step}, h_step); !is_ok(err) {
 			result.exit_code = .Internal
 			result.fatal_error = err.message
+			result.num_steps = step
 			return result
 		}
 		progress(l, "[step %d] calling model", step)
@@ -607,6 +608,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_error(l, "session", .None, cerr.message, false, 1)
 			result.exit_code = .Usage
 			result.fatal_error = cerr.message
+			result.num_steps = step
 			return result
 		}
 		tools, terr := tool_definitions(l.agent, l.agent_depth, l.max_agent_depth)
@@ -614,6 +616,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_error(l, "session", .None, terr.message, false, 1)
 			result.exit_code = .Internal
 			result.fatal_error = terr.message
+			result.num_steps = step
 			return result
 		}
 		all_messages := make([dynamic]Chat_Message, 0, len(messages) + 1)
@@ -641,6 +644,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				_ = loop_write_error(l, "session", .None, err.message, false, attempt)
 				result.exit_code = .Tool if err.code == .Tool else .Internal
 				result.fatal_error = err.message
+				result.num_steps = step
 				return result
 			}
 			if perr.kind == .None {
@@ -699,6 +703,8 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_turn_end(l, "context_too_long")
 			result.exit_code = .Provider
 			result.fatal_error = "context_too_long"
+			result.stop_reason = "context_too_long"
+			result.result_text = l.last_text
 			result.num_steps = step
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
 			return result

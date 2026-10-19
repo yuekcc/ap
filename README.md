@@ -127,7 +127,7 @@ New-Item -ItemType Directory -Force $cfg | Out-Null
 - Windows 控制台输出中文前会设置 UTF-8 code page。
 - 文件工具只支持 UTF-8，CRLF 统一为 LF；二进制或非 UTF-8 文件请用 `bash` 处理。
 - `bash` 每次调用是独立进程，不保留 cwd、环境变量或 shell 变量；stdin 为 NUL。
-- 超时/取消会终止整棵进程树：Windows 使用 Job Object（失败时退化 `taskkill /T /F`），Unix 递归发送 `SIGTERM` / `SIGKILL`。
+- 超时/取消会终止整棵进程树：Windows 使用 Job Object（失败时退化 `taskkill /T /F`）；Unix 因 `core:os` 不暴露 `setpgid`，用递归后代扫描发送 `SIGTERM`，2s 后发送 `SIGKILL`。
 - 子代理通过当前 ap 可执行文件重新拉起，stdout 是 `stream-json` 事件，stderr 是人类可读日志。父进程不设 `task` 超时，靠信号取消。
 
 ## 非目标（v1）

@@ -33,7 +33,7 @@ find_bash :: proc() -> (string, Error) {
 		candidate := fmt.tprintf("%s/%s", strings.trim_right(dir, `\/`), exe_name)
 		when ODIN_OS == .Windows {
 			lower, _ := strings.to_lower(candidate, context.temp_allocator)
-			if strings.contains(lower, "windows\\system32") || strings.contains(lower, "windowsapps") {
+			if strings.contains(lower, "system32") || strings.contains(lower, "windowsapps") {
 				// WSL 的 bash.exe 不是 Git for Windows，跳过。
 				continue
 			}

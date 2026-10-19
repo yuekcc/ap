@@ -5,6 +5,7 @@ import "core:encoding/hex"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:time"
 import "core:unicode/utf8"
 
 sha256_hex :: proc(data: []byte) -> string {
@@ -115,6 +116,14 @@ resolve_tool_path :: proc(cwd, path: string) -> (string, Error) {
 	if len(path) == 0 {
 		return "", make_error(.Usage, "path must not be empty")
 	}
+	when ODIN_OS == .Windows {
+		if len(path) >= 3 && path[0] == '/' && path[2] == '/' {
+			ch := path[1]
+			if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
+				return "", make_error(.Usage, "MSYS 路径不受支持，请使用 Win32 路径: %s", path)
+			}
+		}
+	}
 	return join_and_clean(cwd, path)
 }
 
@@ -149,7 +158,7 @@ ensure_writable_dir :: proc(dir: string) -> Error {
 	if err := ensure_dir(dir); !is_ok(err) {
 		return err
 	}
-	probe := fmt.tprintf("%s/.ap-write-test", dir)
+	probe := fmt.tprintf("%s/.ap-write-test-%d-%d", dir, os.get_pid(), time.time_to_unix_nano(time.now()))
 	probe_data: []byte = transmute([]byte)string("ok")
 	if werr := os.write_entire_file_from_bytes(probe, probe_data); werr != nil {
 		return make_error(.Usage, "$AP_CONFIG is not writable: %s", dir)

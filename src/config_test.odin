@@ -145,6 +145,11 @@ test_path_relative_and_home :: proc(t: ^testing.T) {
 	expect := fmt.tprintf("%s/a.txt", strings.trim_right(dir, `\/`))
 	testing.expect_value(t, joined, normalize_slashes(expect))
 
+	when ODIN_OS == .Windows {
+		_, msys_err := resolve_tool_path(dir, "/z/projects/example")
+		testing.expect_value(t, msys_err.code, Exit_Code.Usage)
+	}
+
 	home, herr := os.user_home_dir(context.allocator)
 	testing.expect_value(t, herr, nil)
 	expanded, err2 := expand_home("~/x")
