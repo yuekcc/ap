@@ -6,6 +6,15 @@ import "core:sync"
 import "core:sys/posix"
 import "core:time"
 
+local_now :: proc() -> (year, month, day, hour, minute, second: int) {
+	stamp := posix.time_t(time.time_to_unix(time.now()))
+	tm: posix.tm
+	if posix.localtime_r(&stamp, &tm) == nil {
+		return 1970, 1, 1, 0, 0, 0
+	}
+	return tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec
+}
+
 attach_process_job :: proc(process: os.Process) -> Job_Handle {
 	return 0
 }

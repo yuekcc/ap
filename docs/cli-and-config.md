@@ -181,7 +181,7 @@ $AP_CONFIG/
 1. 以启动目录为项目根；解析为绝对路径
 2. 规范化：解析 `.` / `..` / 符号链接 / junction，去掉尾部分隔符，把 `\` 统一成 `/`
 3. Windows 上把整条路径转小写（不能只小写盘符，`Z:\Projects\AP` 与 `Z:\projects\ap` 必须落到同一目录）
-4. `project_path_hash = sha256(规范化路径)`，取完整 64 位 hex
+4. `project_path_hash = fnv32a(规范化路径)`，取 8 位 hex
 5. `path.txt` 存规范化路径；若同一 hash 对应的 `path.txt` 内容不同，视为冲突并退出 2
 6. `-s` / `-c` **只在当前项目目录内查找**，不跨项目、不扫描其它 hash；从子目录启动会落到不同项目，找不到原 session
 
@@ -206,7 +206,7 @@ $AP_CONFIG/
 
 必须与 `-s` / `-c` 连用。行为：
 
-1. 生成新的 `session_id`（UUID v4）
+1. 生成新的 `session_id`（`ses_<本地时间 YYYYMMDD_HHmmss>_<UUID 前 12 位十六进制>`）
 2. 复制源 transcript 的全部事件到同项目目录下的新文件
 3. 追加新的 `session_start`：
    - `session_id` = 新 id

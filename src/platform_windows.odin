@@ -15,6 +15,13 @@ foreign k32 {
 	AssignProcessToJobObject  :: proc(job, process: win32.HANDLE) -> win32.BOOL ---
 	TerminateJobObject        :: proc(job: win32.HANDLE, exit_code: u32) -> win32.BOOL ---
 	CloseHandle               :: proc(handle: win32.HANDLE) -> win32.BOOL ---
+	GetLocalTime              :: proc(lpSystemTime: ^win32.SYSTEMTIME) ---
+}
+
+local_now :: proc() -> (year, month, day, hour, minute, second: int) {
+	st: win32.SYSTEMTIME
+	GetLocalTime(&st)
+	return int(st.year), int(st.month), int(st.day), int(st.hour), int(st.minute), int(st.second)
 }
 
 running_jobs: [dynamic]Job_Handle

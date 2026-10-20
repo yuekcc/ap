@@ -425,5 +425,32 @@ list_skills :: proc() -> int {
 
 new_session_id :: proc() -> string {
 	id := uuid.generate_v4()
-	return uuid.to_string(id, context.allocator)
+	text := uuid.to_string(id, context.allocator)
+	defer delete(text)
+
+	hex: [12]u8
+	n := 0
+	for i in 0 ..< len(text) {
+		ch := text[i]
+		if ch == '-' {
+			continue
+		}
+		if n == len(hex) {
+			break
+		}
+		hex[n] = ch
+		n += 1
+	}
+
+	year, month, day, hour, minute, second := local_now()
+	return fmt.tprintf(
+		"ses_%04d%02d%02d_%02d%02d%02d_%s",
+		year,
+		month,
+		day,
+		hour,
+		minute,
+		second,
+		string(hex[:n]),
+	)
 }

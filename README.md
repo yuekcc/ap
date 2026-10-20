@@ -115,7 +115,7 @@ $AP_CONFIG/
   settings.json
   AGENTS.md
   agents/<name>.md
-  projects/<sha256(规范化 cwd)>/
+  projects/<fnv32a(规范化 cwd)>/
     path.txt
     blobs/<sha256>
     <session_id>.jsonl

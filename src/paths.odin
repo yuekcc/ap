@@ -18,6 +18,14 @@ sha256_hex :: proc(data: []byte) -> string {
 	return string(encoded)
 }
 
+fnv32a_hex :: proc(data: []byte) -> string {
+	hash: u32 = 2166136261
+	for b in data {
+		hash = (hash ~ u32(b)) * 16777619
+	}
+	return fmt.tprintf("%08x", hash)
+}
+
 normalize_slashes :: proc(path: string, allocator := context.allocator) -> string {
 	if !strings.contains_rune(path, '\\') {
 		return strings.clone(path, allocator)
@@ -180,7 +188,7 @@ open_project :: proc(config_dir, cwd: string) -> (Project, Error) {
 	if !is_ok(rerr) {
 		return {}, rerr
 	}
-	hash := sha256_hex(transmute([]byte)root)
+	hash := fnv32a_hex(transmute([]byte)root)
 	project_dir := fmt.tprintf("%s/projects/%s", config_dir, hash)
 	blobs_dir := fmt.tprintf("%s/blobs", project_dir)
 	if err := ensure_dir(blobs_dir); !is_ok(err) {
