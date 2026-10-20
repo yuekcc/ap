@@ -118,7 +118,12 @@ load_settings :: proc(config_dir: string) -> (Settings, Error) {
 	s.path = fmt.tprintf("%s/settings.json", config_dir)
 	data, derr := os.read_entire_file_from_path(s.path, context.allocator)
 	if derr != nil {
-		return s, make_error(.Usage, "cannot read config file %s: %v", s.path, derr)
+		return s, make_error(
+			.Usage,
+			"cannot read config file %s: %v\nhint: create it with model and api_key (see settings.example.json), or pass --config-dir",
+			s.path,
+			derr,
+		)
 	}
 	value, perr := json.parse_string(string(data), .JSON, true)
 	if perr != nil {

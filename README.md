@@ -41,7 +41,14 @@ odin build src -out:ap -vet
 
 ## 配置
 
-配置文件固定为 `$AP_CONFIG/settings.json`，默认 `~/.ap`，可用 `--config-dir` 或 `AP_CONFIG` 覆盖。
+配置文件固定为 `$AP_CONFIG/settings.json`，默认 `~/.ap`，可用 `--config-dir` 或 `AP_CONFIG` 覆盖。最快的做法是把仓库里的示例复制过去：
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.ap" | Out-Null
+Copy-Item settings.example.json "$env:USERPROFILE\.ap\settings.json"
+```
+
+然后编辑其中的 `model`、`base_url`、`api_key`。
 
 ```json
 {

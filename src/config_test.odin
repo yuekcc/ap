@@ -24,6 +24,16 @@ test_settings_defaults_and_defaults_file :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_settings_missing_file_has_hint :: proc(t: ^testing.T) {
+	dir := test_temp_dir("settings-missing")
+	defer test_cleanup(dir)
+	_, err := load_settings(dir)
+	testing.expect_value(t, err.code, Exit_Code.Usage)
+	testing.expect(t, test_contains(err.message, "hint:"))
+	testing.expect(t, test_contains(err.message, "settings.json"))
+}
+
+@(test)
 test_settings_env_api_key_overrides :: proc(t: ^testing.T) {
 	dir := test_temp_dir("settings-env")
 	defer test_cleanup(dir)
