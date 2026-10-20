@@ -106,7 +106,7 @@ ap --list-skills
 - 全局：`~/.agents/skills/<name>/SKILL.md`（多 agent 共用）
 - 项目：`<启动目录>/.agents/skills/<name>/SKILL.md`（同名覆盖全局）
 
-正文不进入上下文，也不自动执行。格式与规则见 [docs/skills.md](docs/skills.md)。
+正文不进入上下文，也不自动执行。声明 `disable-model-invocation: true` 的技能不会注入 system prompt，但仍会出现在 `--list-skills` 中。格式与规则见 [docs/skills.md](docs/skills.md)。
 
 ## 存储
 

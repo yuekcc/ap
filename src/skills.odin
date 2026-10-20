@@ -32,10 +32,11 @@ skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成�
 // ---- 类型 ----
 
 Skill :: struct {
-	name:        string,
-	description: string,
-	content:     string,
-	location:    string,
+	name:                     string,
+	description:              string,
+	content:                  string,
+	location:                 string,
+	disable_model_invocation: bool,
 }
 
 // ---- 装配入口 ----
@@ -94,15 +95,25 @@ load_skill_dirs :: proc(dirs: []string) -> []Skill {
 
 // ---- 列表组装 ----
 
-// system prompt 注入块：无 skill 时返回空串（不留任何噪音）。
+// system prompt 注入块：无可用 skill 时返回空串（不留任何噪音）。
+// disable-model-invocation 的技能只在 --list-skills 中展示，不进入提示词。
 skills_prompt_block :: proc(skills: []Skill) -> string {
-	if len(skills) == 0 {
+	enabled_count := 0
+	for skill in skills {
+		if !skill.disable_model_invocation {
+			enabled_count += 1
+		}
+	}
+	if enabled_count == 0 {
 		return ""
 	}
 	b := strings.builder_make()
 	strings.write_string(&b, SKILL_PROMPT_INTRO)
 	strings.write_string(&b, "\n\n<available_skills>\n")
 	for skill in skills {
+		if skill.disable_model_invocation {
+			continue
+		}
 		strings.write_string(&b, "  <skill>\n")
 		fmt.sbprintf(&b, "    <name>%s</name>\n", escape_xml(skill.name))
 		fmt.sbprintf(&b, "    <description>%s</description>\n", escape_xml(skill.description))
@@ -200,6 +211,8 @@ load_skill :: proc(dir: string) -> (skill: Skill, ok: bool) {
 			if len(skill.description) == 0 {
 				skill.description = value
 			}
+		case "disable-model-invocation":
+			skill.disable_model_invocation = front_bool(value)
 		}
 	}
 
@@ -226,6 +239,11 @@ front_value :: proc(value: string) -> string {
 		}
 	}
 	return trimmed
+}
+
+// 仅识别 true（不区分大小写）；其它值一律视为 false。
+front_bool :: proc(value: string) -> bool {
+	return strings.equal_fold(strings.trim_space(value), "true")
 }
 
 unescape_double_quoted :: proc(value: string) -> string {

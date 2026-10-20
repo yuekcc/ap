@@ -42,6 +42,39 @@ test_load_skill_unescapes_quoted_values :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_load_skill_disable_model_invocation :: proc(t: ^testing.T) {
+	dir := test_temp_dir("skill-disable")
+	defer test_cleanup(dir)
+
+	disabled_dir := fmt.tprintf("%s/disabled", dir)
+	test_write_file(
+		fmt.tprintf("%s/%s", disabled_dir, SKILL_FILE),
+		"---\nname: manual\ndescription: manual only\ndisable-model-invocation: true\n---\nbody\n",
+	)
+	disabled, ok := load_skill(disabled_dir)
+	testing.expect(t, ok)
+	testing.expect(t, disabled.disable_model_invocation)
+
+	quoted_dir := fmt.tprintf("%s/quoted", dir)
+	test_write_file(
+		fmt.tprintf("%s/%s", quoted_dir, SKILL_FILE),
+		"---\nname: quoted\ndescription: quoted flag\ndisable-model-invocation: \"TRUE\"\n---\nbody\n",
+	)
+	quoted, ok2 := load_skill(quoted_dir)
+	testing.expect(t, ok2)
+	testing.expect(t, quoted.disable_model_invocation)
+
+	enabled_dir := fmt.tprintf("%s/enabled", dir)
+	test_write_file(
+		fmt.tprintf("%s/%s", enabled_dir, SKILL_FILE),
+		"---\nname: enabled\ndescription: enabled flag\ndisable-model-invocation: false\n---\nbody\n",
+	)
+	enabled, ok3 := load_skill(enabled_dir)
+	testing.expect(t, ok3)
+	testing.expect(t, !enabled.disable_model_invocation)
+}
+
+@(test)
 test_load_skill_requires_name_description_and_content :: proc(t: ^testing.T) {
 	dir := test_temp_dir("skill-invalid")
 	defer test_cleanup(dir)
@@ -154,12 +187,28 @@ test_skills_prompt_block :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_skills_prompt_block_skips_disabled :: proc(t: ^testing.T) {
+	skills := []Skill {
+		{name = "auto", description = "available", location = "C:/skills/auto/SKILL.md"},
+		{name = "manual", description = "manual only", location = "C:/skills/manual/SKILL.md", disable_model_invocation = true},
+	}
+	block := skills_prompt_block(skills)
+	testing.expect(t, test_contains(block, "<name>auto</name>"))
+	testing.expect(t, !test_contains(block, "manual"))
+
+	all_disabled := []Skill {
+		{name = "manual", description = "manual only", location = "C:/skills/manual/SKILL.md", disable_model_invocation = true},
+	}
+	testing.expect_value(t, skills_prompt_block(all_disabled), "")
+}
+
+@(test)
 test_skills_brief :: proc(t: ^testing.T) {
 	testing.expect_value(t, skills_brief(nil), "No skill found\n")
 
 	skills := []Skill {
 		{name = "alpha", description = "does alpha"},
-		{name = "bravo", description = "does bravo"},
+		{name = "bravo", description = "does bravo", disable_model_invocation = true},
 	}
 	testing.expect_value(t, skills_brief(skills), "1. alpha: does alpha\n2. bravo: does bravo\n")
 }

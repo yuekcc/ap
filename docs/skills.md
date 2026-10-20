@@ -40,12 +40,13 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 约束：
 
 1. front matter 必须从文件第一行 `---` 开始，以单独一行 `---` 结束
-2. 只解析 `name` 与 `description`；其余字段忽略，`#` 开头的行忽略
+2. 只解析 `name`、`description` 与 `disable-model-invocation`；其余字段忽略，`#` 开头的行忽略
 3. 值可以不加引号，也可以用单/双引号包裹；双引号内的 `\"`、`\\`、`\n`、`\t`、`\r` 会还原
 4. `name` 只是标识，不要求等于目录名；`description` 写清“什么时候该用它”，模型据此选择
 5. 正文是 front matter 之后的全部内容，必须非空
 6. 文件接受 UTF-8 BOM 与 CRLF，正文按 LF 归一
 7. 正文不会被截断地注入提示词；它只在模型主动读取时进入上下文
+8. `disable-model-invocation: true` 表示该技能只供用户查看，不进入 system prompt；只识别 `true`（不区分大小写），缺省为 false。它仍会加载，并出现在 `--list-skills` 中
 
 ## 注入 system prompt
 
@@ -69,11 +70,12 @@ skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成�
 
 约束：
 
-1. 没有任何有效技能时，整个「可用技能」小节不出现，不留空标题或“暂无技能”之类噪音
+1. 没有任何可注入技能时（包括全部技能都声明 `disable-model-invocation: true`），整个「可用技能」小节不出现，不留空标题或“暂无技能”之类噪音
 2. `name` / `description` / `location` 做 XML 转义；路径统一用 `/`，避免 Windows 反斜杠在提示词里被当成转义符
 3. 只注入元数据，不注入正文：技能再多也只占清单的 token
 4. `--append-system-prompt` 仍排在技能之后，用户追加的指令优先级更靠后但位置最后
 5. agent 工具白名单不参与发现；如果 agent 既没有 `read_file` 也没有 `bash`，清单仍会注入，但它无法读取正文。需要技能时给该 agent 加上 `read_file`
+6. 声明 `disable-model-invocation: true` 的技能从清单中剔除，但仍会出现在 `--list-skills` 输出中
 
 ## 查看
 
@@ -81,7 +83,7 @@ skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成�
 ap --list-skills
 ```
 
-输出所有人读简表，一行一个：
+输出所有人读简表（包括 `disable-model-invocation: true` 的技能），一行一个：
 
 ```text
 1. release-notes: 根据 git log 生成发布说明...
@@ -117,6 +119,6 @@ llmcli 的 `Skill.content` 会读入内存用于校验；ap 同样校验正文�
 - front matter 解析、引号与转义、BOM/CRLF、正文 trim
 - 缺少 name / description / 正文、缺少结束 `---`、没有 front matter 时判为无效
 - 同名覆盖、按 name 排序、两处根目录的发现顺序
-- 提示词块的空/非空、XML 转义、路径正斜杠
-- 简表格式
+- 提示词块的空/非空、XML 转义、路径正斜杠、跳过 `disable-model-invocation: true` 的技能
+- 简表格式（包含被禁用的技能）
 - system prompt 中的小节位置（技能 → 全局记忆 → 追加指令）
