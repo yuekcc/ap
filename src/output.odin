@@ -8,7 +8,7 @@ Output_State :: struct {
 }
 
 output_write_json :: proc(obj: json.Object) {
-	data, err := json.marshal(obj)
+	data, err := json_marshal_utf8(obj)
 	if err != nil {
 		return
 	}
@@ -143,7 +143,7 @@ output_final :: proc(out: ^Output_State, session_id: string, result: Loop_Result
 			num_steps = result.num_steps,
 			usage = result.usage,
 		}
-		data, err := json.marshal(payload)
+		data, err := json_marshal_utf8(payload)
 		if err != nil {
 			return
 		}

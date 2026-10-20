@@ -295,6 +295,16 @@ test_chat_request_body_shape :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_chat_request_body_preserves_unicode :: proc(t: ^testing.T) {
+	messages := []Chat_Message{{role = "user", content = "中文请求"}}
+	body, err := build_chat_request_body({model = "m", messages = messages, max_tokens = 16})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	text := string(body)
+	testing.expect(t, test_contains(text, "中文请求"))
+	testing.expect(t, !test_contains(text, `\u4e2d`))
+}
+
+@(test)
 test_chat_endpoint_building :: proc(t: ^testing.T) {
 	testing.expect_value(t, build_chat_endpoint("http://x/v1"), "http://x/v1/chat/completions")
 	testing.expect_value(t, build_chat_endpoint("http://x/v1/"), "http://x/v1/chat/completions")

@@ -356,7 +356,7 @@ transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string,
 			delete_key(&obj, "header")
 		}
 	}
-	normalized, merr := json.marshal(obj)
+	normalized, merr := json_marshal_utf8(obj)
 	if merr != nil {
 		return "", make_error(.Internal, "cannot serialize transcript event: %v", merr)
 	}

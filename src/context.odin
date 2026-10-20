@@ -18,10 +18,11 @@ Chat_Tool_Function :: struct {
 }
 
 Chat_Message :: struct {
-	role:         string,
-	content:      Maybe(string) `json:"content"`,
-	tool_calls:   []Chat_Tool_Call `json:"tool_calls,omitempty"`,
-	tool_call_id: Maybe(string) `json:"tool_call_id,omitempty"`,
+	role:              string,
+	content:           Maybe(string) `json:"content"`,
+	reasoning_content: Maybe(string) `json:"reasoning_content,omitempty"`,
+	tool_calls:        []Chat_Tool_Call `json:"tool_calls,omitempty"`,
+	tool_call_id:      Maybe(string) `json:"tool_call_id,omitempty"`,
 }
 
 System_Prompt_Options :: struct {
@@ -310,6 +311,9 @@ project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, 
 				role = "assistant",
 				tool_calls = tool_calls[:],
 			}
+			if reasoning, has_reasoning := end.reasoning.?; has_reasoning && len(reasoning) > 0 {
+				msg.reasoning_content = reasoning
+			}
 			if len(text_parts) > 0 {
 				msg.content = strings.join(text_parts[:], "\n", context.allocator)
 			}
@@ -360,6 +364,13 @@ append_chat_message :: proc(messages: ^[dynamic]Chat_Message, msg: Chat_Message)
 				} else if !left_ok && right_ok {
 					last.content = msg.content
 				}
+				if new_reasoning, has_reasoning := msg.reasoning_content.?; has_reasoning {
+					if old_reasoning, old_ok := last.reasoning_content.?; old_ok && len(old_reasoning) > 0 && len(new_reasoning) > 0 {
+						last.reasoning_content = fmt.tprintf("%s\n%s", old_reasoning, new_reasoning)
+					} else {
+						last.reasoning_content = msg.reasoning_content
+					}
+				}
 				if len(msg.tool_calls) > 0 {
 					tools := make([dynamic]Chat_Tool_Call, 0, len(last.tool_calls) + len(msg.tool_calls))
 					append(&tools, ..last.tool_calls)
@@ -374,7 +385,7 @@ append_chat_message :: proc(messages: ^[dynamic]Chat_Message, msg: Chat_Message)
 }
 
 messages_bytes :: proc(messages: []Chat_Message) -> []byte {
-	data, err := json.marshal(messages)
+	data, err := json_marshal_utf8(messages)
 	if err != nil {
 		return nil
 	}

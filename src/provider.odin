@@ -209,7 +209,7 @@ build_chat_request_body :: proc(req: Chat_Message_Request) -> ([]byte, Error) {
 	if req.include_usage {
 		body.stream_options = Chat_Stream_Options{include_usage = true}
 	}
-	data, jerr := json.marshal(body)
+	data, jerr := json_marshal_utf8(body)
 	if jerr != nil {
 		return nil, make_error(.Internal, "cannot serialize chat request: %v", jerr)
 	}

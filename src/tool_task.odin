@@ -263,7 +263,7 @@ task_metadata :: proc(state: Task_State, duration_ms: int) -> json.Value {
 	obj := make(json.Object)
 	obj["child_session_id"] = json.String(state.child_session_id)
 	obj["stop_reason"] = json.String(state.stop_reason)
-	usage_data, _ := json.marshal(state.usage)
+	usage_data, _ := json_marshal_utf8(state.usage)
 	usage_value, _ := json.parse_string(string(usage_data), .JSON, true)
 	obj["usage"] = usage_value
 	obj["duration_ms"] = json.Integer(duration_ms)

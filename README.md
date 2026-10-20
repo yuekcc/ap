@@ -68,6 +68,8 @@ Copy-Item settings.example.json "$env:USERPROFILE\.ap\settings.json"
 
 `api_key` 也可由环境变量 `AP_API_KEY` 提供（优先级更高）；日志和 transcript 不记录密钥。`bash` 工具执行命令前会剔除 `AP_API_KEY`。
 
+JSON 输出（transcript、json/stream-json、provider 请求）保留 UTF-8 原文，不再把中文转成 `\uXXXX`；只有控制字符、引号、反斜杠和非法 UTF-8 字节保持转义。
+
 ## 使用
 
 ```sh
