@@ -54,7 +54,7 @@
 | 事件 | 投影为 |
 | --- | --- |
 | `user_message` | role=user |
-| `message_end`（role=assistant，stop_reason≠cancelled） | role=assistant，含 text / tool_use 块 |
+| `message_end`（role=assistant，stop_reason≠cancelled） | role=assistant，含 text / tool_use 块；有推理内容时带 `reasoning_content` |
 | `tool_execution_end` | role=tool，按 `tool_call_id` 与 tool_use 配对 |
 | `session_start` | 不进 messages；提供 system prompt |
 | `error` / `cancel` | 不进 messages |
@@ -81,6 +81,7 @@
 4. 空 assistant 消息（没有 text 也没有 tool_use）不提交
 5. `stop_reason=cancelled` 的 assistant 消息不提交；它的 tool result 也因此成为孤立结果被丢弃
 6. tool_use 与 tool result 的顺序按 assistant 消息内的顺序排列，不按 `seq` 重排
+7. assistant 消息的 `reasoning_content` 原样保留并回传；连续 assistant 消息合并时按出现顺序拼接
 
 ### tool result 内容
 

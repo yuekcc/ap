@@ -48,6 +48,38 @@ test_project_messages_basic :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_project_messages_preserves_reasoning_and_tool_order :: proc(t: ^testing.T) {
+	project, _, dir := test_project_and_settings(t, "ctx-reasoning")
+	defer test_cleanup(dir)
+
+	events := []Event {
+		test_event("user_message", `{"type":"user_message","content":"hi"}`),
+		test_event(
+			"message_end",
+			`{"type":"message_end","message_id":"m1","role":"assistant","content":[{"type":"text","text":"checking"},{"type":"tool_use","id":"call_2","name":"bash","input":{"command":"b"}},{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"a"}}],"stop_reason":"tool_use","reasoning":"think step"}`,
+		),
+		test_event(
+			"tool_execution_end",
+			`{"type":"tool_execution_end","tool_call_id":"call_2","ok":true,"content":"b done"}`,
+		),
+		test_event(
+			"tool_execution_end",
+			`{"type":"tool_execution_end","tool_call_id":"call_1","ok":true,"content":"a done"}`,
+		),
+	}
+	messages, err := project_messages(project, events)
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, len(messages), 4)
+	testing.expect_value(t, messages[1].role, "assistant")
+	testing.expect_value(t, messages[1].reasoning_content.?, "think step")
+	testing.expect_value(t, len(messages[1].tool_calls), 2)
+	testing.expect_value(t, messages[1].tool_calls[0].id, "call_2")
+	testing.expect_value(t, messages[1].tool_calls[1].id, "call_1")
+	testing.expect_value(t, messages[2].tool_call_id.?, "call_2")
+	testing.expect_value(t, messages[3].tool_call_id.?, "call_1")
+}
+
+@(test)
 test_project_messages_drops_unpaired_tool_use :: proc(t: ^testing.T) {
 	project, _, dir := test_project_and_settings(t, "ctx-unpaired")
 	defer test_cleanup(dir)

@@ -41,7 +41,7 @@ Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件�
   "messages": [
     {"role": "system", "content": "<system prompt>"},
     {"role": "user", "content": "..."},
-    {"role": "assistant", "content": null,
+    {"role": "assistant", "content": null, "reasoning_content": "...",
      "tool_calls": [
        {"id": "call_1", "type": "function",
         "function": {"name": "read_file", "arguments": "{\"file_path\":\"a.txt\"}"}}
@@ -70,6 +70,8 @@ Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件�
 5. `tools[].function.parameters` 是 JSON Schema，由 Tool Registry 生成
 6. 每个 tool result 是一条独立的 `role=tool` 消息；多个结果按 tool call 顺序排列
 7. `base_url` 去掉尾部 `/`；如果已经以 `/chat/completions` 结尾则直接使用，否则追加 `/chat/completions`
+8. assistant 消息产生过推理内容时，按 `reasoning_content` 原样回传；没有就省略该字段。带工具调用的 thinking 模型依赖它继续推理，不能丢
+9. `tool_calls` 按 provider 流里的 `index` 升序排列，与 `role=tool` 消息的顺序一致；不按事件 `seq` 或任意 map 遍历顺序重排
 
 ## 流式事件
 
@@ -100,7 +102,7 @@ OpenAI 的流式 tool call 有三个坑，必须按下面的规则处理：
 2. `choices` 只取第一个；`n>1` 不支持
 3. usage 可能出现在最后一个 `choices` 为空的 chunk 里；没有就写 null
 4. `delta.content` 可能为 null；不要当成空字符串事件
-5. 推理内容只用于展示和记录，不进入下一轮上下文
+5. 推理内容写入 transcript 的 `message_end.reasoning`，并在下一轮作为 assistant 消息的 `reasoning_content` 回传
 
 ## stop_reason 归一化
 

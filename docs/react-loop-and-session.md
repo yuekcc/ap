@@ -159,7 +159,7 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 - `{type: 'text', text}`；超大时改为 `{type: 'text', text_ref, text_bytes, text_preview}`
 - `{type: 'tool_use', id, name, input}`；`input` 序列化后超过阈值时改为
   `{type: 'tool_use', id, name, input_ref, input_bytes, input_preview}`
-- `reasoning`：provider 返回推理内容时可选记录，**不进入上下文**；没有则为 null
+- `reasoning`：provider 返回推理内容时可选记录；下一轮按 assistant 消息的 `reasoning_content` 原样回传，没有则为 null
 
 约定：
 

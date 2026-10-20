@@ -137,6 +137,30 @@ test_assembler_tool_call_streaming :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_assembler_preserves_tool_call_order_by_index :: proc(t: ^testing.T) {
+	a: Stream_Assembler
+	assembler_init(&a, {}, "m")
+	defer assembler_destroy(&a)
+	sink: Provider_Test_Sink
+	a.sink = provider_test_sink(&sink)
+
+	chunks := []string {
+		`{"id":"x","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_1","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":null}]}`,
+		`{"id":"x","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","function":{"name":"bash","arguments":"{}"}}]},"finish_reason":null}]}`,
+		`{"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+	}
+	for chunk in chunks {
+		testing.expect_value(t, assembler_feed(&a, chunk).kind, Provider_Error_Kind.None)
+	}
+	testing.expect_value(t, assembler_finish(&a).kind, Provider_Error_Kind.None)
+	end, found := provider_test_find_end(&sink)
+	testing.expect(t, found)
+	testing.expect_value(t, len(end.tool_calls), 2)
+	testing.expect_value(t, end.tool_calls[0].id, "call_0")
+	testing.expect_value(t, end.tool_calls[1].id, "call_1")
+}
+
+@(test)
 test_assembler_text_stop_and_missing_usage :: proc(t: ^testing.T) {
 	a: Stream_Assembler
 	assembler_init(&a, {}, "m")
@@ -236,6 +260,7 @@ test_chat_request_body_shape :: proc(t: ^testing.T) {
 		{role = "user", content = "hi"},
 		{
 			role = "assistant",
+			reasoning_content = "need the file",
 			tool_calls = []Chat_Tool_Call {
 				{
 					id = "call_1",
@@ -281,6 +306,9 @@ test_chat_request_body_shape :: proc(t: ^testing.T) {
 	msgs := obj["messages"].(json.Array)
 	assistant := msgs[1].(json.Object)
 	json_expect(t, assistant["content"], json.Null(nil))
+	json_expect(t, assistant["reasoning_content"], json.String("need the file"))
+	_, has_user_reasoning := msgs[0].(json.Object)["reasoning_content"]
+	testing.expect(t, !has_user_reasoning)
 	tool := msgs[2].(json.Object)
 	json_expect(t, tool["tool_call_id"], json.String("call_1"))
 
