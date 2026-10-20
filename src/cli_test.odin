@@ -70,3 +70,13 @@ test_cli_help_and_version :: proc(t: ^testing.T) {
 	testing.expect_value(t, err2.code, Exit_Code.OK)
 	testing.expect(t, opts2.version)
 }
+
+@(test)
+test_cli_list_skills :: proc(t: ^testing.T) {
+	opts, err := parse_args([]string{"ap", "--list-skills"})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect(t, opts.list_skills)
+
+	_, err2 := parse_args([]string{"ap", "--list-skills=yes"})
+	testing.expect_value(t, err2.code, Exit_Code.Usage)
+}

@@ -20,6 +20,9 @@ main :: proc() {
 		fmt.printfln("ap %s", VERSION)
 		os.exit(0)
 	}
+	if opts.list_skills {
+		os.exit(list_skills())
+	}
 	if opts.debug {
 		log_set_level(.Debug)
 	} else if opts.verbose {
@@ -265,6 +268,7 @@ main :: proc() {
 			}
 		}
 		tool_section := tool_prompt_section(agent, effective_depth, settings.max_agent_depth)
+		skill_section := skills_prompt_block(discover_skills(cwd))
 		append_prompt := ""
 		if value, ok := opts.append_system_prompt.?; ok {
 			append_prompt = value
@@ -276,6 +280,7 @@ main :: proc() {
 				agent = agent,
 				append_prompt = append_prompt,
 				tool_section = tool_section,
+				skill_section = skill_section,
 			},
 		)
 		session_id = new_session_id()
@@ -405,6 +410,17 @@ main :: proc() {
 	transcript_close(&store)
 	loop_destroy(&loop)
 	os.exit(exit_code)
+}
+
+list_skills :: proc() -> int {
+	cwd, cerr := canonicalize_path(".", true)
+	if !is_ok(cerr) {
+		log_error(cerr.message)
+		return int(Exit_Code.Usage)
+	}
+	text := skills_brief(discover_skills(cwd))
+	write_stdout(transmute([]byte)text)
+	return int(Exit_Code.OK)
 }
 
 new_session_id :: proc() -> string {

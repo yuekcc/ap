@@ -11,6 +11,7 @@ v1 已实现：
 - OpenAI chat completions 兼容 provider（stream SSE、tool calls、usage、重试/超时/取消）
 - 五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`
 - 独立进程子代理、agent 定义文件、工具白名单
+- 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
 
 ## 环境
@@ -91,9 +92,21 @@ ap -c --fork-session --print "..."
 
 # 指定 agent / 模型 / 上限
 ap --agent scout --model hy3 --max-steps 30 --print "..."
+
+# 查看当前目录可见的技能
+ap --list-skills
 ```
 
 相对路径相对启动目录；`~/...` 会展开。没有 `--add-dir`。
+
+### 技能
+
+技能是放在 `SKILL.md` 里的 Markdown 指令包，ap 只负责发现并把清单注入 system prompt；模型需要时用 `read_file` 读取正文，再照步骤执行。发现位置：
+
+- 全局：`~/.agents/skills/<name>/SKILL.md`（多 agent 共用）
+- 项目：`<启动目录>/.agents/skills/<name>/SKILL.md`（同名覆盖全局）
+
+正文不进入上下文，也不自动执行。格式与规则见 [docs/skills.md](docs/skills.md)。
 
 ## 存储
 
@@ -118,7 +131,7 @@ transcript 只追加；恢复以 transcript 为准，system prompt / model / age
 odin test src -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
-当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob。
+当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入。
 
 真实 LLM 端到端验证（使用本地 OpenAI 兼容端点，注意用量与超时）：
 
@@ -141,4 +154,4 @@ New-Item -ItemType Directory -Force $cfg | Out-Null
 
 ## 非目标（v1）
 
-交互模式、审批/沙箱、上下文压缩、token 预算、hooks、plan mode、MCP、WebFetch/Search、`--add-dir`、blob GC。详见 [docs/README.md](docs/README.md)。
+交互模式、审批/沙箱、上下文压缩、token 预算、hooks、plan mode、MCP、WebFetch/Search、`--add-dir`、blob GC、技能脚本执行与远程安装。详见 [docs/README.md](docs/README.md)。

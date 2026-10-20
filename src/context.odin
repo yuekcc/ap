@@ -31,6 +31,7 @@ System_Prompt_Options :: struct {
 	agent:         Agent_Def,
 	append_prompt: string,
 	tool_section:  string,
+	skill_section: string,
 }
 
 FIXED_INSTRUCTIONS :: `你是 ap，一个命令行 coding agent。你通过工具读写文件、执行命令、启动子代理，完成用户给出的任务。
@@ -66,6 +67,12 @@ build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	fmt.sbprintf(&b, "- cwd: %s\n", opts.cwd)
 	fmt.sbprintf(&b, "- 当前时间: %v\n", time.now())
 	fmt.sbprintf(&b, "- git 仓库: %s\n", "是" if find_git_root(opts.cwd) != "" else "否")
+
+	if len(opts.skill_section) > 0 {
+		strings.write_string(&b, "\n## 可用技能\n\n")
+		strings.write_string(&b, opts.skill_section)
+		strings.write_string(&b, "\n")
+	}
 
 	global_memory := fmt.tprintf("%s/AGENTS.md", opts.config_dir)
 	if os.exists(global_memory) {

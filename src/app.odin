@@ -140,6 +140,9 @@ agent 与模型:
       --help                  显示帮助
       --version               显示版本
 
+技能:
+      --list-skills           列出当前目录可见的 skill 后退出（不读配置、不需要 API key）
+
 子代理内部参数:
       --parent-session-id <id>
       --parent-tool-call-id <id>

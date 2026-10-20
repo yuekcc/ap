@@ -11,6 +11,7 @@
 | CLI | 参数解析、配置加载、退出码、信号安装 | 不组装消息，不碰 provider |
 | Loop | turn/step 状态机、事件编排、重试决策、中断处理 | 不解析 SSE，不实现工具 |
 | Context | transcript → messages 投影、system prompt 组装、blob 解析 | 不发请求，不写 transcript |
+| Skills | 发现并解析技能目录、生成 system prompt 清单与 `--list-skills` 简表 | 不执行技能、不把正文注入上下文 |
 | Provider | 请求翻译、SSE 解析、usage 提取、错误归一 | 不重试，不做循环控制 |
 | Tools | 工具注册、参数校验、执行、结果结构化、进程树管理 | 不改上下文，不做循环控制 |
 | Subagent Runner | 拉起 `ap` 子进程、解析 stream-json、转换为 tool 结果 | 不直接调用父进程内存里的对象 |
@@ -22,13 +23,14 @@
 
 ```
 CLI ──► Loop ──► Context ──► (纯计算)
-          │
-          ├────► Provider ──► vendor:curl ──► OpenAI API
-          ├────► Tools ──► Subagent Runner ──► 子进程 ap
-          └────► Transcript Store ──► *.jsonl + blobs/
+ │        │
+ │        ├────► Provider ──► vendor:curl ──► OpenAI API
+ │        ├────► Tools ──► Subagent Runner ──► 子进程 ap
+ │        └────► Transcript Store ──► *.jsonl + blobs/
+ └──► Skills（新 session 发现技能，片段交给 Context）──► 文件系统
 ```
 
-1. `Transcript Store`、`Provider`、`Tools` 互不依赖
+1. `Transcript Store`、`Provider`、`Tools`、`Skills` 互不依赖
 2. `Context` 只读 transcript、配置和 blob，不写回、不发请求
 3. `Tools` 不感知 Loop 的状态机；只接收 `(name, args, ctx)` 返回结构化结果
 4. 子代理只能通过命令行 + stdout/stderr 协议交互，不允许依赖父进程内存结构
@@ -54,6 +56,10 @@ context_build :: proc(
     blobs:     ^Blob_Reader,
     allocator: mem.Allocator,
 ) -> (system_prompt: string, messages: []Message, err: Error)
+
+discover_skills :: proc(cwd: string) -> []Skill
+skills_prompt_block :: proc(skills: []Skill) -> string
+skills_brief :: proc(skills: []Skill) -> string
 
 Provider :: struct { ... }
 
@@ -85,6 +91,7 @@ subagent_run :: proc(
 - `Cancel_Token` 是原子布尔 + 关闭通知，Provider 在 curl 的进度回调里轮询。
 - `Result` 是工具结果结构，见 [tools.md](tools.md)。
 - `Session_Info` 包含 `session_id`、`cwd`、`model`、`agent_name`、`agent_depth`、`config_dir`，供子进程启动使用。
+- `Skills` 只在组装新 session 的 system prompt 前运行一次，把清单交给 `Context`；`context_build` 本身不访问技能目录。
 
 ## 契约要点
 
@@ -104,7 +111,7 @@ subagent_run :: proc(
    - Windows：为每个会话建 Job Object，`bash` / `task` 进程加入；退出时 `TerminateJobObject`。Odin 的 `core:os` 不暴露 Job Object 与创建标志，需要自己声明 Win32 绑定或退化为 `taskkill /T /F`
 4. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
 5. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
-6. 启动顺序：解析参数 → 确定 `$AP_CONFIG` → 加载配置 → 解析 agent → 计算 project hash → （恢复）打开并读取 transcript，取最后一个 `session_start` / （新 session）组装 system prompt → 打开/创建 transcript 用于追加 → 写 `session_start` → 进入 Loop
+6. 启动顺序：解析参数 → 确定 `$AP_CONFIG` → 加载配置 → 解析 agent → 计算 project hash → （恢复）打开并读取 transcript，取最后一个 `session_start` / （新 session）发现技能并组装 system prompt → 打开/创建 transcript 用于追加 → 写 `session_start` → 进入 Loop
 7. 退出顺序：停止循环 → 终止登记的进程树（带超时）→ 写 `session_end` → 关闭 transcript 与 blob 文件
 8. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
 

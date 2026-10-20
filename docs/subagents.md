@@ -78,13 +78,14 @@ max_steps: 30
 1. `<self_exe>` 用 `argv[0]` 解析成绝对路径：含分隔符的直接转绝对，裸名字则在 PATH 中查找；平台允许时可退化为 `os.get_executable_path()`；不经过 shell
 2. **不传 `--session`**：子进程自己生成 `session_id`；父进程从子进程的第一条 `session_start` 读取 `child_session_id`
 3. 提示词通过 stdin 传给 `--print0`，不放在命令行里，避免 Windows 命令行长度限制
-4. cwd 继承父进程；不传 `--add-dir`
-5. `$AP_CONFIG` 通过 `--config-dir` 显式继承
-6. 环境变量继承父进程（包括 `AP_API_KEY`，子进程需要它调用 LLM）
-7. `--model` 传父进程的生效 model；agent 定义里的 `model` 会覆盖它
-8. `--max-steps` 传父进程的生效值；agent 定义里的 `max_steps` 会覆盖它
-9. 子进程的 `session_start` 写入 `parent_session_id` / `parent_tool_call_id` / `agent_depth`
-10. 子 transcript 与父 transcript 落在同一项目目录（cwd 相同）
+4. 子进程不继承父进程的技能清单；它按自己的启动目录重新发现（`task` 不改变 cwd，通常得到同一份清单），见 [skills.md](skills.md)
+5. cwd 继承父进程；不传 `--add-dir`
+6. `$AP_CONFIG` 通过 `--config-dir` 显式继承
+7. 环境变量继承父进程（包括 `AP_API_KEY`，子进程需要它调用 LLM）
+8. `--model` 传父进程的生效 model；agent 定义里的 `model` 会覆盖它
+9. `--max-steps` 传父进程的生效值；agent 定义里的 `max_steps` 会覆盖它
+10. 子进程的 `session_start` 写入 `parent_session_id` / `parent_tool_call_id` / `agent_depth`
+11. 子 transcript 与父 transcript 落在同一项目目录（cwd 相同）
 
 ## 输出协议
 

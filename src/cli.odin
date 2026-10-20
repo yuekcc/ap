@@ -32,6 +32,7 @@ Options :: struct {
 	debug:                bool,
 	help:                 bool,
 	version:              bool,
+	list_skills:          bool,
 }
 
 parse_args :: proc(args: []string) -> (Options, Error) {
@@ -56,6 +57,12 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			i += 1
 		case "--version":
 			opts.version = true
+			i += 1
+		case "--list-skills":
+			if has_inline {
+				return opts, make_error(.Usage, "%s does not take a value", name)
+			}
+			opts.list_skills = true
 			i += 1
 		case "-s", "--session":
 			value, n, err := option_value(args, i, inline, has_inline, name)

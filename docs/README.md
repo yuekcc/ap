@@ -34,6 +34,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 10. `--add-dir`：所有相对路径只相对启动目录
 11. 除 read_file / write_file / edit_file / bash / task 之外的任何工具（包括 grep / glob / ls / todo / 原生后台进程）
 12. blob 的自动回收（GC）；由用户自行清理
+13. 技能的脚本执行、参数传入、版本管理与远程安装；v1 只发现并注入清单
 
 ## 已知风险
 
@@ -59,6 +60,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 | 上下文管理 | 不做压缩、不做 token 预算；超限即终止 | 记录 usage；`context_too_long` 是唯一超限出口 |
 | 会话恢复 | 以 transcripts 为准，system prompt / model / agent 全部冻结 | 只在当前项目内查找 |
 | 记忆文件 | `AGENTS.md` | 全局 `$AP_CONFIG/AGENTS.md` + 项目向上查找 |
+| 技能 | 只发现并注入清单，正文按需读取 | 见 [skills.md](skills.md) |
 | 循环粒度 | user turn = 一条提示词到终止；step = 一次 LLM 调用 | 事件与日志按 step 切分 |
 | 子代理 | 独立进程 + 独立 session，深度默认 1 | 见 [subagents.md](subagents.md) |
 | 进程间协议 | `--output-format stream-json`，stdout 只放事件 | 子代理与脚本化的唯一通道 |
@@ -77,6 +79,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 - **tool call**：LLM 响应中要求执行工具的请求，含工具名与参数。
 - **tool execution**：ap 对单个 tool call 的本地执行过程。
 - **subagent**：由 `task` 工具拉起、拥有独立 session 的 ap 进程。
+- **skill**：放在 `SKILL.md` 里的 Markdown 指令包；ap 把元数据清单注入 system prompt，模型按需读取正文。
 - **provider**：LLM 接口的适配层，v1 只有 OpenAI chat completions。
 - **stream event**：写到 stdout、但不落盘的临时事件（增量文本、工具输出片段）。
 - **transcript event**：追加到 transcript 的持久事件。
@@ -85,7 +88,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 
 ```
 CLI（cli-and-config.md）
-  │ 用户输入 / 信号
+  │ 用户输入 / 信号；新 session 时发现技能（skills.md）
   ▼
 ReAct Loop（react-loop-and-session.md）
   ├── Context（context-management.md）──► system prompt / 历史消息 / blob 解析
@@ -107,6 +110,7 @@ ReAct Loop（react-loop-and-session.md）
 | [provider.md](provider.md) | OpenAI 适配、SSE、usage、错误、curl 传输 | 定稿 v1 |
 | [tools.md](tools.md) | 五个工具的契约、blob、进程与输出上限 | 定稿 v1 |
 | [subagents.md](subagents.md) | agent 定义、启动协议、结果契约 | 定稿 v1 |
+| [skills.md](skills.md) | 技能发现、SKILL.md 格式、提示词注入、`--list-skills` | 定稿 v1 |
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 | 定稿 v1 |
 
 ## 参考 Claude Code 的取舍
@@ -118,6 +122,7 @@ ReAct Loop（react-loop-and-session.md）
 | turn / step 两级循环 | react-loop-and-session.md |
 | 事件流写 transcript（可重放） | react-loop-and-session.md |
 | 记忆文件分层注入（全局 + 项目，向上查找） | context-management.md |
+| 技能只注入清单、正文按需读取 | skills.md |
 | 子代理：独立上下文、agent 定义文件、工具白名单 | subagents.md |
 | 结构化输出（`--output-format`，token 高效、可脚本化） | cli-and-config.md |
 | 工具超时、退出码作为结果 | tools.md |

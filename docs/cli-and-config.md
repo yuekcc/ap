@@ -33,6 +33,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 | `--agent-depth <n>` | 非负整数 | 当前 agent 深度；默认 0，子代理为父 + 1；恢复时以记录为准 |
 | `--append-system-prompt <text>` | 文本 | 追加到 system prompt 末尾；恢复 session 时只警告，不生效 |
 | `--verbose` / `--debug` | — | 日志级别，输出到 stderr |
+| `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
 | `--help` / `--version` | — | 用法与版本 |
 
 不提供 `--add-dir`。所有相对路径只相对启动目录；绝对路径不受限制。
@@ -47,6 +48,10 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 - 三者都没给时：stdin 不是 TTY → 读 stdin 作为提示词；stdin 是 TTY → 退出码 2，并提示如何传入提示词
 
 一次运行只处理一条提示词，因此一次运行最多一个 user turn。
+
+### 查看技能
+
+`--list-skills` 在加载配置之前处理，列出 `~/.agents/skills` 与 `<启动目录>/.agents/skills` 中的有效技能后退出（退出码 0）。它不需要 `settings.json` 或 API key，`--config-dir` 对它没有影响；`--help` / `--version` 的优先级更高。格式与发现规则见 [skills.md](skills.md)。
 
 ### 输出格式
 
@@ -168,6 +173,8 @@ $AP_CONFIG/
         <sha256>                     # 内容寻址的大块数据，用户自行清理
       <session_id>.jsonl             # transcript，一行一个事件
 ```
+
+技能不在 `$AP_CONFIG` 下，固定从两处发现：`~/.agents/skills/<name>/SKILL.md` 与 `<项目>/.agents/skills/<name>/SKILL.md`。见 [skills.md](skills.md)。
 
 ## 项目识别
 
