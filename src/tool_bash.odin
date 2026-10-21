@@ -8,6 +8,25 @@ import "core:unicode/utf8"
 
 BASH_TIMEOUT_MAX_MS :: 600000
 BASH_COMMAND_MAX_CHARS :: 8000
+BASH_OUTPUT_MAX_LINES :: 2000
+
+// 返回前 max_lines 行（保留行尾换行）以及输出总行数。
+bash_output_prefix :: proc(text: string, max_lines: int) -> (string, int) {
+	total := count_text_lines(text)
+	if total <= max_lines {
+		return text, total
+	}
+	line := 1
+	for i in 0 ..< len(text) {
+		if text[i] == '\n' {
+			line += 1
+			if line == max_lines + 1 {
+				return text[:i + 1], total
+			}
+		}
+	}
+	return text, total
+}
 
 find_bash :: proc() -> (string, Error) {
 	if configured := os.get_env("AP_BASH", context.allocator); len(configured) > 0 {
@@ -150,8 +169,36 @@ tool_bash :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	}
 
 	output := sanitize_utf8(result.combined)
-	content := fmt.tprintf("[exit %d, %dms]\n%s", result.exit_code, result.duration_ms, output)
-	res := tool_ok(content)
+	preview, total_lines := bash_output_prefix(output, BASH_OUTPUT_MAX_LINES)
+	b := strings.builder_make()
+	fmt.sbprintf(&b, "[exit %d, %dms]\n", result.exit_code, result.duration_ms)
+	strings.write_string(&b, preview)
+	if total_lines > BASH_OUTPUT_MAX_LINES {
+		if len(preview) == 0 || preview[len(preview) - 1] != '\n' {
+			strings.write_byte(&b, '\n')
+		}
+		path, werr := blob_write_text(ctx.project, transmute([]byte)output)
+		if is_ok(werr) {
+			fmt.sbprintf(
+				&b,
+				"[共 %d 行，已返回 1-%d；完整输出已保存到 %s；继续请用 read_file(file_path=%q, start_line=%d)]",
+				total_lines,
+				BASH_OUTPUT_MAX_LINES,
+				path,
+				path,
+				BASH_OUTPUT_MAX_LINES + 1,
+			)
+		} else {
+			fmt.sbprintf(
+				&b,
+				"[共 %d 行，已返回 1-%d；完整输出保存失败: %s]",
+				total_lines,
+				BASH_OUTPUT_MAX_LINES,
+				werr.message,
+			)
+		}
+	}
+	res := tool_ok(strings.to_string(b))
 	res.exit_code = result.exit_code
 	return res
 }

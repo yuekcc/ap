@@ -42,6 +42,7 @@
 | edit 未匹配 / 多处匹配 | `ok:false`，附匹配次数与建议 |
 | read_file 超出单次范围 | 截到 2000 行，附 `start_line` 继续提示 |
 | bash 非 0 退出 | `ok:true`，带 `exit_code` 与合并输出 |
+| bash 超出 2000 行 | 返回前 2000 行，附完整输出 `.txt` 路径与 `read_file` 续读提示 |
 | bash 超时 | `ok:false`，`error: "timeout after Nms"`，进程树已终止 |
 | 输出超过 `max_capture_bytes` | `ok:false`，`error: "output exceeded <max_capture_bytes> bytes"`，进程树已终止 |
 | 工具结果的 blob 写入失败 | `ok:false`，`error: "failed to persist output blob"`，循环继续 |

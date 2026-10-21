@@ -244,13 +244,44 @@ test_bash_timeout_kills_tree :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_bash_large_output_not_truncated :: proc(t: ^testing.T) {
+test_bash_output_truncates_at_2000_lines :: proc(t: ^testing.T) {
 	ctx, dir := tool_test_context(t, "tool-bash-large")
 	defer test_cleanup(dir)
-	res := tool_execute("bash", json.Value(json_obj(`{"command":"seq 1 60000"}`)), &ctx)
+	res := tool_execute("bash", json.Value(json_obj(`{"command":"seq 1 2500"}`)), &ctx)
 	testing.expect(t, res.ok)
-	testing.expect(t, len(res.content) > 250000)
-	testing.expect(t, test_contains(res.content, "\n60000"))
+	testing.expect(t, test_contains(res.content, "\n2000\n"))
+	testing.expect(t, !test_contains(res.content, "\n2001\n"))
+	testing.expect(t, test_contains(res.content, "共 2500 行"))
+	testing.expect(t, test_contains(res.content, "read_file(file_path="))
+
+	// 从提示中取出完整输出路径，确认 read_file 能从第 2001 行继续读。
+	marker := "完整输出已保存到 "
+	start := strings.index(res.content, marker)
+	testing.expect(t, start >= 0)
+	rest := res.content[start + len(marker):]
+	sep := strings.index(rest, "；")
+	testing.expect(t, sep > 0)
+	path := rest[:sep]
+	testing.expect(t, os.exists(path))
+
+	res2 := tool_execute(
+		"read_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"start_line":2001}`, path))),
+		&ctx,
+	)
+	testing.expect(t, res2.ok)
+	testing.expect(t, test_contains(res2.content, "2001"))
+	testing.expect(t, test_contains(res2.content, "2500"))
+}
+
+@(test)
+test_bash_output_keeps_2000_lines :: proc(t: ^testing.T) {
+	ctx, dir := tool_test_context(t, "tool-bash-2000")
+	defer test_cleanup(dir)
+	res := tool_execute("bash", json.Value(json_obj(`{"command":"seq 1 2000"}`)), &ctx)
+	testing.expect(t, res.ok)
+	testing.expect(t, test_contains(res.content, "\n2000\n"))
+	testing.expect(t, !test_contains(res.content, "完整输出已保存到"))
 }
 
 @(test)

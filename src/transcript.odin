@@ -477,24 +477,45 @@ blob_write :: proc(project: Project, data: []byte) -> (string, Error) {
 	if os.exists(path) {
 		return sha, ok_error()
 	}
+	if err := blob_write_at(project, path, data); !is_ok(err) {
+		return "", err
+	}
+	return sha, ok_error()
+}
+
+// 把完整工具输出写成模型可直接用 read_file 读取的 .txt 文件。
+// 返回绝对路径；文件名使用内容 sha256，重复输出自动去重。
+blob_write_text :: proc(project: Project, data: []byte) -> (string, Error) {
+	sha := sha256_hex(data)
+	path := fmt.tprintf("%s/%s.txt", project.blobs_dir, sha)
+	if os.exists(path) {
+		return path, ok_error()
+	}
+	if err := blob_write_at(project, path, data); !is_ok(err) {
+		return "", err
+	}
+	return path, ok_error()
+}
+
+blob_write_at :: proc(project: Project, path: string, data: []byte) -> Error {
 	tmp := fmt.tprintf("%s/.tmp-%d-%d", project.blobs_dir, os.get_pid(), time.time_to_unix_nano(time.now()))
 	perm := os.Permissions{.Read_User, .Write_User}
 	file, ferr := os.open(tmp, {.Write, .Create, .Excl, .Trunc}, perm)
 	if ferr != nil {
-		return "", make_error(.Tool, "failed to persist output blob: cannot create %s: %v", tmp, ferr)
+		return make_error(.Tool, "failed to persist output blob: cannot create %s: %v", tmp, ferr)
 	}
 	ok_write := write_all_file(file, data)
 	sync_err := os.sync(file)
 	close_err := os.close(file)
 	if !ok_write || sync_err != nil || close_err != nil {
 		os.remove(tmp)
-		return "", make_error(.Tool, "failed to persist output blob: write error")
+		return make_error(.Tool, "failed to persist output blob: write error")
 	}
 	if rerr := os.rename(tmp, path); rerr != nil {
 		os.remove(tmp)
-		return "", make_error(.Tool, "failed to persist output blob: rename failed: %v", rerr)
+		return make_error(.Tool, "failed to persist output blob: rename failed: %v", rerr)
 	}
-	return sha, ok_error()
+	return ok_error()
 }
 
 write_all_file :: proc(file: ^os.File, data: []byte) -> bool {

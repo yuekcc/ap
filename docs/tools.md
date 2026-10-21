@@ -6,8 +6,8 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 
 1. **串行执行**：一个 step 中 LLM 返回多个 tool call 时，按响应顺序逐个执行，不并发
 2. **无状态**：每次调用是独立操作，不共享 cwd、环境变量、shell 变量（`cd` 不跨调用生效）
-3. **模型看到完整输出**：不做截断；只有 `read_file` 的分页上限是工具契约的一部分
-4. **大输出写 blob**：单次结果超过 `blob_threshold_bytes`（默认 100KB）时，完整内容写入内容寻址 blob，transcript 只存预览与引用；模型仍然拿到完整内容
+3. **输出可见性**：`read_file` 与 `bash` 各自有 2000 行分页上限；其余工具结果不截断
+4. **大输出写 blob**：单次结果超过 `blob_threshold_bytes`（默认 100KB）时，完整内容写入内容寻址 blob，transcript 只存预览与引用；这不改变模型已经拿到的结果（`bash` 可能已按行分页）
 5. **硬上限保护进程**：单次捕获超过 `max_capture_bytes`（默认 64MB）时终止工具并返回 `ok:false`，不做静默截断
 6. **工具失败不终止循环**：错误作为 tool result 交还 LLM 自行修正；只有 ap 自身基础设施故障才终止（见 [errors-and-cancellation.md](errors-and-cancellation.md)）
 7. **路径**：相对路径只相对 ap 启动目录；绝对路径可用；`~` 与 `~/...` 展开为主目录；不展开其它环境变量；Windows 下 `/` 与 `\` 都接受；不接受 MSYS 的 `/z/...` 形式
@@ -33,6 +33,8 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 ## Blob
 
 超过阈值的工具结果或工具参数写入 blob，避免 transcript 膨胀。blob 不是语义截断。
+
+`bash` 超过 2000 行时另写的 `<sha256>.txt` 放在同一 `blobs/` 目录，但它是给模型用 `read_file` 续读的分页产物，不写 transcript 引用。
 
 ### 写入
 
@@ -102,7 +104,7 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 read_file(file_path="src/main.odin", start_line=1, end_line=500)
 ```
 
-`read_file` 的分页上限是唯一允许的“范围限制”；它不是全局输出裁剪，`bash` 的结果不截断。
+`read_file` 与 `bash` 的 2000 行分页是唯一的范围限制；`bash` 超出部分写入 `.txt`，模型用 `read_file` 继续读。
 
 ## write_file
 
@@ -182,7 +184,7 @@ edit_file(file_path="src/main.odin", old_string="foo", new_string="bar", replace
    - Windows：Job Object 或 `taskkill /T /F`；实现方式见 [architecture.md](architecture.md)
 10. 正常返回时**不**终止残留后代进程。Windows 上 Job 会登记，ap 退出时统一 `TerminateJobObject`；Unix 上没有运行期登记，ap 退出时不会再次清理正常返回后的后台后代。后台进程请用 wrapper 脚本 + pid 文件管理
 11. 输出超过 `max_capture_bytes` → 终止进程树，返回 `ok:false`，错误为 `output exceeded <max_capture_bytes> bytes`
-12. 输出超过 `blob_threshold_bytes` → 完整内容写 blob，模型仍拿到完整内容
+12. 输出超过 2000 行 → 只返回前 2000 行；完整输出写入 `$AP_CONFIG/projects/<project_hash>/blobs/<sha256>.txt`，结果末尾提示用 `read_file(file_path=..., start_line=2001)` 继续读；写入失败时保留前 2000 行并附错误信息
 13. 命令按 POSIX shell 语法编写；不保证 `cmd.exe` / PowerShell 内置命令可用
 
 示例：

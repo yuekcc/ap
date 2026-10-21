@@ -138,7 +138,8 @@ loop_test_finish :: proc(l: ^Loop, dir: string) {
 test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
 	loop, _, dir := loop_test_setup(t, "loop-blob-output")
 	args := make(json.Object)
-	args["command"] = json.String("seq 1 60000")
+	// 单行 120KB：不触发 bash 的 2000 行分页，但超过 blob_threshold_bytes。
+	args["command"] = json.String("head -c 120000 /dev/zero | tr '\\0' x")
 	state := Fake_Provider {
 		responses = []Fake_Response {
 			{tool_name = "bash", tool_id = "call_out", tool_input = args, stop = .Tool_Use},
@@ -165,7 +166,7 @@ test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, found_ref)
-	testing.expect(t, found_size > 250000)
+	testing.expect(t, found_size > 100000)
 	loop_test_finish(&loop, dir)
 }
 
