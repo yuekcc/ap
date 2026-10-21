@@ -32,29 +32,17 @@ main :: proc() {
 	}
 
 	config_dir, cerr := default_config_dir(opts.config_dir)
-	if !is_ok(cerr) {
-		log_error(cerr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
-	if err := ensure_writable_dir(config_dir); !is_ok(err) {
-		log_error(err.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(cerr, .Usage)
+	exit_on_error(ensure_writable_dir(config_dir), .Usage)
 	settings, serr := load_settings(config_dir)
-	if !is_ok(serr) {
-		log_error(serr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(serr, .Usage)
 
 	agent_name := "general"
 	if value, ok := opts.agent.?; ok {
 		agent_name = value
 	}
 	agent, aerr := load_agent(config_dir, agent_name)
-	if !is_ok(aerr) {
-		log_error(aerr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(aerr, .Usage)
 
 	model := settings.model
 	if value, ok := opts.model.?; ok {
@@ -76,10 +64,8 @@ main :: proc() {
 		}
 	}
 	if agent_steps_applies {
-		if agent_steps_applies {
-			if value, ok := agent.max_steps.?; ok {
-				max_steps = value
-			}
+		if value, ok := agent.max_steps.?; ok {
+			max_steps = value
 		}
 	}
 	effective_depth := 0
@@ -88,27 +74,15 @@ main :: proc() {
 	}
 
 	cwd, cwderr := canonicalize_path(".", true)
-	if !is_ok(cwderr) {
-		log_error(cwderr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(cwderr, .Usage)
 	project, jerr := open_project(config_dir, cwd)
-	if !is_ok(jerr) {
-		log_error(jerr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(jerr, .Usage)
 	bash_path, berr := find_bash()
-	if !is_ok(berr) {
-		log_error(berr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(berr, .Usage)
 	self_exe := resolve_self_exe()
 
 	prompt, prerr := read_prompt(opts, cwd)
-	if !is_ok(prerr) {
-		log_error(prerr.message)
-		os.exit(int(Exit_Code.Usage))
-	}
+	exit_on_error(prerr, .Usage)
 
 	store: Transcript_Store
 	session_id := ""
@@ -122,10 +96,7 @@ main :: proc() {
 			source_id = value
 		} else {
 			found, ferr := find_latest_root_session(project)
-			if !is_ok(ferr) {
-				log_error(ferr.message)
-				os.exit(int(Exit_Code.Usage))
-			}
+			exit_on_error(ferr, .Usage)
 			source_id = found
 		}
 		expected_path := session_file(project, source_id)
@@ -139,27 +110,18 @@ main :: proc() {
 			os.exit(int(Exit_Code.Usage))
 		}
 		source_events, rerr := transcript_read_all(project, source_id)
-		if !is_ok(rerr) {
-			log_error(rerr.message)
-			os.exit(int(Exit_Code.Usage))
-		}
+		exit_on_error(rerr, .Usage)
 		if len(source_events) > 0 && source_events[len(source_events) - 1].type != "session_end" {
 			log_warn("previous run of session %s did not write session_end; recovering after abnormal exit", source_id)
 		}
 		start, _, crerr := session_system_prompt(project, source_events)
-		if !is_ok(crerr) {
-			log_error(crerr.message)
-			os.exit(int(Exit_Code.Usage))
-		}
+		exit_on_error(crerr, .Usage)
 
 		model = start.model
 		agent_name = start.agent_name
 		effective_depth = start.agent_depth
 		agent, aerr = load_agent(config_dir, agent_name)
-		if !is_ok(aerr) {
-			log_error(aerr.message)
-			os.exit(int(Exit_Code.Usage))
-		}
+		exit_on_error(aerr, .Usage)
 		if agent_steps_applies {
 			if value, ok := agent.max_steps.?; ok {
 				max_steps = value
@@ -182,81 +144,37 @@ main :: proc() {
 			log_warn("parent/agent-depth arguments ignored on restore")
 		}
 
+		parent_session_id := start.parent_session_id
+		parent_tool_call_id := start.parent_tool_call_id
 		if opts.fork_session {
 			session_id = new_session_id()
 			forked, ferr := fork_transcript(project, source_id, session_id, &settings)
-			if !is_ok(ferr) {
-				log_error(ferr.message)
-				os.exit(int(Exit_Code.Usage))
-			}
+			exit_on_error(ferr, .Usage)
 			store = forked
 			effective_depth = 0
-			h := make_header(&store, "session_start")
-			ev := Session_Start_Event {
-				header = h,
-				session_id = session_id,
-				content = start.content,
-				role = "system",
-				cwd = start.cwd,
-				model = start.model,
-				provider = start.provider,
-				agent_name = start.agent_name,
-				agent_depth = 0,
-				parent_session_id = nil,
-				parent_tool_call_id = nil,
-				resumed_from = source_id,
-				content_ref = start.content_ref,
-				content_bytes = start.content_bytes,
-			}
-			line, err := transcript_append_line(&store, ev)
-			if !is_ok(err) {
-				log_error(err.message)
-				os.exit(int(Exit_Code.Internal))
-			}
-			initial_session_line = line
-			refreshed, reerr := transcript_read_all(project, session_id)
-			if !is_ok(reerr) {
-				log_error(reerr.message)
-				os.exit(int(Exit_Code.Internal))
-			}
-			var_events = refreshed
+			parent_session_id = nil
+			parent_tool_call_id = nil
 		} else {
 			resumed, rerr2 := resume_transcript_store(project, source_id, &settings)
-			if !is_ok(rerr2) {
-				log_error(rerr2.message)
-				os.exit(int(Exit_Code.Usage))
-			}
+			exit_on_error(rerr2, .Usage)
 			store = resumed
 			session_id = source_id
-			h := make_header(&store, "session_start")
-			ev := Session_Start_Event {
-				header = h,
-				session_id = source_id,
-				content = start.content,
-				role = "system",
-				cwd = start.cwd,
-				model = start.model,
-				provider = start.provider,
-				agent_name = start.agent_name,
-				agent_depth = start.agent_depth,
-				parent_session_id = start.parent_session_id,
-				parent_tool_call_id = start.parent_tool_call_id,
-				resumed_from = source_id,
-				content_ref = start.content_ref,
-				content_bytes = start.content_bytes,
-			}
-			line, err := transcript_append_line(&store, ev)
-			if !is_ok(err) {
-				log_error(err.message)
-				os.exit(int(Exit_Code.Internal))
-			}
-			initial_session_line = line
-			refreshed, reerr := transcript_read_all(project, source_id)
-			if !is_ok(reerr) {
-				log_error(reerr.message)
-				os.exit(int(Exit_Code.Internal))
-			}
-			var_events = refreshed
+		}
+
+		append_err: Error
+		initial_session_line, var_events, append_err = append_session_start(
+			&store,
+			start,
+			session_id,
+			effective_depth,
+			parent_session_id,
+			parent_tool_call_id,
+			source_id,
+		)
+		if !is_ok(append_err) {
+			log_error(append_err.message)
+			transcript_close(&store)
+			os.exit(int(Exit_Code.Internal))
 		}
 	} else {
 		if opts.parent_session_id != nil {
@@ -285,10 +203,7 @@ main :: proc() {
 		)
 		session_id = new_session_id()
 		created, cerr2 := new_transcript_store(project, session_id, &settings)
-		if !is_ok(cerr2) {
-			log_error(cerr2.message)
-			os.exit(int(Exit_Code.Usage))
-		}
+		exit_on_error(cerr2, .Usage)
 		store = created
 
 		stored_content := system_prompt
@@ -305,37 +220,30 @@ main :: proc() {
 			var_ref = sha
 			var_bytes = len(system_prompt)
 		}
-		h := make_header(&store, "session_start")
-		ev := Session_Start_Event {
-			header = h,
-			session_id = session_id,
-			content = stored_content,
-			role = "system",
-			cwd = project.root,
-			model = model,
-			provider = PROVIDER_NAME,
-			agent_name = agent.name,
-			agent_depth = effective_depth,
-			parent_session_id = opts.parent_session_id,
-			parent_tool_call_id = opts.parent_tool_call_id,
-			resumed_from = nil,
-			content_ref = var_ref,
+		new_start := Session_Start_Event {
+			content       = stored_content,
+			cwd           = project.root,
+			model         = model,
+			provider      = PROVIDER_NAME,
+			agent_name    = agent.name,
+			content_ref   = var_ref,
 			content_bytes = var_bytes,
 		}
-		line, err := transcript_append_line(&store, ev)
-		if !is_ok(err) {
-			log_error(err.message)
+		append_err: Error
+		initial_session_line, var_events, append_err = append_session_start(
+			&store,
+			new_start,
+			session_id,
+			effective_depth,
+			opts.parent_session_id,
+			opts.parent_tool_call_id,
+			"",
+		)
+		if !is_ok(append_err) {
+			log_error(append_err.message)
 			transcript_close(&store)
 			os.exit(int(Exit_Code.Internal))
 		}
-		initial_session_line = line
-		refreshed, reerr := transcript_read_all(project, session_id)
-		if !is_ok(reerr) {
-			log_error(reerr.message)
-			transcript_close(&store)
-			os.exit(int(Exit_Code.Internal))
-		}
-		var_events = refreshed
 	}
 
 	cancel: Cancel_Token
@@ -421,6 +329,53 @@ list_skills :: proc() -> int {
 	text := skills_brief(discover_skills(cwd))
 	write_stdout(transmute([]byte)text)
 	return int(Exit_Code.OK)
+}
+
+exit_on_error :: proc(err: Error, code: Exit_Code) {
+	if !is_ok(err) {
+		log_error(err.message)
+		os.exit(int(code))
+	}
+}
+
+append_session_start :: proc(
+	store: ^Transcript_Store,
+	start: Session_Start_Event,
+	session_id: string,
+	agent_depth: int,
+	parent_session_id, parent_tool_call_id: Maybe(string),
+	resumed_from: string,
+) -> (string, []Event, Error) {
+	var_resumed: Maybe(string)
+	if len(resumed_from) > 0 {
+		var_resumed = resumed_from
+	}
+	h := make_header(store, "session_start")
+	ev := Session_Start_Event {
+		header              = h,
+		session_id          = session_id,
+		content             = start.content,
+		role                = "system",
+		cwd                 = start.cwd,
+		model               = start.model,
+		provider            = start.provider,
+		agent_name          = start.agent_name,
+		agent_depth         = agent_depth,
+		parent_session_id   = parent_session_id,
+		parent_tool_call_id = parent_tool_call_id,
+		resumed_from        = var_resumed,
+		content_ref         = start.content_ref,
+		content_bytes       = start.content_bytes,
+	}
+	line, aerr := transcript_append_line(store, ev)
+	if !is_ok(aerr) {
+		return "", nil, aerr
+	}
+	refreshed, rerr := transcript_read_all(store.project, session_id)
+	if !is_ok(rerr) {
+		return "", nil, rerr
+	}
+	return line, refreshed, ok_error()
 }
 
 new_session_id :: proc() -> string {
