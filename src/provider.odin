@@ -309,7 +309,6 @@ Stream_Assembler :: struct {
 	model:          string,
 	finish_reason:  Maybe(string),
 	usage:          Usage,
-	usage_seen:     bool,
 	text:           [dynamic]byte,
 	reasoning:      [dynamic]byte,
 	slots:          [dynamic]Tool_Slot,
@@ -445,7 +444,6 @@ assembler_feed :: proc(a: ^Stream_Assembler, data: string) -> Provider_Error {
 
 	if raw_usage, has_usage := chunk.usage.?; has_usage {
 		a.usage = usage_from_chat(raw_usage)
-		a.usage_seen = true
 	}
 	return provider_error_none()
 }
@@ -540,16 +538,12 @@ assembler_finish :: proc(a: ^Stream_Assembler) -> Provider_Error {
 	}
 
 	a.finished = true
-	usage := a.usage
-	if !a.usage_seen {
-		usage = Usage{}
-	}
 	emit_provider_event(
 		a.sink,
 		Provider_Message_End {
 			message_id = a.message_id,
 			stop_reason = stop,
-			usage = usage,
+			usage = a.usage,
 			tool_calls = tool_calls[:],
 			reasoning = string(a.reasoning[:]),
 			text = string(a.text[:]),
@@ -746,22 +740,8 @@ curl_xferinfo_cb :: proc "c" (user: rawptr, dltotal, dlnow, ultotal, ulnow: curl
 }
 
 provider_network_error :: proc(code: curl.code) -> Provider_Error {
-	#partial switch code {
-	case .E_OPERATION_TIMEDOUT:
+	if code == .E_OPERATION_TIMEDOUT {
 		return {kind = .Timeout, message = "LLM request timed out", retryable = true}
-	case .E_COULDNT_RESOLVE_HOST,
-	     .E_COULDNT_RESOLVE_PROXY,
-	     .E_COULDNT_CONNECT,
-	     .E_PARTIAL_FILE,
-	     .E_GOT_NOTHING,
-	     .E_SEND_ERROR,
-	     .E_RECV_ERROR,
-	     .E_SSL_CONNECT_ERROR:
-		return {
-			kind = .Network,
-			message = fmt.tprintf("network error: %v", code),
-			retryable = true,
-		}
 	}
 	return {kind = .Network, message = fmt.tprintf("network error: %v", code), retryable = true}
 }
@@ -892,9 +872,4 @@ provider_stream :: proc(
 	}
 	return assembler_finish(&a)
 }
-
-provider_usage_from_chunk :: proc(raw: Chat_Usage) -> Usage {
-	return usage_from_chat(raw)
-}
-
 

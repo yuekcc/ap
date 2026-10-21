@@ -29,18 +29,24 @@ output_transcript :: proc(user: rawptr, event: Event) {
 	write_stdout(transmute([]byte)string("\n"))
 }
 
+// 所有增量事件共享 {"type":"message_update","ts":...,"delta":{}} 信封。
+output_message_update :: proc(out: ^Output_State) -> json.Object {
+	obj := make(json.Object)
+	obj["type"] = json.String("message_update")
+	obj["ts"] = json.Integer(now_ms())
+	obj["delta"] = make(json.Object)
+	return obj
+}
+
 output_text_delta :: proc(user: rawptr, message_id, text: string) {
 	out := (^Output_State)(user)
 	if out.format != .Stream_Json {
 		return
 	}
-	obj := make(json.Object)
-	obj["type"] = json.String("message_update")
-	obj["ts"] = json.Integer(now_ms())
+	obj := output_message_update(out)
 	obj["message_id"] = json.String(message_id)
-	delta := make(json.Object)
+	delta := obj["delta"].(json.Object)
 	delta["text"] = json.String(text)
-	obj["delta"] = delta
 	output_write_json(obj)
 }
 
@@ -49,13 +55,10 @@ output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
 	if out.format != .Stream_Json {
 		return
 	}
-	obj := make(json.Object)
-	obj["type"] = json.String("message_update")
-	obj["ts"] = json.Integer(now_ms())
+	obj := output_message_update(out)
 	obj["message_id"] = json.String(message_id)
-	delta := make(json.Object)
+	delta := obj["delta"].(json.Object)
 	delta["reasoning"] = json.String(text)
-	obj["delta"] = delta
 	output_write_json(obj)
 }
 
@@ -64,10 +67,8 @@ output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string
 	if out.format != .Stream_Json {
 		return
 	}
-	obj := make(json.Object)
-	obj["type"] = json.String("message_update")
-	obj["ts"] = json.Integer(now_ms())
-	delta := make(json.Object)
+	obj := output_message_update(out)
+	delta := obj["delta"].(json.Object)
 	call := make(json.Object)
 	call["index"] = json.Integer(index)
 	if len(id) > 0 {
@@ -78,7 +79,6 @@ output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string
 	}
 	call["args_delta"] = json.String(args_delta)
 	delta["tool_call"] = call
-	obj["delta"] = delta
 	output_write_json(obj)
 }
 
