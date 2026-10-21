@@ -50,7 +50,7 @@ task_forward_text :: proc(state: ^Task_State, text: string) {
 		stderr_write_string("[subagent] ")
 	}
 	stderr_write_string(text)
-	state.at_subagent_line_start = len(text) > 0 && text[len(text) - 1] == '\n'
+	state.at_subagent_line_start = text[len(text) - 1] == '\n'
 }
 
 task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
@@ -215,39 +215,29 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		return res
 	}
 	if run.cancelled {
-		res := tool_fail("cancelled")
-		res.metadata = task_metadata(state, run.duration_ms)
-		return res
+		return task_fail_with_state(&state, run.duration_ms, "cancelled")
 	}
 	if len(run.error) > 0 {
-		res := tool_fail(run.error)
+		res := task_fail_with_state(&state, run.duration_ms, run.error)
 		res.fatal = true
-		res.metadata = task_metadata(state, run.duration_ms)
 		return res
 	}
 	if run.overflow {
-		res := tool_fail("subagent output exceeded max_capture_bytes")
-		res.metadata = task_metadata(state, run.duration_ms)
-		return res
+		return task_fail_with_state(&state, run.duration_ms, "subagent output exceeded max_capture_bytes")
 	}
 	if !state.saw_session_start {
-		res := tool_fail(fmt.tprintf("subagent exited before session_start; stderr: %s", task_sanitize_tail(state.stderr_ring[:], 2000)))
-		res.metadata = task_metadata(state, run.duration_ms)
-		return res
+		message := fmt.tprintf("subagent exited before session_start; stderr: %s", task_sanitize_tail(state.stderr_ring[:], 2000))
+		return task_fail_with_state(&state, run.duration_ms, message)
 	}
 	if run.exit_code != 0 {
 		message := state.last_error
 		if len(message) == 0 {
 			message = task_sanitize_tail(state.stderr_ring[:], 2000)
 		}
-		res := tool_fail(fmt.tprintf("subagent exited with code %d: %s", run.exit_code, message))
-		res.metadata = task_metadata(state, run.duration_ms)
-		return res
+		return task_fail_with_state(&state, run.duration_ms, fmt.tprintf("subagent exited with code %d: %s", run.exit_code, message))
 	}
 	if !state.saw_session_end {
-		res := tool_fail("subagent exited without session_end")
-		res.metadata = task_metadata(state, run.duration_ms)
-		return res
+		return task_fail_with_state(&state, run.duration_ms, "subagent exited without session_end")
 	}
 
 	content := state.last_text
@@ -255,11 +245,17 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		content = "(subagent returned no text)"
 	}
 	res := tool_ok(content)
-	res.metadata = task_metadata(state, run.duration_ms)
+	res.metadata = task_metadata(&state, run.duration_ms)
 	return res
 }
 
-task_metadata :: proc(state: Task_State, duration_ms: int) -> json.Value {
+task_fail_with_state :: proc(state: ^Task_State, duration_ms: int, message: string) -> Tool_Result {
+	res := tool_fail(message)
+	res.metadata = task_metadata(state, duration_ms)
+	return res
+}
+
+task_metadata :: proc(state: ^Task_State, duration_ms: int) -> json.Value {
 	obj := make(json.Object)
 	obj["child_session_id"] = json.String(state.child_session_id)
 	obj["stop_reason"] = json.String(state.stop_reason)

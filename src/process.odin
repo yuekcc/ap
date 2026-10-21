@@ -173,6 +173,33 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 	}
 	result.spawned = true
 
+	// 读一路管道并追加到缓冲；返回本轮是否读到数据。EOF 或出错时关闭并清空句柄。
+	pump_stream :: proc(
+		file: ^^os.File,
+		sink, combined: ^[dynamic]byte,
+		read_buf: []byte,
+		on_chunk: proc(user: rawptr, chunk: string),
+		user: rawptr,
+	) -> (read_any: bool, err: Error) {
+		if file^ == nil {
+			return false, ok_error()
+		}
+		data, done, rerr := read_available(file^, read_buf)
+		if len(data) > 0 {
+			append(sink, ..data)
+			append(combined, ..data)
+			if on_chunk != nil {
+				on_chunk(user, string(data))
+			}
+			read_any = true
+		}
+		if done {
+			os.close(file^)
+			file^ = nil
+		}
+		return read_any, rerr
+	}
+
 	stdout_buf := make([dynamic]byte, 0, 4096)
 	stderr_buf := make([dynamic]byte, 0, 4096)
 	combined := make([dynamic]byte, 0, 8192)
@@ -184,39 +211,13 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 
 	for {
 		// 读取两路管道；先读的流先进入 combined（顺序不保证，符合契约）。
-		if child.stdout != nil {
-			data, done, rerr := read_available(child.stdout, read_buf[:])
-			if len(data) > 0 {
-				append(&stdout_buf, ..data)
-				append(&combined, ..data)
-				if opts.on_stdout != nil {
-					opts.on_stdout(opts.user, string(data))
-				}
-			}
-			if done {
-				os.close(child.stdout)
-				child.stdout = nil
-			}
-			if !is_ok(rerr) {
-				result.error = rerr.message
-			}
+		_, stdout_err := pump_stream(&child.stdout, &stdout_buf, &combined, read_buf[:], opts.on_stdout, opts.user)
+		if !is_ok(stdout_err) {
+			result.error = stdout_err.message
 		}
-		if child.stderr != nil {
-			data, done, rerr := read_available(child.stderr, read_buf[:])
-			if len(data) > 0 {
-				append(&stderr_buf, ..data)
-				append(&combined, ..data)
-				if opts.on_stderr != nil {
-					opts.on_stderr(opts.user, string(data))
-				}
-			}
-			if done {
-				os.close(child.stderr)
-				child.stderr = nil
-			}
-			if !is_ok(rerr) {
-				result.error = rerr.message
-			}
+		_, stderr_err := pump_stream(&child.stderr, &stderr_buf, &combined, read_buf[:], opts.on_stderr, opts.user)
+		if !is_ok(stderr_err) {
+			result.error = stderr_err.message
 		}
 
 		if len(combined) > opts.max_capture_bytes {
@@ -250,35 +251,10 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 			// 直接子进程退出后只排空当前可用数据，不等待后台后代持有的管道 EOF。
 			for {
 				read_any := false
-				if child.stdout != nil {
-					data, done, _ := read_available(child.stdout, read_buf[:])
-					if len(data) > 0 {
-						append(&stdout_buf, ..data)
-						append(&combined, ..data)
-						if opts.on_stdout != nil {
-							opts.on_stdout(opts.user, string(data))
-						}
-						read_any = true
-					}
-					if done {
-						os.close(child.stdout)
-						child.stdout = nil
-					}
-				}
-				if child.stderr != nil {
-					data, done, _ := read_available(child.stderr, read_buf[:])
-					if len(data) > 0 {
-						append(&stderr_buf, ..data)
-						append(&combined, ..data)
-						if opts.on_stderr != nil {
-							opts.on_stderr(opts.user, string(data))
-						}
-						read_any = true
-					}
-					if done {
-						os.close(child.stderr)
-						child.stderr = nil
-					}
+				any_stdout, _ := pump_stream(&child.stdout, &stdout_buf, &combined, read_buf[:], opts.on_stdout, opts.user)
+				any_stderr, _ := pump_stream(&child.stderr, &stderr_buf, &combined, read_buf[:], opts.on_stderr, opts.user)
+				if any_stdout || any_stderr {
+					read_any = true
 				}
 				if len(combined) > opts.max_capture_bytes {
 					result.overflow = true
