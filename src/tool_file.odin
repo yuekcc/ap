@@ -29,7 +29,6 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 	pending := make([dynamic]byte, 0, 8192)
 	defer delete(pending)
 	lines := make([dynamic]string, 0, end_line - start_line + 1)
-	total := 0
 	line_number := 0
 	output_bytes := 0
 	read_buf: [65536]byte
@@ -37,7 +36,6 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 	consume_line :: proc(
 		line_bytes: []byte,
 		line_number: ^int,
-		total: ^int,
 		start_line, end_line, max_capture: int,
 		output_bytes: ^int,
 		lines: ^[dynamic]string,
@@ -56,7 +54,6 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 			return make_error(.Tool, "file is not valid UTF-8; use bash instead")
 		}
 		line_number^ += 1
-		total^ = line_number^
 		if line_number^ >= start_line && line_number^ <= end_line {
 			output_bytes^ += len(line) + 1
 			if output_bytes^ > max_capture {
@@ -99,7 +96,6 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 			err := consume_line(
 				line,
 				&line_number,
-				&total,
 				start_line,
 				end_line,
 				max_capture,
@@ -119,7 +115,6 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 		err := consume_line(
 			pending[:],
 			&line_number,
-			&total,
 			start_line,
 			end_line,
 			max_capture,
@@ -130,7 +125,7 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 			return nil, 0, err
 		}
 	}
-	return lines[:], total, ok_error()
+	return lines[:], line_number, ok_error()
 }
 
 tool_read_file :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {

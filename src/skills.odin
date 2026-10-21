@@ -98,27 +98,25 @@ load_skill_dirs :: proc(dirs: []string) -> []Skill {
 // system prompt 注入块：无可用 skill 时返回空串（不留任何噪音）。
 // disable-model-invocation 的技能只在 --list-skills 中展示，不进入提示词。
 skills_prompt_block :: proc(skills: []Skill) -> string {
-	enabled_count := 0
-	for skill in skills {
-		if !skill.disable_model_invocation {
-			enabled_count += 1
-		}
-	}
-	if enabled_count == 0 {
-		return ""
-	}
 	b := strings.builder_make()
-	strings.write_string(&b, SKILL_PROMPT_INTRO)
-	strings.write_string(&b, "\n\n<available_skills>\n")
+	wrote_any := false
 	for skill in skills {
 		if skill.disable_model_invocation {
 			continue
+		}
+		if !wrote_any {
+			strings.write_string(&b, SKILL_PROMPT_INTRO)
+			strings.write_string(&b, "\n\n<available_skills>\n")
+			wrote_any = true
 		}
 		strings.write_string(&b, "  <skill>\n")
 		fmt.sbprintf(&b, "    <name>%s</name>\n", escape_xml(skill.name))
 		fmt.sbprintf(&b, "    <description>%s</description>\n", escape_xml(skill.description))
 		fmt.sbprintf(&b, "    <location>%s</location>\n", escape_xml(normalize_slashes(skill.location)))
 		strings.write_string(&b, "  </skill>\n")
+	}
+	if !wrote_any {
+		return ""
 	}
 	strings.write_string(&b, "</available_skills>")
 	return strings.to_string(b)

@@ -66,13 +66,6 @@ log_warn :: proc(format: string, args: ..any) {
 	}
 }
 
-log_info :: proc(format: string, args: ..any) {
-	if logger.level >= .Info {
-		fmt.eprintf(format, ..args)
-		fmt.eprintln()
-	}
-}
-
 log_debug :: proc(format: string, args: ..any) {
 	if logger.level >= .Debug {
 		fmt.eprintf("ap: debug: ")
@@ -81,13 +74,13 @@ log_debug :: proc(format: string, args: ..any) {
 	}
 }
 
-write_stdout :: proc(data: []byte) -> bool {
+write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {
 	if len(data) == 0 {
 		return true
 	}
 	total := 0
 	for total < len(data) {
-		n, err := os.write(os.stdout, data[total:])
+		n, err := os.write(handle, data[total:])
 		if err != nil || n <= 0 {
 			return false
 		}
@@ -96,19 +89,12 @@ write_stdout :: proc(data: []byte) -> bool {
 	return true
 }
 
+write_stdout :: proc(data: []byte) -> bool {
+	return write_all_to(os.stdout, data)
+}
+
 write_stderr :: proc(data: []byte) -> bool {
-	if len(data) == 0 {
-		return true
-	}
-	total := 0
-	for total < len(data) {
-		n, err := os.write(os.stderr, data[total:])
-		if err != nil || n <= 0 {
-			return false
-		}
-		total += n
-	}
-	return true
+	return write_all_to(os.stderr, data)
 }
 
 USAGE_TEXT :: `ap - 一次性命令行 coding agent
@@ -162,10 +148,6 @@ stderr_write_string :: proc(s: string) {
 	if len(s) > 0 {
 		write_stderr(transmute([]byte)s)
 	}
-}
-
-stderr_println :: proc(format: string, args: ..any) {
-	fmt.eprintln(fmt.tprintf(format, ..args))
 }
 
 split_lines :: proc(s: string, allocator := context.allocator) -> []string {

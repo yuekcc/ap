@@ -1,6 +1,5 @@
 package ap
 
-import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -318,18 +317,6 @@ read_all_stdin :: proc() -> (string, Error) {
 }
 
 read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
-	sources := 0
-	if _, ok := opts.print_prompt.?; ok {
-		sources += 1
-	}
-	if _, ok := opts.input_file.?; ok {
-		sources += 1
-	}
-	if opts.print0 do sources += 1
-	if sources > 1 {
-		return "", make_error(.Usage, "--print, --input-file and --print0 are mutually exclusive")
-	}
-
 	prompt: string
 	switch {
 	case opts.print_prompt != nil:
@@ -381,19 +368,4 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		prompt = data
 	}
 	return prompt, ok_error()
-}
-
-format_to_string :: proc(f: Output_Format) -> string {	switch f {
-	case .Text:
-		return "text"
-	case .Json:
-		return "json"
-	case .Stream_Json:
-		return "stream-json"
-	}
-	return "text"
-}
-
-usage_hint_for_prompt :: proc() -> string {
-	return fmt.tprintf("hint: ap --print \"<prompt>\"")
 }

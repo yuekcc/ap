@@ -7,7 +7,7 @@ import "core:strings"
 
 ALL_TOOL_NAMES := [5]string{"read_file", "write_file", "edit_file", "bash", "task"}
 
-tool_name_valid :: proc(name: string) -> bool {
+tool_name_valid :: proc(name: string) -> bool { 
 	for tool in ALL_TOOL_NAMES {
 		if tool == name {
 			return true
@@ -225,20 +225,22 @@ Agent_Def :: struct {
 }
 
 agent_default_general :: proc() -> Agent_Def {
-	tools := make([]string, len(ALL_TOOL_NAMES))
-	for name, i in ALL_TOOL_NAMES {
-		tools[i] = name
-	}
 	return Agent_Def {
 		name = "general",
 		description = "默认 agent，适合多步骤搜索与修改",
-		tools = tools,
+		tools = default_tools(),
 		model = nil,
 		max_steps = nil,
 		body = "",
 		source = "<builtin>",
 		builtin = true,
 	}
+}
+
+default_tools :: proc() -> []string {
+	tools := make([]string, len(ALL_TOOL_NAMES))
+	copy(tools, ALL_TOOL_NAMES[:])
+	return tools
 }
 
 agent_file_path :: proc(config_dir, name: string) -> string {
@@ -390,10 +392,7 @@ parse_agent_definition :: proc(path, file_name: string, content: string) -> (Age
 		)
 	}
 	if !def.tools_explicit {
-		def.tools = make([]string, len(ALL_TOOL_NAMES))
-		for name, i in ALL_TOOL_NAMES {
-			def.tools[i] = name
-		}
+		def.tools = default_tools()
 	}
 	return def, ok_error()
 }

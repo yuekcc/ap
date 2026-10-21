@@ -52,10 +52,6 @@ JSON_EXAMPLE :: `
 ## 输出要求
 正常使用 assistant 文本与 tool_calls 响应。完成前不要输出“我将要做”的空话；能直接做的就用工具做。`
 
-system_prompt_tool_section :: proc(agent: Agent_Def, depth, max_depth: int) -> string {
-	return tool_prompt_section(agent, depth, max_depth)
-}
-
 build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	b := strings.builder_make()
 	strings.write_string(&b, FIXED_INSTRUCTIONS)
@@ -172,11 +168,10 @@ project_memory_files :: proc(cwd: string) -> []string {
 }
 
 context_build :: proc(project: Project, events: []Event) -> (string, []Chat_Message, Error) {
-	start, system_prompt, serr := session_system_prompt(project, events)
+	_, system_prompt, serr := session_system_prompt(project, events)
 	if !is_ok(serr) {
 		return "", nil, serr
 	}
-	_ = start
 	messages, merr := project_messages(project, events)
 	if !is_ok(merr) {
 		return "", nil, merr
