@@ -1,6 +1,5 @@
 package ap
 
-import "core:encoding/hex"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -41,22 +40,6 @@ usage_add :: proc(a, b: Usage) -> Usage {
 	out.reasoning_tokens = add_field(a.reasoning_tokens, b.reasoning_tokens)
 	out.total_tokens = add_field(a.total_tokens, b.total_tokens)
 	return out
-}
-
-usage_from_tokens :: proc(
-	input_tokens: Maybe(int),
-	output_tokens: Maybe(int),
-	cached_tokens: Maybe(int),
-	reasoning_tokens: Maybe(int),
-	total_tokens: Maybe(int),
-) -> Usage {
-	return {
-		input_tokens = input_tokens,
-		output_tokens = output_tokens,
-		cached_tokens = cached_tokens,
-		reasoning_tokens = reasoning_tokens,
-		total_tokens = total_tokens,
-	}
 }
 
 Event_Header :: struct {
@@ -257,13 +240,17 @@ open_transcript :: proc(store: ^Transcript_Store, append: bool) -> Error {
 	return ok_error()
 }
 
-new_transcript_store :: proc(project: Project, session_id: string, settings: ^Settings) -> (Transcript_Store, Error) {
-	store := Transcript_Store {
+transcript_store :: proc(project: Project, session_id: string, settings: ^Settings) -> Transcript_Store {
+	return {
 		project    = project,
 		session_id = session_id,
 		path       = session_file(project, session_id),
 		settings   = settings,
 	}
+}
+
+new_transcript_store :: proc(project: Project, session_id: string, settings: ^Settings) -> (Transcript_Store, Error) {
+	store := transcript_store(project, session_id, settings)
 	if os.exists(store.path) {
 		return store, make_error(.Usage, "session %q already exists at %s", session_id, store.path)
 	}
@@ -298,12 +285,7 @@ trim_incomplete_last_line :: proc(path: string) -> Error {
 }
 
 resume_transcript_store :: proc(project: Project, session_id: string, settings: ^Settings) -> (Transcript_Store, Error) {
-	store := Transcript_Store {
-		project    = project,
-		session_id = session_id,
-		path       = session_file(project, session_id),
-		settings   = settings,
-	}
+	store := transcript_store(project, session_id, settings)
 	if !os.exists(store.path) {
 		return store, make_error(
 			.Usage,
@@ -397,7 +379,6 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 
 	events := make([dynamic]Event, 0, 16)
 	start := 0
-	line_no := 0
 	last_nonempty := -1
 	lines := make([dynamic]string, 0, 16)
 	for i in 0 ..= len(data) {
@@ -408,10 +389,8 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 				last_nonempty = len(lines) - 1
 			}
 			start = i + 1
-			line_no += 1
 		}
 	}
-	_ = line_no
 
 	for line, idx in lines {
 		if len(strings.trim_space(line)) == 0 {
@@ -600,7 +579,7 @@ fork_transcript :: proc(
 		return {}, make_error(.Usage, "cannot read source transcript %s: %v", source_path, serr)
 	}
 	// 先完整校验源文件，避免复制损坏的 transcript。
-	_, verr := transcript_read_all(project, source_id)
+	events, verr := transcript_read_all(project, source_id)
 	if !is_ok(verr) {
 		return {}, verr
 	}
@@ -614,12 +593,7 @@ fork_transcript :: proc(
 		}
 	}
 	source = source[:copy_len]
-	store := Transcript_Store {
-		project    = project,
-		session_id = new_id,
-		path       = session_file(project, new_id),
-		settings   = settings,
-	}
+	store := transcript_store(project, new_id, settings)
 	if err := open_transcript(&store, false); !is_ok(err) {
 		return {}, err
 	}
@@ -631,7 +605,6 @@ fork_transcript :: proc(
 		transcript_close(&store)
 		return {}, make_error(.Internal, "cannot flush forked transcript: %v", ferr)
 	}
-	events, _ := transcript_read_all(project, new_id)
 	for ev in events {
 		if ev.seq + 1 > store.next_seq {
 			store.next_seq = ev.seq + 1
@@ -713,9 +686,4 @@ find_latest_root_session :: proc(project: Project) -> (string, Error) {
 		return "", make_error(.Usage, "no root session found in project %s", project.hash)
 	}
 	return best, ok_error()
-}
-
-decode_hex_strict :: proc(s: string) -> ([]byte, bool) {
-	data, ok := hex.decode(transmute([]byte)s)
-	return data, ok
 }

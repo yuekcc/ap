@@ -212,15 +212,21 @@ loop_start_message :: proc(l: ^Loop, model: string) -> Error {
 	return ok_error()
 }
 
-blob_block_fields :: proc(
-	l: ^Loop,
-	data: []byte,
-) -> (ref: Maybe(string), bytes: Maybe(int), preview: Maybe(string), err: Error) {
-	fields, berr := maybe_blob(l.store, data)
-	if !is_ok(berr) {
-		return nil, nil, nil, berr
+// 大于阈值的内容写入 blob，失败时调用方决定是保留原文还是报错。
+make_text_block :: proc(l: ^Loop, text: string) -> (Content_Block, Error) {
+	block := Content_Block{type = "text", text = text}
+	if len(text) <= l.settings.blob_threshold_bytes {
+		return block, ok_error()
 	}
-	return fields.ref, fields.bytes, fields.preview, ok_error()
+	fields, berr := maybe_blob(l.store, transmute([]byte)text)
+	if !is_ok(berr) {
+		return block, berr
+	}
+	block.text = nil
+	block.text_ref = fields.ref
+	block.text_bytes = fields.bytes
+	block.text_preview = fields.preview
+	return block, ok_error()
 }
 
 loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
@@ -229,17 +235,9 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 	}
 	blocks := make([dynamic]Content_Block, 0, 2)
 	if len(end.text) > 0 {
-		block := Content_Block{type = "text", text = end.text}
-		if len(end.text) > l.settings.blob_threshold_bytes {
-			text_bytes: []byte = transmute([]byte)end.text
-			ref, bytes, preview, berr := blob_block_fields(l, text_bytes)
-			if !is_ok(berr) {
-				return berr
-			}
-			block.text = nil
-			block.text_ref = ref
-			block.text_bytes = bytes
-			block.text_preview = preview
+		block, berr := make_text_block(l, end.text)
+		if !is_ok(berr) {
+			return berr
 		}
 		append(&blocks, block)
 	}
@@ -247,15 +245,14 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 		block := Content_Block{type = "tool_use", id = call.id, name = call.name}
 		args_text := json_arguments_string(call.input)
 		if len(args_text) > l.settings.blob_threshold_bytes {
-			args_bytes: []byte = transmute([]byte)args_text
-			ref, bytes, preview, berr := blob_block_fields(l, args_bytes)
+			fields, berr := maybe_blob(l.store, transmute([]byte)args_text)
 			if !is_ok(berr) {
 				return berr
 			}
 			block.input = nil
-			block.input_ref = ref
-			block.input_bytes = bytes
-			block.input_preview = preview
+			block.input_ref = fields.ref
+			block.input_bytes = fields.bytes
+			block.input_preview = fields.preview
 		} else {
 			block.input = call.input
 		}
@@ -392,18 +389,7 @@ loop_write_cancelled_message :: proc(l: ^Loop) {
 	}
 	blocks := make([dynamic]Content_Block, 0, 1)
 	if len(l.attempt_text) > 0 {
-		text := string(l.attempt_text[:])
-		block := Content_Block{type = "text", text = text}
-		if len(text) > l.settings.blob_threshold_bytes {
-			text_bytes: []byte = transmute([]byte)text
-			ref, bytes, preview, berr := blob_block_fields(l, text_bytes)
-			if is_ok(berr) {
-				block.text = nil
-				block.text_ref = ref
-				block.text_bytes = bytes
-				block.text_preview = preview
-			}
-		}
+		block, _ := make_text_block(l, string(l.attempt_text[:]))
 		append(&blocks, block)
 	}
 	h := make_header(l.store, "message_end")
@@ -445,8 +431,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, exit_code:
 			args_bytes: []byte = transmute([]byte)args_text
 			sha, berr := blob_write(l.project, args_bytes)
 			if !is_ok(berr) {
-				werr := loop_write_error(l, "session", .None, berr.message, false, 1)
-				_ = werr
+				_ = loop_write_error(l, "session", .None, berr.message, false, 1)
 				return false, berr, .Tool
 			}
 			start_ev.args = nil
@@ -552,10 +537,6 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	result.exit_code = .OK
 	l.turn_usage = Usage{}
 	l.last_text = ""
-	defer {
-		result.usage = l.turn_usage
-		result.session_usage = usage_add(l.historical_usage, l.turn_usage)
-	}
 
 	h_user := make_header(l.store, "user_message")
 	if err := loop_append(l, User_Message_Event{header = h_user, content = prompt}, h_user); !is_ok(err) {
