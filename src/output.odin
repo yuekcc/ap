@@ -30,45 +30,35 @@ output_transcript :: proc(user: rawptr, event: Event) {
 }
 
 // 所有增量事件共享 {"type":"message_update","ts":...,"delta":{}} 信封。
-output_message_update :: proc(out: ^Output_State) -> json.Object {
+// delta 必须完整构造后再赋给 obj：Odin 的 map header 按值复制，
+// 从 obj["delta"] 取出再原地写入不会反映到 obj 上。
+make_message_update :: proc() -> json.Object {
 	obj := make(json.Object)
 	obj["type"] = json.String("message_update")
 	obj["ts"] = json.Integer(now_ms())
-	obj["delta"] = make(json.Object)
 	return obj
 }
 
-output_text_delta :: proc(user: rawptr, message_id, text: string) {
-	out := (^Output_State)(user)
-	if out.format != .Stream_Json {
-		return
-	}
-	obj := output_message_update(out)
+make_text_delta_event :: proc(message_id, text: string) -> json.Object {
+	obj := make_message_update()
 	obj["message_id"] = json.String(message_id)
-	delta := obj["delta"].(json.Object)
+	delta := make(json.Object)
 	delta["text"] = json.String(text)
-	output_write_json(obj)
+	obj["delta"] = delta
+	return obj
 }
 
-output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
-	out := (^Output_State)(user)
-	if out.format != .Stream_Json {
-		return
-	}
-	obj := output_message_update(out)
+make_reasoning_delta_event :: proc(message_id, text: string) -> json.Object {
+	obj := make_message_update()
 	obj["message_id"] = json.String(message_id)
-	delta := obj["delta"].(json.Object)
+	delta := make(json.Object)
 	delta["reasoning"] = json.String(text)
-	output_write_json(obj)
+	obj["delta"] = delta
+	return obj
 }
 
-output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string) {
-	out := (^Output_State)(user)
-	if out.format != .Stream_Json {
-		return
-	}
-	obj := output_message_update(out)
-	delta := obj["delta"].(json.Object)
+make_tool_delta_event :: proc(index: int, id, name, args_delta: string) -> json.Object {
+	obj := make_message_update()
 	call := make(json.Object)
 	call["index"] = json.Integer(index)
 	if len(id) > 0 {
@@ -78,8 +68,34 @@ output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string
 		call["name"] = json.String(name)
 	}
 	call["args_delta"] = json.String(args_delta)
+	delta := make(json.Object)
 	delta["tool_call"] = call
-	output_write_json(obj)
+	obj["delta"] = delta
+	return obj
+}
+
+output_text_delta :: proc(user: rawptr, message_id, text: string) {
+	out := (^Output_State)(user)
+	if out.format != .Stream_Json {
+		return
+	}
+	output_write_json(make_text_delta_event(message_id, text))
+}
+
+output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
+	out := (^Output_State)(user)
+	if out.format != .Stream_Json {
+		return
+	}
+	output_write_json(make_reasoning_delta_event(message_id, text))
+}
+
+output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string) {
+	out := (^Output_State)(user)
+	if out.format != .Stream_Json {
+		return
+	}
+	output_write_json(make_tool_delta_event(index, id, name, args_delta))
 }
 
 output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
