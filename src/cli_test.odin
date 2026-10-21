@@ -80,3 +80,13 @@ test_cli_list_skills :: proc(t: ^testing.T) {
 	_, err2 := parse_args([]string{"ap", "--list-skills=yes"})
 	testing.expect_value(t, err2.code, Exit_Code.Usage)
 }
+
+@(test)
+test_cli_print_system_prompt :: proc(t: ^testing.T) {
+	opts, err := parse_args([]string{"ap", "--print-system-prompt"})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect(t, opts.print_system_prompt)
+
+	_, err2 := parse_args([]string{"ap", "--print-system-prompt=yes"})
+	testing.expect_value(t, err2.code, Exit_Code.Usage)
+}

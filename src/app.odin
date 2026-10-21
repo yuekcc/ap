@@ -123,6 +123,7 @@ agent 与模型:
       --output-format <fmt>   text | json | stream-json，默认 text
       --verbose               输出 info 日志到 stderr
       --debug                 输出 debug 日志到 stderr
+      --print-system-prompt   打印本次使用的 system prompt 后退出
       --help                  显示帮助
       --version               显示版本
 

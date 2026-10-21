@@ -34,6 +34,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 | `--append-system-prompt <text>` | 文本 | 追加到 system prompt 末尾；恢复 session 时只警告，不生效 |
 | `--verbose` / `--debug` | — | 日志级别，输出到 stderr |
 | `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
+| `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型 |
 | `--help` / `--version` | — | 用法与版本 |
 
 不提供 `--add-dir`。所有相对路径只相对启动目录；绝对路径不受限制。
@@ -52,6 +53,12 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 ### 查看技能
 
 `--list-skills` 在加载配置之前处理，列出 `~/.agents/skills` 与 `<启动目录>/.agents/skills` 中的有效技能后退出（退出码 0）。它不需要 `settings.json` 或 API key，`--config-dir` 对它没有影响；`--help` / `--version` 的优先级更高。格式与发现规则见 [skills.md](skills.md)。
+
+### 查看 system prompt
+
+`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词。它会正常加载配置与 agent，因此需要可用的 `settings.json`；受 `--config-dir`、`--agent`、`--append-system-prompt` 影响。
+
+新 session 按 [context-management.md](context-management.md) 的规则现场组装（技能清单、记忆文件、agent 定义都会重新扫描）。与 `-s` / `-c` 连用时打印该 session 在 `session_start` 中冻结的 prompt，`--append-system-prompt` 等恢复期无效参数不会生效。输出不受 `--output-format` 影响，始终是纯文本，末尾保证有换行。
 
 ### 输出格式
 

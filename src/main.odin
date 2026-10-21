@@ -81,8 +81,12 @@ main :: proc() {
 	exit_on_error(berr, .Usage)
 	self_exe := resolve_self_exe()
 
-	prompt, prerr := read_prompt(opts, cwd)
-	exit_on_error(prerr, .Usage)
+	prompt := ""
+	if !opts.print_system_prompt {
+		value, prerr := read_prompt(opts, cwd)
+		exit_on_error(prerr, .Usage)
+		prompt = value
+	}
 
 	store: Transcript_Store
 	session_id := ""
@@ -114,8 +118,11 @@ main :: proc() {
 		if len(source_events) > 0 && source_events[len(source_events) - 1].type != "session_end" {
 			log_warn("previous run of session %s did not write session_end; recovering after abnormal exit", source_id)
 		}
-		start, _, crerr := session_system_prompt(project, source_events)
+		start, frozen_prompt, crerr := session_system_prompt(project, source_events)
 		exit_on_error(crerr, .Usage)
+		if opts.print_system_prompt {
+			print_system_prompt(frozen_prompt)
+		}
 
 		model = start.model
 		agent_name = start.agent_name
@@ -201,6 +208,9 @@ main :: proc() {
 				skill_section = skill_section,
 			},
 		)
+		if opts.print_system_prompt {
+			print_system_prompt(system_prompt)
+		}
 		session_id = new_session_id()
 		created, cerr2 := new_transcript_store(project, session_id, &settings)
 		exit_on_error(cerr2, .Usage)
@@ -329,6 +339,15 @@ list_skills :: proc() -> int {
 	text := skills_brief(discover_skills(cwd))
 	write_stdout(transmute([]byte)text)
 	return int(Exit_Code.OK)
+}
+
+// 打印 system prompt 后直接退出，不创建 session、不调用模型。
+print_system_prompt :: proc(text: string) {
+	write_stdout(transmute([]byte)text)
+	if len(text) == 0 || text[len(text) - 1] != '\n' {
+		write_stdout(transmute([]byte)string("\n"))
+	}
+	os.exit(int(Exit_Code.OK))
 }
 
 exit_on_error :: proc(err: Error, code: Exit_Code) {

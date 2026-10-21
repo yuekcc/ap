@@ -23,6 +23,7 @@
 - 记忆文件不做 `@import`（v1），避免递归与不可预期读取
 - 记忆文件按原文完整注入，不截断；用户应自行控制大小
 - system prompt 在 `session_start` 中冻结；恢复时不重新计算
+- `--print-system-prompt` 用于检查结果：新 session 现场组装，恢复时读取 `session_start` 的冻结值；不创建 session、不调用模型
 
 ## 记忆文件
 
