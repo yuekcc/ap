@@ -6,27 +6,29 @@
 
 | 类别 | 例子 | 处理 | 落盘 |
 | --- | --- | --- | --- |
-| 配置错误 | 未配置 api_key、模型不存在、`$AP_CONFIG` 不可写 | 启动即退出 | 无（stderr + exit 2） |
+| 配置错误 | 未配置 api_key、模型 id 为空、`$AP_CONFIG` 不可写、agent 定义非法 | 启动即退出 | 无（stderr + exit 2） |
 | provider 网络 | 连接失败、连接超时、读超时、429、5xx | 退避重试 | `error`（retryable=true） |
-| provider 协议 | 非法 JSON、tool_call 参数不是合法 JSON、未知 content 块 | 不重试，终止当前 turn | `error`（retryable=false） |
+| provider 协议 | 非法 JSON、tool_call 参数不是合法 JSON、未知 `finish_reason` | 不重试，终止当前 turn | `error`（retryable=false） |
 | 上下文超限 | `context_too_long` | 不重试，终止当前 turn | `error` + `turn_end(context_too_long)` |
 | 流中断 | 已收到部分 delta 后连接断开 | 丢弃半截消息，重试同一 step | `error` |
 | 工具错误 | 路径不存在、编辑未匹配、参数非法、bash 超时 | 作为 tool result 返回，循环继续 | `tool_execution_end(ok=false)` |
-| 工具基础设施故障 | 无法 spawn shell、工具参数/system prompt 的 blob 写入失败、transcript 写入失败（磁盘满等） | 终止 turn | `error`（scope=tool/session） |
+| 工具基础设施故障 | 无法 spawn shell、工具参数/system prompt 的 blob 写入失败 | 终止 turn | `error`（scope=tool/session） |
+| transcript 写入失败 | 磁盘满、flush 失败、事件序列化失败 | 无法再可靠落盘，直接退出 | 尽力写 `error(scope=session)`；通常只能靠 stderr |
 | 用户中断 | SIGINT / SIGTERM | 见下 | `cancel` |
 
 原则：**工具的错误是给模型的输入，不是给程序的异常**；provider、配置、基础设施的错误才是程序异常。
 
 ## LLM 侧重试
 
-1. 可重试：连接失败、连接超时、读超时、首字节超时、429、500/502/503/504、流中断
+1. 可重试：连接失败、超时、429、5xx（>=500）、流中断
 2. 不可重试：400 参数错误、401/403 鉴权、404 模型不存在、`context_too_long`、协议错误
 3. 退避：指数 + 抖动，基准 1s，最多 5 次（1s / 2s / 4s / 8s / 16s）；429 优先用 `Retry-After`
-4. **重试边界**：尚未收到任何 delta 时直接重发；收到部分 delta 后断流，丢弃半截消息，**重试同一个 step**，不把半截内容放进上下文；如果这段文本已经展示给用户，stderr 明确提示「该段已作废」
-5. **重试不增加 step**：`step_start` 只写一次，重试只写 `error(attempt)`；`max_steps` 不受重试影响
-6. 丢弃的半截消息不写 `message_end`；如果已经写了 `message_start`，重放时按无 end 的消息忽略
-7. 重试对用户可见：每次写 `error` 事件，并在 stderr 输出一行
-8. 重试耗尽 → 终止当前 turn，`session_end(reason=error)`，退出码 3
+4. 退避用阻塞 sleep 实现。信号只会设置取消标志，当前退避 sleep 结束后才检查取消；若 `Retry-After` 很大，退出也会相应延后
+5. **重试边界**：尚未收到任何 delta 时直接重发；收到部分 delta 后断流，丢弃半截消息，**重试同一个 step**，不把半截内容放进上下文；如果这段文本已经展示给用户，stderr 明确提示「该段已作废」
+6. **重试不增加 step**：`step_start` 只写一次，重试只写 `error(attempt)`；`max_steps` 不受重试影响
+7. 丢弃的半截消息不写 `message_end`；如果已经写了 `message_start`，重放时按无 end 的消息忽略
+8. 重试对用户可见：每次写 `error` 事件，并在 stderr 输出一行
+9. 重试耗尽 → 终止当前 turn，写 `session_end(reason=error)`，退出码 3；这条路径没有 `turn_end`（`error` 已逐次落盘）
 
 重试事件只在 transcript 里，不进入下一轮上下文；模型不需要知道网络抖动。
 
@@ -41,7 +43,7 @@
 | read_file 超出单次范围 | 截到 2000 行，附 `start_line` 继续提示 |
 | bash 非 0 退出 | `ok:true`，带 `exit_code` 与合并输出 |
 | bash 超时 | `ok:false`，`error: "timeout after Nms"`，进程树已终止 |
-| 输出超过 `max_capture_bytes` | `ok:false`，`error: "output exceeded 64MB"`，进程树已终止 |
+| 输出超过 `max_capture_bytes` | `ok:false`，`error: "output exceeded <max_capture_bytes> bytes"`，进程树已终止 |
 | 工具结果的 blob 写入失败 | `ok:false`，`error: "failed to persist output blob"`，循环继续 |
 | 工具被取消 | `ok:false`，`error: "cancelled"` |
 
@@ -67,7 +69,7 @@ Windows 没有 Unix 信号：Ctrl+C 走 console handler；`TerminateProcess` 无
 1. 设置取消标志（原子布尔）
 2. 中止 HTTP 请求：curl 的进度回调返回非 0
 3. 正在执行的工具：终止整棵进程树
-   - Unix：`SIGTERM` 到进程组，2s 后 `SIGKILL`
+   - Unix：通过 PPid 递归收集后代；先 `SIGTERM`，2s 后对同一快照 `SIGKILL`。不依赖进程组
    - Windows：`TerminateJobObject` 或 `taskkill /T /F`
    - 子代理：先递归终止其子进程树
 4. 已产生的副作用不回滚（写了一半的文件、已执行的命令），如实落盘
@@ -101,7 +103,7 @@ Windows 没有 Unix 信号：Ctrl+C 走 console handler；`TerminateProcess` 无
 3. 写 `error(scope=llm, kind=context_too_long, retryable=false)`
 4. 写 `turn_end(stop_reason=context_too_long)`
 5. 写 `session_end(reason=error)`，退出 3
-6. stderr 提示开新 session 或缩小输入
+6. 错误消息进入 `error` 事件和 JSON 输出；不单独打印 stderr 提示。用户可据此开新 session 或缩小输入
 
 这是 v1 唯一的超限出口。后续 handoff 会替代它。
 
@@ -110,9 +112,10 @@ Windows 没有 Unix 信号：Ctrl+C 走 console handler；`TerminateProcess` 无
 1. 进程异常退出（kill -9、断电）时没有 `session_end`。恢复时以此判断上次是异常退出，在 stderr 提示
 2. 恢复不重放工具，不重试 provider 请求；只重建上下文，等新提示词
 3. 未闭合的 tool call 在投影时忽略（删除 tool_use 块），不写修复事件
-4. blob 缺失或 hash 不匹配 → 恢复失败，退出 2
-5. `error` 事件必须包含 `scope`、`kind`（可空）、`message`、`retryable`、`attempt`，便于事后统计失败分布
-6. 配置错误发生在 transcript 创建前时，只有 stderr，没有 transcript
+4. 完整事件只追加；恢复时只截掉崩溃留下的不完整尾行
+5. blob 缺失或 hash 不匹配 → 恢复失败，退出 2
+6. `error` 事件必须包含 `scope`、`kind`（可空）、`message`、`retryable`、`attempt`，便于事后统计失败分布
+7. 配置错误发生在 transcript 创建前时，只有 stderr，没有 transcript
 
 ## 退出码
 

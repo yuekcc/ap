@@ -19,15 +19,16 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 工具内部返回：
 
 ```jsonc
-{"ok": true,  "content": "<文本结果>", "bytes": 1234, "duration_ms": 12,
- "exit_code": 0, "metadata": null}
+{"ok": true,  "content": "<文本结果>", "duration_ms": 12,
+ "exit_code": 0, "metadata": null, "fatal": false}
 
-{"ok": false, "error": "<错误信息>", "duration_ms": 3}
+{"ok": false, "error": "<错误信息>", "duration_ms": 3, "fatal": false}
 ```
 
 - `content` 是完整内容；transcript 落盘时可能被替换成 `content_ref` + 预览
 - `exit_code` 仅 `bash` 有
-- `metadata` 仅 `task` 使用，写 `{child_session_id, stop_reason, usage}`
+- `metadata` 仅 `task` 使用，写 `{child_session_id, stop_reason, usage, duration_ms}`
+- `fatal=true` 表示 spawn 失败等基础设施故障；Loop 会额外写 `error(scope=tool)` 并终止 turn。普通工具错误保持 `false`
 
 ## Blob
 
@@ -68,8 +69,9 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 
 ### 失败
 
-- 工具结果写 blob 失败 → 该次工具返回 `ok:false`，错误说明 blob 写入失败
-- 工具参数写 blob 失败 → 终止当前 turn，写 `error(scope=session)`，退出 4
+- 工具结果写 blob 失败 → 该次工具返回 `ok:false`，错误说明 blob 写入失败，循环继续
+- 工具参数（assistant 的 `tool_use.input` 或 `tool_execution_start.args`）写 blob 失败 → 终止当前 turn，写 `error(scope=session)`，退出 4
+- 新 session 的 system prompt 写 blob 失败 → 启动阶段直接退出 4
 - 原因通常是磁盘满、`$AP_CONFIG` 不可写
 
 ## read_file
@@ -146,7 +148,9 @@ write_file(file_path="src/main.odin", content="...")
 4. `old_string` 为空 → `ok:false`
 5. 0 处匹配 → `ok:false`，提示「先用 read_file 确认文件内容」，不写文件
 6. 多处匹配且 `replace_all=false` → `ok:false`，给出匹配次数，提示补充上下文或显式 `replace_all=true`
-7. 返回实际替换次数
+7. 文件大于 `max_capture_bytes` → `ok:false`，提示改用 bash
+8. 替换后内容与原文相同 → `ok:false`（`replacement produced no change`）
+9. 返回实际替换次数
 
 示例：
 
@@ -174,10 +178,10 @@ edit_file(file_path="src/main.odin", old_string="foo", new_string="bar", replace
 7. 非 0 退出不算工具失败：返回 `ok:true` + `exit_code`，由模型判断
 8. **超时由 ap 控制**：不要求在命令里调用 `timeout`；Windows 的 `timeout.exe` 语义不同
 9. 超时/取消时终止整棵进程树：
-   - Unix：命令在独立进程组中运行；先 `SIGTERM` 到进程组，2s 后 `SIGKILL`
+   - Unix：通过 PPid 递归扫描当前进程的后代；先对快照发 `SIGTERM`，2s 后发 `SIGKILL`。没有独立进程组
    - Windows：Job Object 或 `taskkill /T /F`；实现方式见 [architecture.md](architecture.md)
-10. 正常返回时**不**终止残留后代进程；这些进程组登记在运行期表里，ap 退出时统一清理。后台进程用 wrapper 脚本 + pid 文件管理
-11. 输出超过 `max_capture_bytes` → 终止进程，返回 `ok:false`，错误说明超过硬上限
+10. 正常返回时**不**终止残留后代进程。Windows 上 Job 会登记，ap 退出时统一 `TerminateJobObject`；Unix 上没有运行期登记，ap 退出时不会再次清理正常返回后的后台后代。后台进程请用 wrapper 脚本 + pid 文件管理
+11. 输出超过 `max_capture_bytes` → 终止进程树，返回 `ok:false`，错误为 `output exceeded <max_capture_bytes> bytes`
 12. 输出超过 `blob_threshold_bytes` → 完整内容写 blob，模型仍拿到完整内容
 13. 命令按 POSIX shell 语法编写；不保证 `cmd.exe` / PowerShell 内置命令可用
 
@@ -197,7 +201,7 @@ Windows 已知坑（不做特殊处理，写进文档避免模型反复踩）：
 后台运行（v1 不提供原生后台工具）：
 
 - 长驻进程写成 wrapper 脚本：启动、写 pid 文件、提供停止入口
-- ap 退出时清理本次运行启动的后台进程（按进程组/Job 记录）
+- Windows 上本次运行启动的 Job 会在 ap 退出时统一终止；Unix 上正常返回后 ap 不再跟踪后代，需要 wrapper 自己负责停止
 - 原生 `run_in_background` / `bash_output` / `kill_shell` 留到后续版本
 
 ## task

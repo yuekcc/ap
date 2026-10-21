@@ -26,12 +26,12 @@ idle ──提示词──► calling_llm ──tool_use──► running_tools 
 
 ## Transcript
 
-Transcript 是 session 的唯一事实来源，只追加，永不改写。
+Transcript 是 session 的唯一事实来源，完整事件只追加，永不改写。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行（它从未成为事件）。
 
 - 文件位置：`$AP_CONFIG/projects/<project_path_hash>/<session_id>.jsonl`（见 [cli-and-config.md](cli-and-config.md)）
 - 一行一个 JSON 事件；写入后立即 flush
-- 崩溃最多丢失正在写的那一行；读取时最后一行无法解析则丢弃
-- `seq` 从 0 单调递增，作为排序与去重依据
+- 崩溃最多丢失正在写的那一行；读取时最后一行无法解析则丢弃，恢复时会把该尾行截掉
+- `seq` 从 0 单调递增，作为排序与去重依据；读取按文件行序进行，正常情况下与 `seq` 顺序一致
 - 未知事件类型跳过；已知类型但 `v` 大于支持版本时报错，避免误读
 - 大块数据写入同目录的 `blobs/<sha256>`，事件只存引用；blob 必须先于引用事件写完并 fsync
 
@@ -56,6 +56,8 @@ Transcript 是 session 的唯一事实来源，只追加，永不改写。
 | `seq` | 本 session 内单调递增，从 0 开始 |
 | `ts` | unix 毫秒时间戳 |
 | `type` | 事件类型；未知类型读取方必须跳过 |
+
+下文示例用 `null` 表示可选字段缺失；实际序列化时带 `omitempty` 的字段（如 `*_ref`、`*_bytes`、`*_preview`）会直接省略，而不是写 `null`。读取方应把“缺失”和 `null` 等价处理。
 
 ### session_start
 
@@ -120,6 +122,8 @@ Transcript 是 session 的唯一事实来源，只追加，永不改写。
 ```
 
 `turn_end.stop_reason` 取值：`stop` / `max_tokens` / `max_steps` / `cancelled` / `context_too_long`。
+
+`turn_end` 不是所有退出路径都有：provider 重试耗尽、`context_build` 失败、工具基础设施故障或 transcript 写入失败时，Loop 可能直接返回并以 `session_end(reason=error)` 结束，此时没有 `turn_end`。正常结束、取消和 `context_too_long` 路径会写 `turn_end`。
 
 ### step_start
 
@@ -201,7 +205,7 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 2. `content` 超过阈值时置空，写 `content_ref` / `content_bytes` / `content_preview`
 3. `content_ref` 是 blob 的 sha256；读取方在 transcript 同目录的 `blobs/` 下解析
 4. `exit_code` 仅 `bash` 有；其它工具为 null
-5. `metadata` 供工具附加结构化信息；`task` 写 `{child_session_id, stop_reason, usage}`
+5. `metadata` 供工具附加结构化信息；`task` 写 `{child_session_id, stop_reason, usage, duration_ms}`；其它工具为 null
 6. 非 0 退出码的 bash 仍是 `ok: true`；只有无法执行、超时、取消、输出超过硬上限才是 `ok: false`
 7. 被取消时写 `ok: false, error: "cancelled"`
 
@@ -293,11 +297,11 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 ## 恢复与重放
 
 1. `-s <id>`：只在当前项目内查找 `projects/<hash>/<id>.jsonl`；找不到退出 2
-2. 按 `seq` 顺序读取，最后一个 `session_start` 决定 system prompt、model、provider、agent_name、agent_depth、cwd
+2. 按文件行序读取（正常写入下即 `seq` 递增），最后一个 `session_start` 决定 system prompt、model、provider、agent_name、agent_depth、cwd
 3. 不重新调用 LLM、不重新执行工具、不重新读记忆文件
 4. blob 按引用解析；blob 缺失时恢复失败（退出 2），不静默降级
 5. 未闭合的 tool call：投影时删除没有 `tool_execution_end` 的 `tool_use` 块；若整条 assistant 消息只剩这个块，整条不提交；同一消息里的 text 保留
-6. 不写任何修复事件；transcript 保持原样
+6. 不写任何修复事件；恢复时只截掉崩溃留下的不完整尾行，完整事件保持原样
 7. 恢复后追加新的 `session_start`，然后开始新 turn；新事件的 `seq` 继续递增
 8. 子代理 session 同样可以 `-s` 打开；`parent_session_id` 用于展示层级
 

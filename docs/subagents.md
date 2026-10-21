@@ -75,7 +75,7 @@ max_steps: 30
 
 约定：
 
-1. `<self_exe>` 用 `argv[0]` 解析成绝对路径：含分隔符的直接转绝对，裸名字则在 PATH 中查找；平台允许时可退化为 `os.get_executable_path()`；不经过 shell
+1. `<self_exe>` 优先用 `os.get_executable_path()`；失败时把 `argv[0]` 转成绝对路径；仍失败则使用原始 `argv[0]`。不经过 shell
 2. **不传 `--session`**：子进程自己生成 `session_id`；父进程从子进程的第一条 `session_start` 读取 `child_session_id`
 3. 提示词通过 stdin 传给 `--print0`，不放在命令行里，避免 Windows 命令行长度限制
 4. 子进程不继承父进程的技能清单；它按自己的启动目录重新发现（`task` 不改变 cwd，通常得到同一份清单），见 [skills.md](skills.md)
@@ -99,7 +99,7 @@ stdout 包含：
 父进程消费规则：
 
 1. 逐行解析 stdout，跳过无法解析的行并计入 debug 日志；跨行缓冲必须保留
-2. 第一条 `session_start` → 取 `session_id` 作为 `child_session_id`
+2. 收到 `session_start` → 取其 `session_id` 作为 `child_session_id`（新鲜子进程只有一条，实现上后到的会覆盖）
 3. `message_update` 的文本 delta → 转发到父进程 stderr，前缀 `[subagent]`；不写父 transcript
 4. `message_end`（role=assistant）→ 暂存为候选结果
 5. `turn_end` → 记录 `stop_reason` 与 usage
@@ -124,7 +124,7 @@ stdout 包含：
 }
 ```
 
-父进程只把 `content` 放进 tool result 的正文；`child_session_id` / `stop_reason` / `usage` 放进 `tool_execution_end.metadata`，供用户和后续审计使用。用户可以用 `ap -s <child_session_id>` 在同一项目内查看完整过程。
+父进程只把 `content` 放进 tool result 的正文；`child_session_id` / `stop_reason` / `usage` / `duration_ms` 放进 `tool_execution_end.metadata`，供用户和后续审计使用。用户可以用 `ap -s <child_session_id>` 在同一项目内查看完整过程。
 
 `stop_reason=max_steps` 仍算 `ok:true`（子进程正常退出）；父进程模型根据 metadata 决定是否继续。
 

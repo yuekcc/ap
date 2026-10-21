@@ -34,10 +34,10 @@
 
 从 cwd 开始向上查找 `AGENTS.md`：
 
-1. 如果当前目录在 git 仓库内，向上直到 git 根（含），不再越过
+1. 如果当前目录或其祖先存在 `.git`，向上直到该目录（含），不再越过
 2. 否则向上直到文件系统根
 3. 收集到的文件按「远 → 近」拼接，近的在后，覆盖前面的同名约定
-4. 同一个物理文件只注入一次（处理符号链接后去重）
+4. 同一个物理文件只注入一次（解析符号链接/junction 后去重）
 
 不读取子目录里的 `AGENTS.md`；不读取 `.git/` 等隐藏目录中的同名文件。
 
@@ -76,8 +76,8 @@
    - 若 assistant 消息只剩这个块，整条消息不提交
    - 若同一消息还有 text，保留 text
    - 不写修复事件，不改 transcript
-2. 孤立的 tool result（找不到 tool_use）丢弃，记 debug 日志
-3. 连续同角色消息合并，减少 provider 兼容问题
+2. 孤立的 tool result（找不到 tool_use）直接丢弃，不写日志
+3. 连续同角色的 `user` / `assistant` 消息合并，减少 provider 兼容问题；`tool` 消息不合并
 4. 空 assistant 消息（没有 text 也没有 tool_use）不提交
 5. `stop_reason=cancelled` 的 assistant 消息不提交；它的 tool result 也因此成为孤立结果被丢弃
 6. tool_use 与 tool result 的顺序按 assistant 消息内的顺序排列，不按 `seq` 重排
@@ -109,13 +109,13 @@ usage 仍然记录，用于审计与 `--output-format json`，但不参与任何
 3. 写 `error(scope=llm, kind=context_too_long, retryable=false)`
 4. 写 `turn_end(stop_reason=context_too_long)`
 5. 写 `session_end(reason=error)`，退出码 3
-6. stderr 提示：开新 session，或缩小提示词/工具输出
+6. 错误消息写入 `error` 事件（`message` 为 `context too long; start a new session or reduce input`），并进入 JSON 输出的 `stop_reason`；不会额外打印一条独立的 stderr 提示
 
 后续 handoff 会替代这个退出路径：把任务移交给新 session，而不是直接失败。
 
 ## 恢复
 
-1. 按 `seq` 顺序应用事件
+1. 按文件行序应用事件（正常写入下即 `seq` 顺序）
 2. 最后一个 `session_start` 决定 system prompt 与 model；不重新读记忆文件
 3. 不重新调用 LLM 生成摘要
 4. 不重新执行工具

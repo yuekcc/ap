@@ -14,24 +14,26 @@ Provider :: struct { ... }
 
 provider_stream :: proc(
     p:      ^Provider,
-    req:    ^Request,
+    req:    ^Chat_Message_Request,
     sink:   Stream_Sink,
     cancel: ^Cancel_Token,
-) -> Error
+) -> Provider_Error
 ```
 
 Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件是 **Provider 内部协议**；Loop 负责把它翻译成 transcript 事件，以及 `stream-json` 的 `message_update` / `tool_execution_update`。
 
-`sink` 回调：
+`sink` 是 `{user, on_event}`，事件类型是 `Provider_Event` union：
 
-- `on_message_start(model)`
-- `on_text_delta(text)`
-- `on_reasoning_delta(text)`
-- `on_tool_call_start(index, id, name)`
-- `on_tool_call_delta(index, args_delta)`
-- `on_tool_call_end(index)`
-- `on_message_end(stop_reason, usage)`
-- `on_error(kind, message, retryable, retry_after_ms)`
+- `Provider_Message_Start{model, message_id}`
+- `Provider_Text_Delta{text}`
+- `Provider_Reasoning_Delta{text}`
+- `Provider_Tool_Start{index, id, name}`
+- `Provider_Tool_Delta{index, args_delta}`
+- `Provider_Tool_End{index}`
+- `Provider_Message_End{message_id, stop_reason, usage, tool_calls, reasoning, text}`
+- `Provider_Error_Event{err}`
+
+`Provider_Error_Event` 只是通知；`provider_stream` 的返回值才是本次请求的最终错误。Loop 以返回值为准。
 
 ## 请求
 
@@ -67,7 +69,7 @@ Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件�
 2. `parallel_tool_calls` 固定 false：ap 串行执行工具，不希望模型一次返回大量调用
 3. `stream_include_usage=true` 时才发送 `stream_options`；不支持的服务端可在配置里关掉
 4. `max_tokens` 使用旧字段（兼容自建服务）；不发送 `max_completion_tokens`
-5. `tools[].function.parameters` 是 JSON Schema，由 Tool Registry 生成
+5. `tools[].function.parameters` 是 JSON Schema，由 Tool Registry 生成；只有存在工具时才发送 `tool_choice: "auto"`，没有工具时省略 `tools` 和 `tool_choice`
 6. 每个 tool result 是一条独立的 `role=tool` 消息；多个结果按 tool call 顺序排列
 7. `base_url` 去掉尾部 `/`；如果已经以 `/chat/completions` 结尾则直接使用，否则追加 `/chat/completions`
 8. assistant 消息产生过推理内容时，按 `reasoning_content` 原样回传；没有就省略该字段。带工具调用的 thinking 模型依赖它继续推理，不能丢
@@ -77,14 +79,14 @@ Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件�
 
 | 事件 | 字段 | 说明 |
 | --- | --- | --- |
-| `message_start` | `model` | 收到首个有效 chunk 时发一次 |
-| `text_delta` | `text` | `choices[0].delta.content` |
-| `reasoning_delta` | `text` | `choices[0].delta.reasoning_content`（模型支持时） |
+| `message_start` | `model, message_id` | 收到首个有效 chunk 时发一次；`message_id` 可能为空，Loop 会补 UUID |
+| `text_delta` | `text` | `choices[*].delta.content`（按数组顺序处理） |
+| `reasoning_delta` | `text` | `choices[*].delta.reasoning_content`（模型支持时） |
 | `tool_call_start` | `index, id, name` | 一个 tool call 开始 |
 | `tool_call_delta` | `index, args_delta` | 参数 JSON 片段，只拼接不解析 |
 | `tool_call_end` | `index` | 参数收齐，此时解析 JSON |
 | `message_end` | `stop_reason, usage` | 流结束 |
-| `error` | `kind, message, retryable, retry_after_ms` | 出错终止 |
+| `error` | `kind, message, retryable, retry_after_ms` | 出错终止；同时通过返回值报告 |
 
 ### tool call 组装
 
@@ -92,14 +94,14 @@ OpenAI 的流式 tool call 有三个坑，必须按下面的规则处理：
 
 1. 后续 chunk 可能只有 `index`，没有 `id` / `name`；**按 `index` 建槽**，不要只按 id 累积
 2. `id` 和 `name` 可能只在第一个片段出现；后续片段只追加 `function.arguments`
-3. 收到 `finish_reason=tool_calls` 或流结束时，对每个槽解析参数 JSON；解析失败是协议错误（`retryable=false`）
+3. 收到 `finish_reason` 后（`assembler_finish`）统一解析每个槽的 JSON；解析失败、缺 `id` / `name` 都是协议错误（`retryable=false`）
 
-缺少 `tool_call_end` 就断流 → 视为流中断，丢弃该 tool call。
+连接在 `[DONE]` 之前断开 → 视为流中断，整条响应丢弃并重试同一个 step；不会只保留其中一部分 tool call。
 
 ### 其它规则
 
 1. `message_end` 必须恰好一次；重复或缺失都算协议错误
-2. `choices` 只取第一个；`n>1` 不支持
+2. 实现按数组顺序处理 `choices` 中的每一个；ap 不支持 `n>1`，服务端应只返回一个 choice
 3. usage 可能出现在最后一个 `choices` 为空的 chunk 里；没有就写 null
 4. `delta.content` 可能为 null；不要当成空字符串事件
 5. 推理内容写入 transcript 的 `message_end.reasoning`，并在下一轮作为 assistant 消息的 `reasoning_content` 回传
@@ -137,12 +139,12 @@ OpenAI 的流式 tool call 有三个坑，必须按下面的规则处理：
 | 400 参数错误 | `invalid_request` | false |
 | 400 `context_length_exceeded` / 等价 message | `context_too_long` | false |
 | 429 | `rate_limit` | true（带 `retry_after_ms`） |
-| 500 / 502 / 503 / 504 | `server_error` | true |
-| 连接失败 / 连接超时 | `network` | true |
-| 读超时 / 首字节超时 | `timeout` | true |
+| 500 及以上 | `server_error` | true |
+| 连接失败 | `network` | true |
+| 连接超时 / 读超时 / 总超时 / 首字节超时 | `timeout` | true |
 | SSE 解析失败 / 结构非法 / 参数 JSON 非法 | `protocol` | false |
 
-错误体按 `{"error":{"message","type","code"}}` 解析；`context_too_long` 靠 `code` 与 message 子串双重匹配。
+错误体按 `{"error":{"message","type","code"}}` 解析；`context_too_long` 靠 `code` 与 message 子串双重匹配。libcurl 的 `CURLE_OPERATION_TIMEDOUT` 统一映射为 `timeout`，因此连接超时也归入这一类。SSE 流中内嵌的 `error` 对象也按同样规则识别；除 `context_too_long` / 限流 code 外，默认 `invalid_request`，且 `retryable=false`。
 
 ## 传输层：vendor:curl
 
@@ -175,8 +177,8 @@ Odin 的 `core:net` 没有 HTTP/TLS 客户端，统一使用 `vendor:curl`。
 2. 忽略空行和 `:` 开头的注释行
 3. 只处理 `data:` 前缀；`data: [DONE]` 结束
 4. 一个 chunk 可能包含多行，也可能一行被拆成多个 chunk；缓冲区必须跨回调保留
-5. 增量文本按 UTF-8 解码时保留不完整的多字节序列
-6. 连接关闭但没看到 `[DONE]` → `network` 或 `protocol`，由循环层按流中断处理
+5. 行缓冲按字节保留跨 chunk 的内容，直到换行后再解析 JSON；因此被切断的多字节 UTF-8 字符不会丢失
+6. 连接关闭但没看到 `[DONE]` → `network`，由循环层重试同一个 step
 
 ### 取消
 

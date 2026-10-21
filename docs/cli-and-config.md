@@ -40,7 +40,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 
 ### 提示词来源
 
-`--print`、`--input-file`、`--print0` **互斥**，同时出现时退出码 2。
+`--print`、`--input-file`、`--print0` **互斥**，同时出现时退出码 2。`-s` 与 `-c` 也互斥；`--fork-session` 必须与其中之一连用。
 
 - `--print`：参数即提示词；空字符串视为用法错误
 - `--input-file`：文件必须存在、可读、UTF-8；内容为空视为用法错误
@@ -59,7 +59,7 @@ stdout 只放结果，所有日志、进度、工具执行信息走 stderr。
 
 | 格式 | stdout |
 | --- | --- |
-| `text` | 最后一个 assistant 消息的纯文本，在 turn 结束后一次性输出；不含中间步骤文本 |
+| `text` | 最后一条包含文本的 assistant 消息，在 turn 结束后一次性输出；不输出中间步骤文本 |
 | `json` | 单个 JSON 对象，turn 结束后输出 |
 | `stream-json` | 每行一个事件；包含持久事件与临时 stream 事件，见 [react-loop-and-session.md](react-loop-and-session.md) |
 
@@ -81,7 +81,9 @@ stdout 只放结果，所有日志、进度、工具执行信息走 stderr。
 }
 ```
 
-`stop_reason` 取值：`stop` / `max_tokens` / `max_steps` / `cancelled` / `context_too_long`。字段未知时写 `null`，不要写 0 冒充真实值。`usage` 是本 turn 的累加；整个 session 的累计在 `session_end.usage`。没有任何 assistant 文本时 `result` 为空字符串。
+`stop_reason` 取值：`stop` / `max_tokens` / `max_steps` / `cancelled` / `context_too_long`。字段未知时写 `null`，不要写 0 冒充真实值。
+
+`usage` 只在正常结束路径（`stop` / `max_tokens` / `max_steps`）填入本 turn 的累加；取消、provider 最终失败、工具基础设施故障等提前退出路径可能返回全 null 的 usage，`stop_reason` 也可能为 `null`。整个 session 的累计始终看 `session_end.usage`。没有任何 assistant 文本时 `result` 为空字符串。
 
 ### 恢复时的参数处理
 
@@ -100,6 +102,8 @@ stdout 只放结果，所有日志、进度、工具执行信息走 stderr。
 - `--fork-session`
 - `--config-dir`（必须先于查找生效，否则找不到 transcript）
 
+冻结的是 `session_start` 中的字段；`max_steps` / `max_tokens` 不在其中。恢复时若没有传 `--max-steps`，仍会重新加载冻结的 agent 定义并采用其中的 `max_steps`（如果有）；`--max-tokens` 同理取配置或命令行。
+
 找不到 session 时退出码 2，并打印期望路径，例如：
 
 ```
@@ -112,7 +116,7 @@ hint: run ap from the directory where the session was created
 | 码 | 含义 |
 | --- | --- |
 | 0 | 正常结束（含 `stop_reason: max_steps` / `max_tokens`；具体原因看输出） |
-| 1 | 内部错误（panic / 不可恢复的断言失败） |
+| 1 | 内部错误（panic、不可恢复的断言失败、transcript 写入/flush 失败、event 序列化失败） |
 | 2 | 用法或配置错误（参数非法、模型未配置、`$AP_CONFIG` 不可写、找不到 `bash`、session 不存在） |
 | 3 | provider 错误（鉴权失败、模型不存在、重试耗尽、`context_too_long`） |
 | 4 | 工具基础设施故障（无法 spawn shell、工具参数/system prompt 的 blob 写入失败等） |
@@ -155,6 +159,7 @@ hint: run ap from the directory where the session was created
 | --- | --- |
 | `AP_CONFIG` | 默认 `$AP_CONFIG`；`--config-dir` 优先 |
 | `AP_API_KEY` | 覆盖 settings.json 中的 `api_key` |
+| `AP_BASH` | 指定 `bash` 可执行文件的绝对路径；设置后不再搜索 PATH 和常见安装位置 |
 
 父子关联只走命令行参数，不使用 `AP_PARENT_*` 环境变量。`bash` 工具执行命令时会剔除 `AP_API_KEY`，避免把密钥暴露给模型可控的命令。
 
@@ -174,6 +179,8 @@ $AP_CONFIG/
       <session_id>.jsonl             # transcript，一行一个事件
 ```
 
+transcript 一行一个事件，完整事件只追加；恢复时若发现崩溃留下的不完整尾行，会先截掉它再追加新事件。blob 由用户自行清理。
+
 技能不在 `$AP_CONFIG` 下，固定从两处发现：`~/.agents/skills/<name>/SKILL.md` 与 `<项目>/.agents/skills/<name>/SKILL.md`。见 [skills.md](skills.md)。
 
 ## 项目识别
@@ -191,7 +198,7 @@ $AP_CONFIG/
 
 ### `-s <id>`
 
-读取 `projects/<hash>/<id>.jsonl`，按 seq 重放，重建消息与 usage，然后以追加方式继续写同一文件。恢复时追加一个新的 `session_start`：
+读取 `projects/<hash>/<id>.jsonl`，按文件行序重放（正常写入下即 `seq` 递增），重建消息与 usage，然后以追加方式继续写同一文件。恢复时追加一个新的 `session_start`：
 
 - `session_id` 不变
 - `resumed_from` 指向自身

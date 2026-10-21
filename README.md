@@ -121,7 +121,7 @@ $AP_CONFIG/
     <session_id>.jsonl
 ```
 
-transcript 只追加；恢复以 transcript 为准，system prompt / model / agent / cwd 冻结。blob 不自动回收，删除后引用它的 session 无法完整恢复。
+transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整尾行。恢复以 transcript 为准，system prompt / model / agent / cwd 冻结。blob 不自动回收，删除后引用它的 session 无法完整恢复。
 
 ## 测试
 
