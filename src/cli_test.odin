@@ -90,3 +90,12 @@ test_cli_print_system_prompt :: proc(t: ^testing.T) {
 	_, err2 := parse_args([]string{"ap", "--print-system-prompt=yes"})
 	testing.expect_value(t, err2.code, Exit_Code.Usage)
 }
+
+@(test)
+test_cli_rejects_invalid_utf8_print_prompt :: proc(t: ^testing.T) {
+	opts := Options {
+		print_prompt = transmute(string)([]byte{0xd6, 0xd0, 0xce, 0xc4}),
+	}
+	_, err := read_prompt(opts, ".")
+	testing.expect_value(t, err.code, Exit_Code.Usage)
+}

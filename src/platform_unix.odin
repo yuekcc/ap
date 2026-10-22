@@ -98,3 +98,7 @@ signal_exit_code :: proc() -> int {
 
 setup_console_utf8 :: proc() {
 }
+
+normalize_cli_args :: proc(args: []string) -> []string {
+	return args
+}

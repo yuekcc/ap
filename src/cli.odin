@@ -331,6 +331,12 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		if len(value) == 0 {
 			return "", make_error(.Usage, "--print requires a non-empty prompt")
 		}
+		if !valid_utf8(transmute([]byte)value) {
+			return "", make_error(
+				.Usage,
+				"--print prompt is not valid UTF-8; on Windows check the console code page or use --input-file",
+			)
+		}
 		prompt = value
 	case opts.input_file != nil:
 		path, _ := opts.input_file.?

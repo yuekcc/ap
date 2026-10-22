@@ -146,7 +146,7 @@ New-Item -ItemType Directory -Force $cfg | Out-Null
 
 ## 平台说明
 
-- Windows 控制台输出中文前会设置 UTF-8 code page。
+- Windows 控制台输出中文前会设置 UTF-8 code page。命令行参数默认由 CRT 按系统 ANSI 代码页（ACP）编码；ACP 不是 UTF-8 时，ap 会改用宽字符命令行重建参数并转成 UTF-8，避免 `--print` 的中文变成非法字符串。
 - 文件工具只支持 UTF-8，CRLF 统一为 LF；二进制或非 UTF-8 文件请用 `bash` 处理。
 - `bash` 每次调用是独立进程，不保留 cwd、环境变量或 shell 变量；stdin 为 NUL。
 - 超时/取消会终止整棵进程树：Windows 使用 Job Object（失败时退化 `taskkill /T /F`）；Unix 因 `core:os` 不暴露 `setpgid`，用递归后代扫描发送 `SIGTERM`，2s 后发送 `SIGKILL`。

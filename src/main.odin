@@ -6,7 +6,8 @@ import "core:os"
 
 main :: proc() {
 	setup_console_utf8()
-	opts, perr := parse_args(os.args)
+	args := normalize_cli_args(os.args)
+	opts, perr := parse_args(args)
 	if !is_ok(perr) {
 		log_error(perr.message)
 		fmt.eprintln("hint: run ap --help for usage")

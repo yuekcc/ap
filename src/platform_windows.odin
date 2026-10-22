@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:sync"
 import "core:time"
+import "core:unicode/utf8"
 import win32 "core:sys/windows"
 
 foreign import k32 "system:Kernel32.lib"
@@ -109,4 +110,79 @@ signal_exit_code :: proc() -> int {
 setup_console_utf8 :: proc() {
 	win32.SetConsoleCP(win32.CODEPAGE.UTF8)
 	win32.SetConsoleOutputCP(win32.CODEPAGE.UTF8)
+}
+
+// Windows CRT 用 ANSI 代码页（ACP，不是控制台代码页）把 UTF-16 命令行转成 argv。
+// 系统未启用「Beta: 使用 Unicode UTF-8」时，os.args 里的中文是 GBK 等本地编码的字节，
+// 当成 UTF-8 使用会一路变成非法字符串（transcript 里的 content 会被写成空）。
+// 因此 ACP 不是 UTF-8 时改用宽字符命令行重建参数，保证进入 parse_args 的文本是 UTF-8。
+normalize_cli_args :: proc(args: []string) -> []string {
+	if win32.GetACP() == win32.CODEPAGE.UTF8 {
+		return args
+	}
+	if wide_args, ok := wide_cli_args(); ok && len(wide_args) == len(args) {
+		return wide_args
+	}
+	out := make([]string, len(args))
+	for arg, i in args {
+		out[i] = acp_arg_to_utf8(arg)
+	}
+	return out
+}
+
+wide_cli_args :: proc() -> ([]string, bool) {
+	cmd_line := win32.GetCommandLineW()
+	if cmd_line == nil {
+		return nil, false
+	}
+	argc: win32.c_int
+	argv := win32.CommandLineToArgvW(cmd_line, &argc)
+	if argv == nil || argc <= 0 {
+		return nil, false
+	}
+	defer win32.LocalFree(rawptr(argv))
+
+	out := make([]string, int(argc))
+	for arg_w, i in argv[:int(argc)] {
+		converted, err := win32.wstring_to_utf8(arg_w, -1)
+		if err != nil {
+			return nil, false
+		}
+		out[i] = converted
+	}
+	return out, true
+}
+
+// 宽字符命令行不可用时的退化路径：只转换不合法的 UTF-8 参数，
+// 纯 ASCII 与已经是 UTF-8 的参数保持原样。
+acp_arg_to_utf8 :: proc(arg: string) -> string {
+	if utf8.valid_string(arg) {
+		return arg
+	}
+	page := win32.GetACP()
+	wide_len := win32.MultiByteToWideChar(
+		u32(page),
+		win32.MB_ERR_INVALID_CHARS,
+		raw_data(arg),
+		win32.c_int(len(arg)),
+		nil,
+		0,
+	)
+	if wide_len <= 0 {
+		return arg
+	}
+	wide := make([]u16, int(wide_len))
+	defer delete(wide)
+	written := win32.MultiByteToWideChar(
+		u32(page),
+		win32.MB_ERR_INVALID_CHARS,
+		raw_data(arg),
+		win32.c_int(len(arg)),
+		raw_data(wide),
+		wide_len,
+	)
+	if written <= 0 {
+		return arg
+	}
+	return win32.utf16_to_utf8(wide[:int(written)]) or_else arg
 }
