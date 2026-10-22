@@ -11,4 +11,8 @@ if ($version -notlike "*dev-2026-09-nightly*") {
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-Write-Host "built ap.exe"
+& odin build tui -out:ap-tui.exe -vet
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+Write-Host "built ap.exe ap-tui.exe"

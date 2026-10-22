@@ -121,6 +121,10 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 3. 配置与 agent 定义是外部输入，不进 transcript；但 `session_start` 冻结当次使用的 system prompt、model、provider、agent_name、agent_depth、cwd，保证恢复可解释
 4. blob 是 transcript 的一部分（按引用计入），不是缓存；内容寻址、只读、用户负责清理
 
+## 外部消费者：ap-tui
+
+`ap-tui` 不属于 ap 进程内的模块，也不依赖 ap 的内存结构。它每轮启动一个新的 ap 子进程，通过 `--print0 --output-format stream-json` 交互，并直接读取 v1 transcript 做历史重放。修改 stream-json 事件或 transcript schema 时要同步检查 [tui.md](tui.md)。
+
 ## 实现约束（Odin）
 
 以下是在 Odin `dev-2026-09-nightly` 上核实过的约束，实现前必须按此规划：

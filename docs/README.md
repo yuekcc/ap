@@ -1,6 +1,6 @@
 # ap Coding Agent Spec
 
-ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 ReAct 循环调用 LLM 与本地工具，直到任务完成。第一阶段只提供非交互的一次性 CLI，运行结束即退出。
+ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 ReAct 循环调用 LLM 与本地工具，直到任务完成。第一阶段只提供非交互的一次性 CLI，运行结束即退出；交互界面由独立的 `ap-tui` 进程通过 `stream-json` 调用 ap，见 [tui.md](tui.md)。
 
 本文件是规格总入口，定义全局决策、术语和文档地图。子系统细节见各分篇。
 
@@ -12,7 +12,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 4. 子代理：`task` 工具拉起独立 `ap` 进程，隔离上下文，只回传结论
 5. 流式输出；工具执行过程对用户可见（stderr，或 `stream-json` 模式下的 stdout 事件）
 6. 全自动执行，不引入审批交互
-7. 只做 CLI：一条提示词进，一个 turn 出，没有交互式 REPL
+7. 只做 CLI：一条提示词进，一个 turn 出，没有交互式 REPL；交互由独立的 `ap-tui` 承担
 
 ## 前置条件
 
@@ -22,7 +22,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 
 ## 非目标（v1）
 
-1. 交互模式、TUI、历史编辑、Esc 取消（v1 只有信号中断）
+1. ap 本体不做交互模式、TUI、历史编辑、Esc 取消（只有信号中断）；交互由独立的 `ap-tui` 承担
 2. 工具执行审批、权限规则、沙箱
 3. 上下文压缩、token 预算；压缩能力后续由 **handoff** 取代
 4. Hooks（PreToolUse / PostToolUse 等拦截机制）
@@ -51,7 +51,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 | --- | --- | --- |
 | 运行平台 | 跨平台，shell 统一 Bash | Windows 需要 Git for Windows，见 [tools.md](tools.md) |
 | 实现语言 | Odin | 见 [architecture.md](architecture.md) 的实现约束 |
-| 产品形态 | 只有一次性 CLI，无交互 | 见 [cli-and-config.md](cli-and-config.md) |
+| 产品形态 | 一次性 CLI，不内置交互 | `ap-tui` 作为独立进程调用 ap，见 [tui.md](tui.md) |
 | 工具执行安全 | 全自动，无审批、无沙箱 | 靠 transcripts + blob + 可中断兜底 |
 | 工具执行方式 | 串行；工具无状态（不共享 cwd/env） | 一个 step 内多个 tool call 按序执行 |
 | 工具集 | 仅 read_file / write_file / edit_file / bash / task | 见 [tools.md](tools.md) |
@@ -81,6 +81,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 - **subagent**：由 `task` 工具拉起、拥有独立 session 的 ap 进程。
 - **skill**：放在 `SKILL.md` 里的 Markdown 指令包；ap 把元数据清单注入 system prompt，模型按需读取正文。
 - **provider**：LLM 接口的适配层，v1 只有 OpenAI chat completions。
+- **ap-tui**：独立的交互式前端，每轮启动一个 ap 子进程并通过 `stream-json` 渲染事件；见 [tui.md](tui.md)。
 - **stream event**：写到 stdout、但不落盘的临时事件（增量文本、工具输出片段）。
 - **transcript event**：追加到 transcript 的持久事件。
 
@@ -111,6 +112,7 @@ ReAct Loop（react-loop-and-session.md）
 | [tools.md](tools.md) | 五个工具的契约、blob、进程与输出上限 | 定稿 v1 |
 | [subagents.md](subagents.md) | agent 定义、启动协议、结果契约 | 定稿 v1 |
 | [skills.md](skills.md) | 技能发现、SKILL.md 格式、提示词注入、`--list-skills` | 定稿 v1 |
+| [tui.md](tui.md) | `ap-tui` 的进程模型、session 管理、历史重放、渲染与 phase 1 限制 | 第一阶段 |
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 | 定稿 v1 |
 
 ## 参考 Claude Code 的取舍
@@ -138,7 +140,7 @@ ReAct Loop（react-loop-and-session.md）
 | TodoWrite | 需要 UI 才有价值；CLI 下用文本计划替代 |
 | Plan mode | 与「全自动执行」目标相悖 |
 | 上下文压缩 | v1 不做；后续用 handoff 替代 |
-| 交互式 REPL / TUI | 第一阶段只做一次性 CLI |
+| 交互式 REPL / TUI | 第一阶段只在 `ap-tui` 里做滚动输出 + 行输入；ap 本体保持一次性 CLI |
 | 原生后台 bash | v1 用 wrapper 脚本兜住，不提供进程管理工具族 |
 | grep / glob / ls | v1 用 bash 覆盖，减少工具与 schema 复杂度 |
 | MCP / 插件 | 生态型功能，先把核心循环跑通 |
@@ -146,7 +148,7 @@ ReAct Loop（react-loop-and-session.md）
 ## 后续版本
 
 1. handoff：在上下文将满时把任务移交给新 session，替代压缩
-2. 交互模式 / TUI
+2. 交互模式 / TUI：`ap-tui` phase 1 已提供滚动渲染和行输入，继续完善输入框与展示效果
 3. 并行工具调用（transcript 已按 `tool_call_id` 关联，无需改格式）
 4. 后台子代理、一次 task 启动多个子代理
 5. blob 的 GC 与 session 清理命令

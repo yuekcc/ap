@@ -2,7 +2,7 @@
 
 ## 形态
 
-v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一个 turn（或达到终止条件），写 `session_end`，退出。没有交互式 REPL、没有 TUI、没有 Esc 取消。
+v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一个 turn（或达到终止条件），写 `session_end`，退出。没有交互式 REPL、没有 TUI、没有 Esc 取消。交互式界面由独立的 `ap-tui` 通过 `--output-format stream-json` 调用 ap，见 [tui.md](tui.md)。
 
 脚本化与子代理复用同一套入口，差异只体现在参数上：
 

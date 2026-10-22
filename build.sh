@@ -8,5 +8,11 @@ case "$version" in
   *) echo "warning: 本项目在 dev-2026-09-nightly 上验证；当前编译器版本不同，nightly stdlib 可能不兼容。" >&2 ;;
 esac
 
-odin build src -out:ap -vet
-echo "built ap"
+exe=""
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) exe=".exe" ;;
+esac
+
+odin build src -out:ap$exe -vet
+odin build tui -out:ap-tui$exe -vet
+echo "built ap$exe ap-tui$exe"

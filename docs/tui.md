@@ -1,0 +1,138 @@
+# ap-tui
+
+`ap-tui` 是 ap 的交互层，**不是** ap 的一部分。它本身不实现 agent、provider、工具或 transcript 写入；每个用户 turn 都启动一个新的 `ap` 子进程，通过 `stream-json` 读取事件并在终端里滚动渲染。
+
+```
+终端 ── ap-tui ──spawn──► ap.exe --print0 --output-format stream-json [-s <id>]
+          │                         │
+          │◄──── stdout: 事件 ───────┤
+          │◄──── stderr: 日志 ───────┤
+          │────── stdin: 提示词 ────►
+          ▼
+    滚动输出 + 简单行输入
+```
+
+## 为什么是独立进程
+
+ap 的 CLI 契约是「一条提示词进，一个 turn 出，进程退出」。TUI 利用这一契约复用同一套 session、工具和 transcript 逻辑，不把交互状态塞进 ap：
+
+- ap 仍可被脚本、子代理和 TUI 共用
+- TUI 崩溃或重启不会破坏 ap 的写入路径
+- 每轮都能看到真实的退出码与 `session_end`
+
+代价是每轮重新启动进程、重新加载配置；phase 1 接受这一点。
+
+## 调用协议
+
+### 命令
+
+```text
+ap --print0 --output-format stream-json [ -s <session_id> ] <透传参数>
+```
+
+- 提示词走 stdin，以 `--print0` 读取到 EOF；避免 Windows 命令行长度和编码问题
+- stdout 解析 `stream-json`：transcript 事件 + `message_update` / `tool_execution_update`
+- stderr 在 `--verbose` 时实时显示，否则缓存，只在本轮异常退出时展示
+- `--config-dir`、`--model`、`--agent`、`--max-steps`、`--max-tokens` 原样透传
+
+Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉 stdin 写端、stdout/stderr 读端的继承标志（`tui/platform_windows.odin` 的 `mark_non_inheritable`），否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF。
+
+### 可执行文件查找
+
+按以下顺序找 agent：
+
+1. `--agent-bin <path>`
+2. `AP_AGENT_BIN`，其次 `AP_BIN`
+3. `ap-tui` 同目录的 `ap.exe` / `ag.exe`（非 Windows 为 `ap` / `ag`）
+4. PATH 中的 `ap` / `ag`
+
+找不到时退出码 2。
+
+## Session 管理
+
+ap 一次只处理一个 session，`ap-tui` 也只有一个活动 session。
+
+- 启动不带 `-c` / `-s`：新 session；第一轮不带 `-s`，从 `session_start` 事件拿到 `session_id`
+- 之后每轮自动追加 `-s <id>`
+- `-c`：在启动时定位当前项目最近的根 session，之后使用显式 `-s`
+- `-s <id>`：恢复指定 session
+- `/new`：清空当前 id，下一条提示词新建 session；旧 transcript 保留在磁盘上
+
+### 历史重放
+
+启动时如果进入已有 session，`ap-tui` 直接读取：
+
+```text
+$AP_CONFIG/projects/<project_path_hash>/<session_id>.jsonl
+```
+
+按 v1 transcript 事件重放 `user_message`、`message_end` 的 text 块、工具调用与结果、错误事件。`text_ref` / `content_ref` / `args_ref` 从同目录 `blobs/` 解析；缺失时退化为 `*_preview`。
+
+TUI 复制了 ap 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位）。修改 `src/paths.odin` 时必须同步 `tui/project.odin`，否则会找不到 transcript。
+
+重放只读文件，不重新调用模型、不重新执行工具。
+
+## 渲染
+
+- 普通终端滚动区，**不使用 alternate screen**，输出保留在 scrollback 里
+- 每轮结束回到 `> ` 行输入；phase 1 使用终端 cooked 模式，只依赖系统自带的行编辑（退格、左右移动），没有方向键历史和自定义光标
+- turn 运行时 TUI 不读 stdin；这期间的按键由终端留在输入缓冲里，turn 结束后会被当成下一条提示词
+- phase 1 不拦截 Ctrl+C：它同时发给 ap-tui 与 ap，TUI 退出，ap 自行取消并写 `session_end`；下次用 `-c` 继续
+- ANSI 颜色在 stdout 不是 TTY、`NO_COLOR` 或 `--no-color` 时关闭
+- assistant 文本按 delta 实时输出；`message_end` 只在没有 delta 时补文本，避免重复
+- 工具调用显示名称和参数；`bash` 的增量输出按两格缩进暗色实时显示；工具结束时显示 `✓/✗`、耗时和退出码
+- 非流式工具结果（以及历史重放里的工具结果）最多展示 200 行 / 20000 字节，超出提示完整内容在 transcript；实时 `bash` 流不截断
+- reasoning delta 在 phase 1 不展示
+- 异常终止（`max_steps` / `max_tokens` / `cancelled` / `context_too_long`）会打印 `turn ended: ...`
+
+## 交互命令
+
+| 命令 | 行为 |
+| --- | --- |
+| `/new` | 丢弃当前 session id，下一条提示词开新 session |
+| `/session` | 显示当前 session id |
+| `/help` | 显示命令 |
+| `/quit` / `/exit` | 退出 |
+
+未知的 `/...` 不作为命令，按普通提示词发送，因此可以直接发绝对路径等内容。
+
+## 构建与运行
+
+```sh
+./build.sh
+./ap-tui
+
+# 或显式指定 agent
+./ap-tui --agent-bin /path/to/ap
+
+# 继续当前项目最近的 session
+./ap-tui -c
+
+# 恢复指定 session
+./ap-tui -s ses_20261022_120000_abcdef123456
+```
+
+Windows：
+
+```powershell
+.\build.ps1
+.\ap-tui.exe
+```
+
+## 测试
+
+```sh
+odin test tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+```
+
+覆盖：事件解析、参数格式化、工具输出截断、live/history 渲染、project hash、最近根 session 定位、transcript 重放与 blob 解析。
+
+## Phase 2 待做
+
+1. raw mode 行编辑：方向键历史、Ctrl-A/E、单词移动、粘贴处理
+2. 运行中显示输入框 / 排队下一条提示词（当前 turn 进行时不能输入）
+3. Ctrl+C 的 TUI 侧处理：取消当前 turn 后回到输入框，而不是退出 ap-tui
+4. 更好的工具展示：可折叠、按工具类型定制、diff 着色
+5. `/resume` 列表、`/fork`、session 删除/清理
+6. reasoning 展示开关、token/usage 状态行
+7. 宽度感知的换行与长行处理

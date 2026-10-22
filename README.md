@@ -12,6 +12,7 @@ v1 已实现：
 - 五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`
 - 独立进程子代理、agent 定义文件、工具白名单
 - 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
+- 独立的交互式 `ap-tui`：每轮启动一次 ap 子进程，滚动渲染 stream-json，管理单个活动 session
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
 
 ## 环境
@@ -30,6 +31,7 @@ Windows：
 .\build.ps1
 # 或
 odin build src -out:ap.exe -vet
+odin build tui -out:ap-tui.exe -vet
 ```
 
 Linux / macOS：
@@ -38,6 +40,7 @@ Linux / macOS：
 ./build.sh
 # 或
 odin build src -out:ap -vet
+odin build tui -out:ap-tui -vet
 ```
 
 ## 配置
@@ -98,6 +101,26 @@ ap --list-skills
 ```
 
 相对路径相对启动目录；`~/...` 会展开。没有 `--add-dir`。
+
+## 交互式 TUI
+
+`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑：
+
+```sh
+# 新 session
+./ap-tui
+
+# 继续当前项目最近的根 session（启动时会重放历史）
+./ap-tui -c
+
+# 恢复指定 session
+./ap-tui -s ses_20261022_120000_abcdef123456
+
+# 指定 agent 可执行文件（默认找同目录 ap.exe / ag.exe）
+./ap-tui --agent-bin /path/to/ap
+```
+
+交互命令：`/new`、`/session`、`/help`、`/quit`。TUI 使用普通滚动输出和行输入；每轮结束回到 `> `。第一阶段的输入框依赖终端自带行编辑，方向键历史、运行中取消等留给第二阶段。协议、历史重放和限制见 [docs/tui.md](docs/tui.md)。
 
 ### 技能
 
