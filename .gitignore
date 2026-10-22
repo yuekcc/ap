@@ -1,7 +1,6 @@
-ap.exe
-ap
-ap-tui.exe
-ap-tui
+/ap.exe
+/ap-tui.exe
+/bin/
 *.pdb
 *.log
 .ap/

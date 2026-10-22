@@ -91,6 +91,12 @@ resolve_self_exe :: proc() -> string {
 	return os.args[0]
 }
 
+// 目录 ap/ 与 Unix 二进制 ap 同名；查找 agent 时必须排除目录。
+is_regular_file :: proc(path: string) -> bool {
+	info, err := os.stat(path, context.temp_allocator)
+	return err == nil && info.type == .Regular
+}
+
 find_in_path :: proc(name: string) -> string {
 	when ODIN_OS == .Windows {
 		separator := ";"
@@ -110,7 +116,7 @@ find_in_path :: proc(name: string) -> string {
 		}
 		for ext in exts {
 			candidate := fmt.tprintf("%s/%s%s", strings.trim_right(dir, `\/`), name, ext)
-			if os.exists(candidate) {
+			if is_regular_file(candidate) {
 				return strings.clone(candidate, context.allocator)
 			}
 		}
@@ -122,7 +128,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error) {
 	if value, ok := configured.?; ok {
 		if os.is_absolute_path(value) || strings.contains_rune(value, '/') || strings.contains_rune(value, '\\') {
 			path, err := canonicalize_path(value, false)
-			if is_ok(err) && os.exists(path) {
+			if is_ok(err) && is_regular_file(path) {
 				return path, ok_error()
 			}
 			return "", errorf("agent binary not found: %s", value)
@@ -144,7 +150,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error) {
 	names := [2]string{"ap.exe", "ag.exe"} when ODIN_OS == .Windows else [2]string{"ap", "ag"}
 	for name in names {
 		joined, _ := os.join_path([]string{dir, name}, context.allocator)
-		if os.exists(joined) {
+		if is_regular_file(joined) {
 			return joined, ok_error()
 		}
 	}

@@ -9,10 +9,17 @@ case "$version" in
 esac
 
 exe=""
+out=""
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) exe=".exe" ;;
+  *)
+    # 源码目录 ap/ 与二进制 ap 同名，Unix 上不能都放在仓库根目录。
+    exe=""
+    out="bin/"
+    mkdir -p bin
+    ;;
 esac
 
-odin build cli -out:ap$exe -vet
-odin build tui -out:ap-tui$exe -vet
-echo "built ap$exe ap-tui$exe"
+odin build ap -out:${out}ap$exe -vet
+odin build ap-tui -out:${out}ap-tui$exe -vet
+echo "built ${out}ap$exe ${out}ap-tui$exe"

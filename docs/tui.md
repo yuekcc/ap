@@ -3,7 +3,7 @@
 `ap-tui` 是 ap 的交互层，**不是** ap 的一部分。它本身不实现 agent、provider、工具或 transcript 写入；每个用户 turn 都启动一个新的 `ap` 子进程，通过 `stream-json` 读取事件并在终端里滚动渲染。
 
 ```
-终端 ── ap-tui ──spawn──► ap.exe --print0 --output-format stream-json [-s <id>]
+终端 ── ap-tui ──spawn──► ap --print0 --output-format stream-json [-s <id>]
           │                         │
           │◄──── stdout: 事件 ───────┤
           │◄──── stderr: 日志 ───────┤
@@ -35,7 +35,7 @@ ap --print0 --output-format stream-json [ -s <session_id> ] <透传参数>
 - stderr 在 `--verbose` 时实时显示，否则缓存，只在本轮异常退出时展示
 - `--config-dir`、`--model`、`--agent`、`--max-steps`、`--max-tokens` 原样透传
 
-Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉 stdin 写端、stdout/stderr 读端的继承标志（`tui/platform_windows.odin` 的 `mark_non_inheritable`），否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF。
+Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉 stdin 写端、stdout/stderr 读端的继承标志（`ap-tui/platform_windows.odin` 的 `mark_non_inheritable`），否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF。
 
 ### 可执行文件查找
 
@@ -68,7 +68,7 @@ $AP_CONFIG/projects/<project_path_hash>/<session_id>.jsonl
 
 按 v1 transcript 事件重放 `user_message`、`message_end` 的 text 块、工具调用与结果、错误事件。`text_ref` / `content_ref` / `args_ref` 从同目录 `blobs/` 解析；缺失时退化为 `*_preview`。
 
-TUI 复制了 ap 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位）。修改 `cli/paths.odin` 时必须同步 `tui/project.odin`，否则会找不到 transcript。
+TUI 复制了 ap 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位）。修改 `ap/paths.odin` 时必须同步 `ap-tui/project.odin`，否则会找不到 transcript。
 
 重放只读文件，不重新调用模型、不重新执行工具。
 
@@ -100,16 +100,16 @@ TUI 复制了 ap 的 project 识别规则（绝对路径 → 解析链接 → �
 
 ```sh
 ./build.sh
-./ap-tui
+./bin/ap-tui
 
 # 或显式指定 agent
-./ap-tui --agent-bin /path/to/ap
+./bin/ap-tui --agent-bin /path/to/ap
 
 # 继续当前项目最近的 session
-./ap-tui -c
+./bin/ap-tui -c
 
 # 恢复指定 session
-./ap-tui -s ses_20261022_120000_abcdef123456
+./bin/ap-tui -s ses_20261022_120000_abcdef123456
 ```
 
 Windows：
@@ -122,7 +122,7 @@ Windows：
 ## 测试
 
 ```sh
-odin test tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 覆盖：事件解析、参数格式化、工具输出截断、live/history 渲染、project hash、最近根 session 定位、transcript 重放与 blob 解析。

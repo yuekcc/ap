@@ -7,11 +7,11 @@ if ($version -notlike "*dev-2026-09-nightly*") {
     Write-Warning "本项目在 dev-2026-09-nightly 上验证；当前编译器版本不同，nightly stdlib 可能不兼容。"
 }
 
-& odin build cli -out:ap.exe -vet
+& odin build ap -out:ap.exe -vet
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-& odin build tui -out:ap-tui.exe -vet
+& odin build ap-tui -out:ap-tui.exe -vet
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

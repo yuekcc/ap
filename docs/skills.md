@@ -114,7 +114,7 @@ llmcli 的 `Skill.content` 会读入内存用于校验；ap 同样校验正文�
 
 ## 测试
 
-单元测试见 `cli/skills_test.odin`，覆盖：
+单元测试见 `ap/skills_test.odin`，覆盖：
 
 - front matter 解析、引号与转义、BOM/CRLF、正文 trim
 - 缺少 name / description / 正文、缺少结束 `---`、没有 front matter 时判为无效

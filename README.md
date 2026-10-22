@@ -30,18 +30,21 @@ Windows：
 ```powershell
 .\build.ps1
 # 或
-odin build cli -out:ap.exe -vet
-odin build tui -out:ap-tui.exe -vet
+odin build ap -out:ap.exe -vet
+odin build ap-tui -out:ap-tui.exe -vet
 ```
 
 Linux / macOS：
 
 ```sh
 ./build.sh
-# 或
-odin build cli -out:ap -vet
-odin build tui -out:ap-tui -vet
+# 或（源码目录 ap/ 与二进制 ap 同名，Unix 上产物放 bin/）
+mkdir -p bin
+odin build ap -out:bin/ap -vet
+odin build ap-tui -out:bin/ap-tui -vet
 ```
+
+Unix 上因为源码目录 `ap/` 与二进制 `ap` 同名，产物统一放在 `bin/`。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`。
 
 ## 配置
 
@@ -108,17 +111,19 @@ ap --list-skills
 
 ```sh
 # 新 session
-./ap-tui
+./bin/ap-tui
 
 # 继续当前项目最近的根 session（启动时会重放历史）
-./ap-tui -c
+./bin/ap-tui -c
 
 # 恢复指定 session
-./ap-tui -s ses_20261022_120000_abcdef123456
+./bin/ap-tui -s ses_20261022_120000_abcdef123456
 
-# 指定 agent 可执行文件（默认找同目录 ap.exe / ag.exe）
-./ap-tui --agent-bin /path/to/ap
+# 指定 agent 可执行文件（默认找同目录 ap / ap.exe / ag）
+./bin/ap-tui --agent-bin /path/to/ap
 ```
+
+Windows 下产物在仓库根目录，直接用 `.\ap-tui.exe` 即可。
 
 交互命令：`/new`、`/session`、`/help`、`/quit`。TUI 使用普通滚动输出和行输入；每轮结束回到 `> `。第一阶段的输入框依赖终端自带行编辑，方向键历史、运行中取消等留给第二阶段。协议、历史重放和限制见 [docs/tui.md](docs/tui.md)。
 
@@ -151,7 +156,8 @@ transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整
 ```powershell
 .\test.ps1
 # 或
-odin test cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入。
