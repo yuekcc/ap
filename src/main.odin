@@ -328,6 +328,10 @@ main :: proc() {
 	}
 	transcript_close(&store)
 	loop_destroy(&loop)
+	// turn 结束后进程即退出；给出可直接复制的续聊命令。
+	if len(args) > 0 {
+		fmt.eprintf("%s -s %s\n", args[0], session_id)
+	}
 	os.exit(exit_code)
 }
 
