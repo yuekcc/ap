@@ -101,7 +101,7 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 示例：
 
 ```
-read_file(file_path="src/main.odin", start_line=1, end_line=500)
+read_file(file_path="cli/main.odin", start_line=1, end_line=500)
 ```
 
 `read_file` 与 `bash` 的 2000 行分页是唯一的范围限制；`bash` 超出部分写入 `.txt`，模型用 `read_file` 继续读。
@@ -128,7 +128,7 @@ read_file(file_path="src/main.odin", start_line=1, end_line=500)
 示例：
 
 ```
-write_file(file_path="src/main.odin", content="...")
+write_file(file_path="cli/main.odin", content="...")
 ```
 
 ## edit_file
@@ -157,7 +157,7 @@ write_file(file_path="src/main.odin", content="...")
 示例：
 
 ```
-edit_file(file_path="src/main.odin", old_string="foo", new_string="bar", replace_all=false)
+edit_file(file_path="cli/main.odin", old_string="foo", new_string="bar", replace_all=false)
 ```
 
 ## bash

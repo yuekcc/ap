@@ -68,7 +68,7 @@ $AP_CONFIG/projects/<project_path_hash>/<session_id>.jsonl
 
 按 v1 transcript 事件重放 `user_message`、`message_end` 的 text 块、工具调用与结果、错误事件。`text_ref` / `content_ref` / `args_ref` 从同目录 `blobs/` 解析；缺失时退化为 `*_preview`。
 
-TUI 复制了 ap 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位）。修改 `src/paths.odin` 时必须同步 `tui/project.odin`，否则会找不到 transcript。
+TUI 复制了 ap 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位）。修改 `cli/paths.odin` 时必须同步 `tui/project.odin`，否则会找不到 transcript。
 
 重放只读文件，不重新调用模型、不重新执行工具。
 

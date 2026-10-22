@@ -13,6 +13,6 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) exe=".exe" ;;
 esac
 
-odin build src -out:ap$exe -vet
+odin build cli -out:ap$exe -vet
 odin build tui -out:ap-tui$exe -vet
 echo "built ap$exe ap-tui$exe"

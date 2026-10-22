@@ -30,7 +30,7 @@ Windows：
 ```powershell
 .\build.ps1
 # 或
-odin build src -out:ap.exe -vet
+odin build cli -out:ap.exe -vet
 odin build tui -out:ap-tui.exe -vet
 ```
 
@@ -39,7 +39,7 @@ Linux / macOS：
 ```sh
 ./build.sh
 # 或
-odin build src -out:ap -vet
+odin build cli -out:ap -vet
 odin build tui -out:ap-tui -vet
 ```
 
@@ -151,7 +151,7 @@ transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整
 ```powershell
 .\test.ps1
 # 或
-odin test src -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入。

@@ -54,10 +54,10 @@ test_parse_stream_events :: proc(t: ^testing.T) {
 @(test)
 test_format_tool_args :: proc(t: ^testing.T) {
 	value: json.Value
-	args_json := `{"file_path":"src/main.odin","limit":20,"ok":true}`
+	args_json := `{"file_path":"cli/main.odin","limit":20,"ok":true}`
 	err := json.unmarshal(transmute([]byte)args_json, &value)
 	testing.expect_value(t, err, nil)
-	testing.expect_value(t, format_args(value, nil), "file_path=src/main.odin, limit=20, ok=true")
+	testing.expect_value(t, format_args(value, nil), "file_path=cli/main.odin, limit=20, ok=true")
 }
 
 @(test)
@@ -133,14 +133,14 @@ test_render_live_stream :: proc(t: ^testing.T) {
 			`{"type":"message_update","message_id":"m1","delta":{"text":"hello"}}`,
 			`{"type":"message_update","message_id":"m1","delta":{"text":" world\n"}}`,
 			`{"type":"message_end","message_id":"m1","content":[{"type":"text","text":"hello world\n"}]}`,
-			`{"type":"tool_execution_start","tool_call_id":"c1","name":"read_file","args":{"file_path":"src/main.odin"}}`,
+			`{"type":"tool_execution_start","tool_call_id":"c1","name":"read_file","args":{"file_path":"cli/main.odin"}}`,
 			`{"type":"tool_execution_end","tool_call_id":"c1","ok":true,"content":"file body\n","duration_ms":12}`,
 		},
 		.Live,
 	)
 	testing.expect(t, strings.contains(out, "● hello world"))
 	testing.expect(t, strings.contains(out, "⚙ read_file"))
-	testing.expect(t, strings.contains(out, "file_path=src/main.odin"))
+	testing.expect(t, strings.contains(out, "file_path=cli/main.odin"))
 	testing.expect(t, strings.contains(out, "file body"))
 	testing.expect(t, strings.contains(out, "✓ 12ms"))
 	// 文本增量已经展示过，message_end 不应重复整段文本。
