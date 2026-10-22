@@ -317,7 +317,9 @@ resume_transcript_store :: proc(project: Project, session_id: string, settings: 
 }
 
 transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string, Error) {
-	data, jerr := json.marshal(event)
+	// 用 json_marshal_utf8 而不是 json.marshal：后者遇到非法 UTF-8 会输出 \xNN，
+	// 下面的 parse_string 无法识别这种转义，会把字符串字段解析成空。
+	data, jerr := json_marshal_utf8(event)
 	if jerr != nil {
 		return "", make_error(.Internal, "cannot serialize transcript event: %v", jerr)
 	}

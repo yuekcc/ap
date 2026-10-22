@@ -274,3 +274,27 @@ test_fork_transcript_copies_events :: proc(t: ^testing.T) {
 	testing.expect_value(t, parsed.session_id, "forked")
 	testing.expect_value(t, parsed.resumed_from.?, "source")
 }
+
+@(test)
+test_transcript_invalid_utf8_content_is_not_dropped :: proc(t: ^testing.T) {
+	project, settings, dir := test_project_and_settings(t, "transcript-invalid-utf8")
+	defer test_cleanup(dir)
+
+	store, serr := new_transcript_store(project, "sess-bad", &settings)
+	testing.expect_value(t, serr.code, Exit_Code.OK)
+	// 模拟 Windows 本地代码页（GBK）传进来的提示词：字节不是合法 UTF-8。
+	gbk := transmute(string)([]byte{0xd6, 0xd0, 0xce, 0xc4})
+	ev := User_Message_Event {
+		header = make_header(&store, "user_message"),
+		content = gbk,
+	}
+	testing.expect_value(t, transcript_append(&store, ev).code, Exit_Code.OK)
+	transcript_close(&store)
+
+	events, rerr := transcript_read_all(project, "sess-bad")
+	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, len(events), 1)
+	parsed: User_Message_Event
+	testing.expect_value(t, json.unmarshal_string(events[0].line, &parsed), nil)
+	testing.expect(t, len(parsed.content) > 0)
+}
