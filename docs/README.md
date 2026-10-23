@@ -99,6 +99,8 @@ ReAct Loop（react-loop-and-session.md）
   └── Transcript Store ──────────────► <session_id>.jsonl + blobs/
 ```
 
+ap 与 ap-tui 共用 `internal/` 的路径、project、session、blob 与平台原语，见 [architecture.md](architecture.md)。
+
 ## 文档地图
 
 | 文件 | 负责内容 | 状态 |

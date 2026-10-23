@@ -1,5 +1,6 @@
 package ap
 
+import "../internal"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -75,18 +76,7 @@ log_debug :: proc(format: string, args: ..any) {
 }
 
 write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {
-	if len(data) == 0 {
-		return true
-	}
-	total := 0
-	for total < len(data) {
-		n, err := os.write(handle, data[total:])
-		if err != nil || n <= 0 {
-			return false
-		}
-		total += n
-	}
-	return true
+	return internal.write_all(handle, data)
 }
 
 write_stdout :: proc(data: []byte) -> bool {

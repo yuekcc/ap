@@ -1,6 +1,7 @@
 #+build !windows
 package ap
 
+import "../internal"
 import "core:os"
 import "core:sync"
 import "core:sys/posix"
@@ -12,7 +13,7 @@ local_now :: proc() -> (year, month, day, hour, minute, second: int) {
 	if posix.localtime_r(&stamp, &tm) == nil {
 		return 1970, 1, 1, 0, 0, 0
 	}
-	return tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec
+	return int(tm.tm_year + 1900), int(tm.tm_mon + 1), int(tm.tm_mday), int(tm.tm_hour), int(tm.tm_min), int(tm.tm_sec)
 }
 
 attach_process_job :: proc(process: os.Process) -> Job_Handle {
@@ -97,8 +98,9 @@ signal_exit_code :: proc() -> int {
 }
 
 setup_console_utf8 :: proc() {
+	internal.setup_console()
 }
 
 normalize_cli_args :: proc(args: []string) -> []string {
-	return args
+	return internal.normalize_args(args)
 }

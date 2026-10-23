@@ -1,5 +1,6 @@
 package tui
 
+import "../internal"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -68,27 +69,11 @@ read_stream :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool) {
 }
 
 write_all :: proc(file: ^os.File, data: []byte) -> bool {
-	remaining := data
-	for len(remaining) > 0 {
-		n, err := os.write(file, remaining)
-		if err != nil || n <= 0 {
-			return false
-		}
-		remaining = remaining[n:]
-	}
-	return true
+	return internal.write_all(file, data)
 }
 
 resolve_self_exe :: proc() -> string {
-	if path, err := os.get_executable_path(context.allocator); err == nil && len(path) > 0 {
-		return path
-	}
-	if len(os.args) > 0 {
-		if resolved, err := os.get_absolute_path(os.args[0], context.allocator); err == nil {
-			return resolved
-		}
-	}
-	return os.args[0]
+	return internal.resolve_self_exe()
 }
 
 // 目录 ap/ 与 Unix 二进制 ap 同名；查找 agent 时必须排除目录。

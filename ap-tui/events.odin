@@ -1,16 +1,11 @@
 package tui
 
+import "../internal"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
-Usage :: struct {
-	input_tokens:     Maybe(int) `json:"input_tokens"`,
-	output_tokens:    Maybe(int) `json:"output_tokens"`,
-	cached_tokens:    Maybe(int) `json:"cached_tokens"`,
-	reasoning_tokens: Maybe(int) `json:"reasoning_tokens"`,
-	total_tokens:     Maybe(int) `json:"total_tokens"`,
-}
+Usage :: internal.Usage
 
 Tool_Call_Delta :: struct {
 	index:      int    `json:"index"`,
@@ -28,10 +23,7 @@ Delta :: struct {
 // stream-json 的 transcript/stream 事件在本程序里共用一个宽松结构。
 // content 在不同事件里可能是 string、array 或 null，所以用 json.Value 承载。
 Event :: struct {
-	v:    int    `json:"v"`,
-	seq:  int    `json:"seq"`,
-	ts:   i64    `json:"ts"`,
-	type: string `json:"type"`,
+	using _: internal.Event_Header,
 
 	session_id:          string         `json:"session_id"`,
 	parent_session_id:   Maybe(string)  `json:"parent_session_id"`,

@@ -254,17 +254,17 @@ test_replay_session_resolves_blobs :: proc(t: ^testing.T) {
 		blobs_dir = fmt.aprintf("%s/blobs", dir),
 	}
 	os.make_directory_all(project.blobs_dir)
-	test_write_file(fmt.tprintf("%s/blob1", project.blobs_dir), "blob text\n")
+	test_write_file(fmt.tprintf("%s/%s", project.blobs_dir, "559600820d9e6926bb88d9a39b1be2c31c01682580b6a7eaf50c53611d74493d"), "blob text\n")
 
 	transcript := strings.concatenate(
 		{
 			`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_1","content":"sys","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null}`,
 			"\n",
-			`{"v":1,"seq":1,"ts":2,"type":"message_end","message_id":"m1","content":[{"type":"text","text_ref":"blob1","text_bytes":10}]}`,
+			`{"v":1,"seq":1,"ts":2,"type":"message_end","message_id":"m1","content":[{"type":"text","text_ref":"559600820d9e6926bb88d9a39b1be2c31c01682580b6a7eaf50c53611d74493d","text_bytes":10}]}`,
 			"\n",
 			`{"v":1,"seq":2,"ts":3,"type":"tool_execution_start","tool_call_id":"c1","name":"read_file","args":{"file_path":"a"}}`,
 			"\n",
-			`{"v":1,"seq":3,"ts":4,"type":"tool_execution_end","tool_call_id":"c1","ok":true,"content":null,"content_ref":"blob1","content_preview":"preview"}`,
+			`{"v":1,"seq":3,"ts":4,"type":"tool_execution_end","tool_call_id":"c1","ok":true,"content":null,"content_ref":"559600820d9e6926bb88d9a39b1be2c31c01682580b6a7eaf50c53611d74493d","content_preview":"preview"}`,
 			"\n",
 		},
 	)

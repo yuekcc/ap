@@ -1,5 +1,6 @@
 package ap
 
+import "../internal"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -9,13 +10,7 @@ import "core:unicode/utf8"
 
 PREVIEW_BYTES :: 8192
 
-Usage :: struct {
-	input_tokens:     Maybe(int) `json:"input_tokens"`,
-	output_tokens:    Maybe(int) `json:"output_tokens"`,
-	cached_tokens:    Maybe(int) `json:"cached_tokens"`,
-	reasoning_tokens: Maybe(int) `json:"reasoning_tokens"`,
-	total_tokens:     Maybe(int) `json:"total_tokens"`,
-}
+Usage :: internal.Usage
 
 usage_add :: proc(a, b: Usage) -> Usage {
 	out := Usage{}
@@ -42,12 +37,7 @@ usage_add :: proc(a, b: Usage) -> Usage {
 	return out
 }
 
-Event_Header :: struct {
-	v:    int    `json:"v"`,
-	seq:  int    `json:"seq"`,
-	ts:   i64    `json:"ts"`,
-	type: string `json:"type"`,
-}
+Event_Header :: internal.Event_Header
 
 Session_Start_Event :: struct {
 	using header: Event_Header,
@@ -453,24 +443,8 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 }
 
 blob_read :: proc(project: Project, sha: string) -> ([]byte, Error) {
-	if len(sha) != 64 {
-		return nil, make_error(.Usage, "invalid blob reference %q", sha)
-	}
-	for ch in sha {
-		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
-			return nil, make_error(.Usage, "invalid blob reference %q", sha)
-		}
-	}
-	path := blob_file(project, sha)
-	data, derr := os.read_entire_file_from_path(path, context.allocator)
-	if derr != nil {
-		return nil, make_error(.Usage, "blob %s is missing (%s); cannot restore session", sha, path)
-	}
-	actual := sha256_hex(data)
-	if !strings.equal_fold(actual, sha) {
-		return nil, make_error(.Usage, "blob %s is corrupt: sha256 mismatch (%s)", sha, actual)
-	}
-	return data, ok_error()
+	data, err := internal.blob_read(project, sha)
+	return data, internal_error_to_ap(err)
 }
 
 blob_write :: proc(project: Project, data: []byte) -> (string, Error) {
@@ -521,15 +495,7 @@ blob_write_at :: proc(project: Project, path: string, data: []byte) -> Error {
 }
 
 write_all_file :: proc(file: ^os.File, data: []byte) -> bool {
-	total := 0
-	for total < len(data) {
-		n, err := os.write(file, data[total:])
-		if err != nil || n <= 0 {
-			return false
-		}
-		total += n
-	}
-	return true
+	return internal.write_all(file, data)
 }
 
 utf8_prefix :: proc(data: []byte, max_bytes: int) -> string {
@@ -567,28 +533,6 @@ maybe_blob :: proc(store: ^Transcript_Store, data: []byte) -> (Blob_Fields, Erro
 		bytes = len(data),
 		preview = utf8_prefix(data, PREVIEW_BYTES),
 	}, ok_error()
-}
-
-session_ids :: proc(project: Project) -> ([]string, Error) {
-	entries, derr := os.read_directory_by_path(project.dir, -1, context.allocator)
-	if derr != nil {
-		if !os.is_dir(project.dir) {
-			return nil, ok_error()
-		}
-		return nil, make_error(.Usage, "cannot list project directory %s: %v", project.dir, derr)
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-	ids := make([dynamic]string, 0, 8)
-	for entry in entries {
-		name := entry.name
-		if entry.type != .Regular {
-			continue
-		}
-		if strings.has_suffix(name, ".jsonl") {
-			append(&ids, strings.clone(name[:len(name) - 6]))
-		}
-	}
-	return ids[:], ok_error()
 }
 
 fork_transcript :: proc(
@@ -672,41 +616,7 @@ session_system_prompt :: proc(project: Project, events: []Event) -> (Session_Sta
 	return start, content, ok_error()
 }
 
-session_is_root :: proc(project: Project, session_id: string) -> (bool, i64, Error) {
-	path := session_file(project, session_id)
-	events, rerr := transcript_read_all(project, session_id)
-	if !is_ok(rerr) {
-		return false, 0, rerr
-	}
-	start, found := last_session_start(events)
-	if !found {
-		return false, 0, make_error(.Usage, "session %s has no session_start", session_id)
-	}
-	_, is_parent := start.parent_session_id.?
-	info, _ := os.stat(path, context.allocator)
-	mtime := time.time_to_unix_nano(info.modification_time)
-	return !is_parent, mtime, ok_error()
-}
-
 find_latest_root_session :: proc(project: Project) -> (string, Error) {
-	ids, ierr := session_ids(project)
-	if !is_ok(ierr) {
-		return "", ierr
-	}
-	best := ""
-	best_time: i64 = -1
-	for id in ids {
-		is_root, mtime, rerr := session_is_root(project, id)
-		if !is_ok(rerr) {
-			continue
-		}
-		if is_root && mtime > best_time {
-			best = id
-			best_time = mtime
-		}
-	}
-	if len(best) == 0 {
-		return "", make_error(.Usage, "no root session found in project %s", project.hash)
-	}
-	return best, ok_error()
+	id, err := internal.find_latest_root_session(project)
+	return id, internal_error_to_ap(err)
 }

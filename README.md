@@ -107,7 +107,7 @@ ap --list-skills
 
 ## 交互式 TUI
 
-`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑：
+`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑；路径、project hash、session 发现和 blob 读取与 ap 共用 `internal/`。
 
 ```sh
 # 新 session

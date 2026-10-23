@@ -1,5 +1,6 @@
 package ap
 
+import "../internal"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -85,15 +86,7 @@ find_bash :: proc() -> (string, Error) {
 }
 
 resolve_self_exe :: proc() -> string {
-	if path, err := os.get_executable_path(context.allocator); err == nil && len(path) > 0 {
-		return path
-	}
-	if len(os.args) > 0 {
-		if resolved, err := os.get_absolute_path(os.args[0], context.allocator); err == nil {
-			return resolved
-		}
-	}
-	return os.args[0]
+	return internal.resolve_self_exe()
 }
 
 bash_update :: proc(user: rawptr, chunk: string) {
