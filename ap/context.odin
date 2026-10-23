@@ -34,29 +34,13 @@ System_Prompt_Options :: struct {
 	skill_section: string,
 }
 
-FIXED_INSTRUCTIONS :: `你是 ap，一个命令行 coding agent。你通过工具读写文件、执行命令、启动子代理，完成用户给出的任务。
-
-行为约束：
-- 全自动执行，没有审批、没有沙箱；工具调用会直接生效。不要请求确认，也不要假设有交互界面。
-- 工具串行执行；一次响应里的多个调用会按顺序执行，不共享 cwd、环境变量或 shell 变量。
-- 不要臆造文件内容或命令输出；需要事实时用 read_file / bash 读取或验证。
-- 修改前先读相关文件；改完后尽量用构建、测试或命令验证，不要只看代码。
-- read_file 有分页上限（2000 行）；大文件按页读取，不要一次请求全文。
-- bash 也有 2000 行上限；超出时结果只给前 2000 行，并附完整输出的 .txt 路径，用 read_file 按提示续读。
-- 超长输出仍受硬上限保护，命令可能被终止；必要时分段处理。
-- 相对路径相对启动目录；绝对路径可用；不支持 --add-dir。
-- 工具失败是给你修正的输入，不会终止循环；只有基础设施故障才会终止。
-- 最终回答保持简洁，说明做了什么、验证结果和仍未解决的问题。
-`
-
-JSON_EXAMPLE :: `
-## 输出要求
-正常使用 assistant 文本与 tool_calls 响应。完成前不要输出“我将要做”的空话；能直接做的就用工具做。`
+// 固定指令与输出要求在编译期从 ap/prompts/system.md 内嵌进二进制。
+// 编辑提示词直接改那个 markdown 文件即可；运行时不依赖 prompts/ 目录。
+SYSTEM_PROMPT :: #load("prompts/system.md", string)
 
 build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	b := strings.builder_make()
-	strings.write_string(&b, FIXED_INSTRUCTIONS)
-	strings.write_string(&b, JSON_EXAMPLE)
+	strings.write_string(&b, SYSTEM_PROMPT)
 	strings.write_string(&b, "\n## 工具\n")
 	strings.write_string(&b, opts.tool_section)
 	strings.write_string(&b, "\n\n## 环境\n")
