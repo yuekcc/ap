@@ -139,7 +139,7 @@ test_render_live_stream :: proc(t: ^testing.T) {
 		.Live,
 	)
 	testing.expect(t, strings.contains(out, "● hello world"))
-	testing.expect(t, strings.contains(out, "⚙\tread_file"))
+	testing.expect(t, strings.contains(out, "◆ read_file"))
 	testing.expect(t, strings.contains(out, "file_path=ap/main.odin"))
 	testing.expect(t, strings.contains(out, "file body"))
 	testing.expect(t, strings.contains(out, "✓ 12ms"))
@@ -162,7 +162,7 @@ test_render_history :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, strings.contains(out, "› do it"))
 	testing.expect(t, strings.contains(out, "● working"))
-	testing.expect(t, strings.contains(out, "⚙\tbash"))
+	testing.expect(t, strings.contains(out, "◆ bash"))
 	testing.expect(t, strings.contains(out, "command=ls"))
 	testing.expect(t, strings.contains(out, "✗ 3ms boom"))
 	testing.expect(t, strings.contains(out, "turn ended: max_steps"))
