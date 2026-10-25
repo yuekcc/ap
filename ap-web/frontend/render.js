@@ -341,6 +341,10 @@ function errorNotice(event) {
 function applyTurnEnd(state, event) {
 	const reason = typeof event.stop_reason === "string" ? event.stop_reason : "";
 	if (NORMAL_STOP_REASONS.has(reason)) return state;
+	// 用户取消是预期动作，用静默提示，不当成 warning。
+	if (reason === "cancelled") {
+		return { ...addNotice(state, "cancelled", "muted"), turnEndedNotice: true };
+	}
 	return {
 		...addNotice(state, `turn ended: ${reason}`, "warning"),
 		turnEndedNotice: true,
@@ -410,6 +414,14 @@ export function ingestHistory(state, events) {
 export function applyTurnDone(state, payload = {}) {
 	let next = { ...state, running: false, turnEndedNotice: false };
 	const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
+	const reason = typeof payload.stop_reason === "string" ? payload.stop_reason : "";
+
+	// 用户取消：即使底层进程被强制终止（exit != 0），也不是一次失败，
+	// 不展示 stderr；turn_end 已经落过 notice 时不重复。
+	if (reason === "cancelled") {
+		if (!state.turnEndedNotice) next = addNotice(next, "cancelled", "muted");
+		return next;
+	}
 
 	if (exitCode !== 0) {
 		const stderr =
@@ -421,7 +433,6 @@ export function applyTurnDone(state, payload = {}) {
 		return next;
 	}
 
-	const reason = typeof payload.stop_reason === "string" ? payload.stop_reason : "";
 	if (!NORMAL_STOP_REASONS.has(reason) && !state.turnEndedNotice) {
 		next = addNotice(next, `turn ended: ${reason}`, "warning");
 	}

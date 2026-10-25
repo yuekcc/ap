@@ -224,6 +224,9 @@ test_resume_repairs_partial_last_line :: proc(t: ^testing.T) {
 	testing.expect_value(t, rerr2.code, Exit_Code.OK)
 	testing.expect_value(t, len(events), 2)
 	testing.expect_value(t, events[1].type, "user_message")
+	// 恢复后追加的事件必须接着源文件的最大 seq，而不是从 0 重来：
+	// seq 是读取方（ap-tui / ap-web）排序与去重的依据。
+	testing.expect_value(t, events[1].seq, 1)
 }
 
 @(test)

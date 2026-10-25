@@ -226,7 +226,12 @@ open_transcript :: proc(store: ^Transcript_Store, append: bool) -> Error {
 		return make_error(.Usage, "cannot open transcript %s: %v", store.path, ferr)
 	}
 	store.file = file
-	store.next_seq = 0
+	// 只有新建/复制的 transcript 才从 0 开始；恢复（append）时调用方已经从
+	// 源文件算出了最大 seq，这里不能覆盖，否则同一 session 的 seq 会回到 0，
+	// 依赖 seq 去重的读取方（ap-web）会把后续 turn 当成重复事件丢掉。
+	if !append {
+		store.next_seq = 0
+	}
 	return ok_error()
 }
 

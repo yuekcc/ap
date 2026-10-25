@@ -316,6 +316,32 @@ test("turn_done：异常退出带 stderr，正常结束清空 running", () => {
 	assert.match(state.items[0].text, /boom/);
 });
 
+test("turn_done：用户取消不算失败，也不把 stderr 当成错误", () => {
+	let state = { ...createState(), running: true };
+	state = applyTurnDone(state, {
+		exit_code: 1,
+		stop_reason: "cancelled",
+		usage: {},
+		stderr_preview: "[step 1] calling model\n[tool] bash\n",
+	});
+	assert.equal(state.running, false);
+	assert.equal(state.items.length, 1);
+	assert.equal(state.items[0].tone, "muted");
+	assert.equal(state.items[0].text, "cancelled");
+});
+
+test("turn_end：cancelled 落成静默提示，不显示 turn ended warning", () => {
+	let state = createState();
+	state = applyEvent(state, ev("turn_end", { seq: 1, stop_reason: "cancelled" }));
+	assert.deepEqual(
+		state.items.map((item) => [item.tone, item.text]),
+		[["muted", "cancelled"]],
+	);
+	// 之后到达的 turn_done 不应再追加第二条 notice。
+	state = applyTurnDone(state, { exit_code: 1, stop_reason: "cancelled" });
+	assert.equal(state.items.length, 1);
+});
+
 test("history：turn_start 不把 UI 状态改成运行中（running 以 /api/session/current 为准）", () => {
 	let state = createState();
 	state = ingestHistory(state, [

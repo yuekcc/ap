@@ -13,6 +13,7 @@ v1 已实现：
 - 独立进程子代理、agent 定义文件、工具白名单
 - 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
 - 独立的交互式 `ap-tui`：每轮启动一次 ap 子进程，滚动渲染 stream-json，管理单个活动 session
+- 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，支持 history 恢复、取消与 Windows 目录选择
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
 
 ## 环境
@@ -22,6 +23,7 @@ v1 已实现：
 - Windows 通过 `vendor:curl` 静态链接随 Odin 分发的 libcurl，产物是单个 exe。
 - Linux / macOS 链接系统 libcurl（`system:curl`）；构建和运行需要系统已安装 libcurl 开发包。
 - 构建产物需要能在 PATH 中找到 `bash`。
+- 修改 `ap-web` 前端时才需要 Node（`esbuild` + `alpinejs`）；`ap-web/dist/` 已提交，平时构建不需要 Node。
 
 ## 构建
 
@@ -33,6 +35,7 @@ Windows：
 mkdir bin
 odin build ap -out:bin/ap.exe -vet
 odin build ap-tui -out:bin/ap-tui.exe -vet
+odin build ap-web -out:bin/ap-web.exe -vet
 ```
 
 Linux / macOS：
@@ -43,9 +46,10 @@ Linux / macOS：
 mkdir -p bin
 odin build ap -out:bin/ap -vet
 odin build ap-tui -out:bin/ap-tui -vet
+odin build ap-web -out:bin/ap-web -vet
 ```
 
-构建产物统一放在 `bin/`（Unix 上源码目录 `ap/` 与二进制 `ap` 同名，不能都放在仓库根目录）。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。
+构建产物统一放在 `bin/`（Unix 上源码目录 `ap/` 与二进制 `ap` 同名，不能都放在仓库根目录）。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。`build.sh` / `build.ps1` 会在检测到 `npx` 时先刷新 `ap-web/dist`，否则使用仓库里已提交的前端产物。
 
 ## 配置
 
@@ -124,9 +128,22 @@ ap --list-skills
 ./bin/ap-tui --agent-bin /path/to/ap
 ```
 
-Windows 下产物在仓库根目录，直接用 `.\ap-tui.exe` 即可。
+Windows 下产物在 `bin\`，直接使用 `.\bin\ap-tui.exe` 即可。
 
 交互命令：`/new`、`/session`、`/help`、`/quit`。TUI 使用普通滚动输出和行输入；每轮结束回到 `> `。第一阶段的输入框依赖终端自带行编辑，方向键历史、运行中取消等留给第二阶段。协议、历史重放和限制见 [docs/tui.md](docs/tui.md)。
+
+## 浏览器 UI
+
+`ap-web` 是独立可执行文件，把同一套 `stream-json` 协议渲染到浏览器；agent 逻辑、transcript 仍由每轮启动的 `ap` 子进程负责，`ap-web` 自己不实现 agent。
+
+```sh
+./bin/ap-web                          # http://127.0.0.1:8417
+./bin/ap-web --web-root ap-web/dist   # 开发模式：静态资源走磁盘，前端改动刷新即生效
+./bin/ap-web -c                       # 启动即定位当前项目最近的 session
+./bin/ap-web -s ses_...
+```
+
+默认只监听 `127.0.0.1`；显式监听其他地址会打印安全警告。页面支持单轮取消、刷新后从 transcript 恢复画面、切换/新建 session；Windows 下可弹出系统目录选择框切换工作目录。需要改前端时先 `npm --prefix ap-web install && npm --prefix ap-web run build`。API、SSE、取消语义、目录选择与安全默认见 [docs/web.md](docs/web.md)。
 
 ### 技能
 
@@ -159,9 +176,11 @@ transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整
 # 或
 odin test ap -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+npm --prefix ap-web test
 ```
 
-当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入。
+当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入；`ap-web` 覆盖 HTTP 解析/路由、SSE hub 与帧编码、agent 事件泵、turn 单飞与取消、内置/磁盘静态资源、目录选择与前端事件归约。
 
 真实 LLM 端到端验证（使用本地 OpenAI 兼容端点，注意用量与超时）：
 
@@ -171,7 +190,7 @@ $cfg = Join-Path $env:TEMP "ap-e2e-config"
 New-Item -ItemType Directory -Force $cfg | Out-Null
 '{"model":"hy3","base_url":"http://127.0.0.1:8788/v1","max_steps":4,"max_tokens":512}' |
   Set-Content -Encoding utf8 (Join-Path $cfg "settings.json")
-.\ap.exe --config-dir $cfg --print "Create hello.txt with content hello, then reply done" --output-format json
+.\bin\ap.exe --config-dir $cfg --print "Create hello.txt with content hello, then reply done" --output-format json
 ```
 
 ## 平台说明
@@ -181,6 +200,7 @@ New-Item -ItemType Directory -Force $cfg | Out-Null
 - `bash` 每次调用是独立进程，不保留 cwd、环境变量或 shell 变量；stdin 为 NUL。
 - 超时/取消会终止整棵进程树：Windows 使用 Job Object（失败时退化 `taskkill /T /F`）；Unix 因 `core:os` 不暴露 `setpgid`，用递归后代扫描发送 `SIGTERM`，2s 后发送 `SIGKILL`。
 - 子代理通过当前 ap 可执行文件重新拉起，stdout 是 `stream-json` 事件，stderr 是人类可读日志。父进程不设 `task` 超时，靠信号取消。
+- `ap-web` 的目录选择使用 Windows `IFileDialog`；Unix 没有统一的原生目录对话框，接口返回 501。
 
 ## 非目标（v1）
 

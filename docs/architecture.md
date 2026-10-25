@@ -16,7 +16,8 @@
 | Tools | 工具注册、参数校验、执行、结果结构化、进程树管理 | 不改上下文，不做循环控制 |
 | Subagent Runner | 拉起 `ap` 子进程、解析 stream-json、转换为 tool 结果 | 不直接调用父进程内存里的对象 |
 | Transcript Store | 事件追加、读取、blob 读写、重放 | 不做业务判断 |
-| Internal | 路径/project hash/session 发现、blob 读取、平台原语、事件信封/usage schema | 不依赖 ap 或 ap-tui，不含 UI、loop、provider、tools |
+| Internal | 路径/project hash/session 发现、blob 读取、平台原语、事件信封/usage schema | 不依赖 ap、ap-tui 或 ap-web，不含 UI、loop、provider、tools |
+| External frontends | `ap-tui`（终端）与 `ap-web`（浏览器）：每轮拉起 ap 子进程、解析 `stream-json`、渲染；`ap-web` 额外提供 HTTP/SSE | 不 import ap 或 ap-tui，不实现 agent、provider、工具或 transcript 写入 |
 
 ## 依赖方向
 
@@ -32,14 +33,15 @@ CLI ──► Loop ──► Context ──► (纯计算)
 
 CLI ─┐
      ├──► Internal（路径 / project / session / blob / platform / schema）
-ap-tui ─┘
+ap-tui ─┤
+ap-web ─┘
 ```
 
 1. `Provider`、`Skills` 互不依赖；`Transcript Store` 只提供事件/blob 的读写原语；`Tools` 不依赖 Provider，但 `task` 会通过 `blob_read` 读取子代理 `message_end` 中的 `text_ref`
 2. `Context` 只读 transcript、配置和 blob，不写回、不发请求
 3. `Tools` 不感知 Loop 的状态机；只接收 `(name, args, ctx)` 返回结构化结果
 4. 子代理只能通过命令行 + stdout/stderr 协议交互，不允许依赖父进程内存结构
-5. `Internal` 只能依赖 core 库；`ap` 和 `ap-tui` 都可以依赖它，它不能反向依赖两者
+5. `Internal` 只能依赖 core 库；`ap`、`ap-tui` 和 `ap-web` 都可以依赖它，它不能反向依赖三者
 
 ## 关键接口
 
@@ -129,7 +131,7 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 
 ## 共享包 internal/
 
-`internal/` 是 ap 与 ap-tui 的唯一公共底层包，负责：
+`internal/` 是 ap、ap-tui 与 ap-web 的唯一公共底层包，负责：
 
 - 路径规范化、config dir、project hash、`Project` 定位
 - session 列表、最近根 session、transcript 原始读取
@@ -137,11 +139,13 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 - Windows ACP 参数归一化、控制台 UTF-8、`realpath`
 - v1 事件信封（`Event_Header`）与 `Usage` schema
 
-边界：`internal` 不 import ap 或 ap-tui；不包含 renderer、行输入、loop、provider、tools、transcript store 写入。ap 侧保留 `open_project`（创建目录/写 `path.txt`）、错误码和写入逻辑，TUI 侧保留只读定位与渲染。
+边界：`internal` 不 import ap、ap-tui 或 ap-web；不包含 renderer、行输入、loop、provider、tools、transcript store 写入。ap 侧保留 `open_project`（创建目录/写 `path.txt`）、错误码和写入逻辑，TUI/Web 侧保留只读定位与渲染。
 
-## 外部消费者：ap-tui
+## 外部消费者：ap-tui 与 ap-web
 
 `ap-tui` 不属于 ap 进程内的模块，也不依赖 ap 的内存结构。它每轮启动一个新的 ap 子进程，通过 `--print0 --output-format stream-json` 交互，并直接读取 v1 transcript 做历史重放。修改 stream-json 事件或 transcript schema 时要同步检查 [tui.md](tui.md)。
+
+`ap-web` 与 ap-tui 同构，只是把渲染器换成浏览器：每轮 spawn 一个 ap 子进程，逐行解析 `stream-json` 并经 SSE 转发；历史同样来自 transcript，额外用 `internal/` 的 session/blob 原语做重放。它自带 HTTP/1.1 + SSE 服务器（`core:net`）和编译期内置的前端资源，不 import ap 或 ap-tui。协议、单飞、取消和目录选择见 [web.md](web.md)。
 
 ## 实现约束（Odin）
 
