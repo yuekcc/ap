@@ -128,6 +128,11 @@ json_object_set :: proc(obj: json.Object, key: string, value: json.Value) {
 	base[key] = value
 }
 
+json_object_remove :: proc(obj: json.Object, key: string) {
+	base := Json_Object_Map(obj)
+	delete_key(&base, key)
+}
+
 api_parse_json :: proc(body: []byte, value: ^$T) -> bool {
 	if len(body) == 0 {
 		return false
@@ -321,8 +326,8 @@ session_turn_count :: proc(project: Project, session_id: string) -> int {
 
 // 逐行读 JSONL；保留原始事件字段，只补前端渲染需要的解析结果：
 // - message_end 的 text_ref 解析成 text（缺失 blob 退化为 text_preview）
-// - tool_execution_start 增加 args_text（与 ap-tui tool_args_text 相同规则）
-// - tool_execution_end 的 content 换成 200 行/20KB 预览，并标记 content_truncated
+// - tool_execution_start 增加 args_text/args_preview（与 ap-tui tool_args_text 相同规则）
+// - tool_execution_end 超过 200 行/20KB 时换成 content_preview 并标记 content_truncated
 api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
 	session_id, has_session := query_param(request.query, "session_id")
@@ -391,12 +396,22 @@ history_enrich_event :: proc(obj: json.Object, ev: Event, project: Project) {
 		}
 	case "tool_execution_start":
 		local := project
-		json_object_set(obj, "args_text", json.String(tool_args_text(ev, &local)))
+		args_text := tool_args_text(ev, &local)
+		// 前端（render.js）优先读 args_preview；args_text 也保留一份，便于其他消费者。
+		json_object_set(obj, "args_text", json.String(args_text))
+		json_object_set(obj, "args_preview", json.String(args_text))
 	case "tool_execution_end":
 		local := project
 		content, _ := tool_result_text(ev, &local)
 		preview, truncated := preview_content(content)
-		json_object_set(obj, "content", json.String(preview))
+		// 与 ap-tui 重放一致：超限结果只给预览窗口。为了让前端据此显示
+		// 「已截断」提示，截断时把完整 content 拿掉、改放 content_preview。
+		if truncated {
+			json_object_remove(obj, "content")
+			json_object_set(obj, "content_preview", json.String(preview))
+		} else {
+			json_object_set(obj, "content", json.String(content))
+		}
 		json_object_set(obj, "content_truncated", json.Boolean(truncated))
 	}
 }

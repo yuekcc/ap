@@ -308,13 +308,19 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	args_text, args_ok := json_string_field(tool_start, "args_text")
 	testing.expect(t, args_ok)
 	testing.expect_value(t, args_text, HISTORY_ARGS_BLOB)
+	args_preview, args_preview_ok := json_string_field(tool_start, "args_preview")
+	testing.expect(t, args_preview_ok)
+	testing.expect_value(t, args_preview, HISTORY_ARGS_BLOB)
 
 	tool_end, has_tool_end := history_event(history.events, "tool_execution_end")
 	testing.expect(t, has_tool_end)
-	content, content_ok := json_string_field(tool_end, "content")
-	testing.expect(t, content_ok)
-	testing.expect(t, strings.contains(content, "line-199\n"))
-	testing.expect(t, !strings.contains(content, "line-200\n"))
+	// 截断时不再内联完整 content，前端据此显示「已截断」提示。
+	_, has_inline_content := tool_end["content"]
+	testing.expect(t, !has_inline_content)
+	content_preview, preview_ok := json_string_field(tool_end, "content_preview")
+	testing.expect(t, preview_ok)
+	testing.expect(t, strings.contains(content_preview, "line-199\n"))
+	testing.expect(t, !strings.contains(content_preview, "line-200\n"))
 	truncated, truncated_ok := tool_end["content_truncated"].(json.Boolean)
 	testing.expect(t, truncated_ok)
 	testing.expect_value(t, bool(truncated), true)
