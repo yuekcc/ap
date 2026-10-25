@@ -296,9 +296,15 @@ runner_thread :: proc(user: rawptr) {
 
 	// session 指针已在每条 session_start 回调里更新；这里不再覆盖，
 	// 否则用户 turn 中调 /api/session/new 清掉的指针会被重新写回。
+	stop_reason := runner_stop_reason(job)
+	// Windows 的 Job Object 终止会让 ap 来不及写 turn_end/session_end；
+	// 用户主动取消时必须让前端能把「取消」和「失败」区分开。
+	if stop_reason == nil && result.cancelled {
+		stop_reason = "cancelled"
+	}
 	done := Sse_Turn_Done {
 		exit_code = result.exit_code,
-		stop_reason = runner_stop_reason(job),
+		stop_reason = stop_reason,
 		usage = job.usage,
 	}
 	if len(result.stderr_preview) > 0 {

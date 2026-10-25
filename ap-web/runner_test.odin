@@ -187,6 +187,9 @@ test_runner_cancel_terminates_turn :: proc(t: ^testing.T) {
 	defer delete(frames)
 	testing.expect(t, strings.contains(frames, "event: turn_done"))
 	testing.expect(t, !strings.contains(frames, `"exit_code":0`))
+	// ap 被强制终止时（Windows Job Object）来不及写 turn_end/session_end，
+	// 信封仍应明确标出这是用户取消，而不是一次普通失败。
+	testing.expect(t, strings.contains(frames, `"stop_reason":"cancelled"`))
 }
 
 @(test)
