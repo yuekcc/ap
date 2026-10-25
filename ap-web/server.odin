@@ -20,7 +20,6 @@ READ_CHUNK :: 16 * 1024
 IDLE_READ_TIMEOUT :: 30 * time.Second
 REQUEST_READ_TIMEOUT :: 10 * time.Second
 
-
 Http_Method :: enum {
 	Get,
 	Post,

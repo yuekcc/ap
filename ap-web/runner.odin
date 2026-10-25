@@ -205,8 +205,11 @@ runner_shutdown :: proc(app: ^App) {
 	}
 
 	// 最后一个 turn 的线程句柄也要回收；重复调用是安全的（nil 直接返回）。
+	// 若 turn 在 5s 内没停下，join 会无限等待，所以只回收已经结束的线程。
 	sync.mutex_lock(&app.runner.mu)
-	runner_reap_thread_locked(app)
+	if !app.runner.running {
+		runner_reap_thread_locked(app)
+	}
 	sync.mutex_unlock(&app.runner.mu)
 }
 
