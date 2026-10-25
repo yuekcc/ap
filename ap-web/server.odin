@@ -9,7 +9,9 @@ import "core:strings"
 // 解析只接受内存 buffer，socket 读写通过 Transport 注入，测试可以完全不碰网络。
 MAX_HEADER_LINE :: 32 * 1024
 MAX_HEADERS :: 100
-MAX_REQUEST_BODY :: 1 * 1024 * 1024
+// 请求体上限要比 prompt 上限（1MB）略大，否则 JSON 包装会让「1MB prompt」
+// 在解析层就被 413 掉，API 的 prompt_too_large 错误体永远走不到。
+MAX_REQUEST_BODY :: 2 * 1024 * 1024
 READ_CHUNK :: 16 * 1024
 
 Http_Method :: enum {

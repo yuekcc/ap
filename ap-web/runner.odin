@@ -36,7 +36,6 @@ Runner :: struct {
 	session_id: string, // 当前 session 指针（拥有）
 	turn:       Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
 	cancel:     Agent_Cancel_Token,
-	job:        ^Turn_Job,
 }
 
 // 一轮 turn 的私有上下文。所有字符串都由本结构拥有，线程退出时释放。
@@ -57,7 +56,6 @@ runner_init :: proc(app: ^App) {
 	app.runner.session_id = ""
 	app.runner.turn = nil
 	app.runner.cancel = {}
-	app.runner.job = nil
 }
 
 runner_running :: proc(app: ^App) -> bool {
@@ -149,16 +147,10 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 		prompt = strings.clone(request.prompt, runtime.heap_allocator()),
 	}
 
-	// 先把 job 挂到 runner 再启动线程，避免线程结束得比赋值还快。
-	sync.mutex_lock(&app.runner.mu)
-	app.runner.job = job
-	sync.mutex_unlock(&app.runner.mu)
-
 	handle := thread.create_and_start_with_data(rawptr(job), runner_thread, name = "turn-runner")
 	if handle == nil {
 		sync.mutex_lock(&app.runner.mu)
 		app.runner.running = false
-		app.runner.job = nil
 		sync.mutex_unlock(&app.runner.mu)
 		free_job(job)
 		return .Failed, "cannot start turn thread"
@@ -325,7 +317,6 @@ runner_thread :: proc(user: rawptr) {
 
 	sync.mutex_lock(&app.runner.mu)
 	app.runner.running = false
-	app.runner.job = nil
 	sync.mutex_unlock(&app.runner.mu)
 	free_job(job)
 }
