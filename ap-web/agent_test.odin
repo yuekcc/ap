@@ -81,7 +81,7 @@ test_pump_agent_allocates_result_with_options_allocator :: proc(t: ^testing.T) {
 		return
 	}
 
-	result := run_agent_turn(options, "hello", {})
+	result := pump_agent(&options, "hello", {})
 	testing.expect_value(t, result.session_id, "ses_fake")
 	testing.expect(
 		t,

@@ -316,7 +316,7 @@ runner_thread :: proc(user: rawptr) {
 		user          = rawptr(job),
 		on_event_line = runner_on_event_line,
 	}
-	result := run_agent_turn(job.options, job.prompt, callbacks)
+	result := pump_agent(&job.options, job.prompt, callbacks)
 
 	// session 指针已在每条 session_start 回调里更新；这里不再覆盖，
 	// 否则用户 turn 中调 /api/session/new 清掉的指针会被重新写回。

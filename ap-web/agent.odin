@@ -121,7 +121,7 @@ Turn_Callbacks :: struct {
 	on_stderr:     proc(user: rawptr, line: string),
 }
 
-// session_id / stderr_preview 归调用方所有，需要 delete。
+// session_id / stderr_preview 归调用方所有，按 Turn_Options.allocator 释放。
 Turn_Result :: struct {
 	exit_code:      int,
 	session_id:     string, // 从本轮流里的 session_start 捕获；可能为空
@@ -522,8 +522,3 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	return
 }
 
-// 执行一个 turn：每轮启动一个新的 ap 子进程，逐事件回调。
-run_agent_turn :: proc(options: Turn_Options, prompt: string, callbacks: Turn_Callbacks) -> Turn_Result {
-	opts := options
-	return pump_agent(&opts, prompt, callbacks)
-}
