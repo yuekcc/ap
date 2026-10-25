@@ -44,6 +44,7 @@ ap-web/
 ├── pickdir.odin         # 工作目录选择对话框：Windows IFileDialog（COM STA）；Unix 返回 501
 ├── assets.odin          # 内置资源表：#load_directory("dist") + 查找/兜底
 ├── platform_windows.odin / platform_unix.odin
+├── process_platform_windows.odin / process_platform_unix.odin  # Job/进程树终止（与 ap 同构）
 ├── package.json         # deps: esbuild + alpinejs；scripts: build / watch
 ├── build.mjs            # esbuild 脚本：frontend/main.js → dist/（app.js + styles.css），拷贝 index.html
 ├── index.html           # Alpine 模板宿主（构建时拷入 dist/）
@@ -91,19 +92,20 @@ ap-web（主进程）
 3. 逐行读 stdout：`parse_event_line`（复用 ap-tui 的事件结构）→ 逐事件推给 hub → SSE 广播
 4. stderr 缓存；turn 异常退出时随 `turn_done` 的 `stderr_preview` 带给前端
 5. 进程退出：从最后一条 `session_start` 拿 `session_id` 存为当前 session；广播 `turn_done`（含退出码与 stop_reason）
-6. 运行中收到 `DELETE /api/turn`：向 ap 进程树发终止（复用 ap 内部的进程树终止语义：Unix SIGTERM→SIGKILL，Windows Job Object），ap 自己写 `session_end(reason=signal)`
+6. 运行中收到 `DELETE /api/turn`：向 ap 进程树发终止（复用 ap 内部的进程树终止语义：Unix 先 SIGTERM、2s 后 SIGKILL；Windows 用 Job Object 整树终止）。Unix 上 ap 收到 SIGTERM 后会自己写 `cancel` / `turn_end(cancelled)` / `session_end(reason=signal)`；Windows 的 Job 终止会连同 ap 一起结束，ap 来不及写收尾事件。两种情况 ap-web 都广播 `turn_done`，主动取消时 `stop_reason` 至少为 `cancelled`
 
 ### 取消与并发约束
 
 - **单飞**：同一 session 同一时刻只允许一个 turn；运行中再 `POST /api/turn` 返回 409。多 session 并发是 phase 2
 - turn runner 在独立线程执行，SSE 连接挂掉**不**取消 turn（浏览器刷新后通过 `GET /api/history` + 重新订阅恢复画面）
+- Windows 上取消是整树强制终止，transcript 可能停在 `tool_execution_start` 等中间事件，没有 `turn_end` / `session_end`；刷新页面仍能重放已经落盘的部分。Unix 上走 SIGTERM 优雅中断，收尾事件齐全
 - ap-web 进程退出时向运行中的 ap 发终止并等待至多 5s
 
 ## HTTP 层（手写）
 
 只实现 HTTP/1.1 的最小子集，够本 UI 用即可：
 
-- 请求：request line + headers + body（`Content-Length` 必填，**不支持** `Transfer-Encoding: chunked` 请求体；不支持 100-continue）
+- 请求：request line + headers + body（`Content-Length` 必填；空 body 的 POST 也要写 `Content-Length: 0`。**不支持** `Transfer-Encoding: chunked` 请求体；不支持 100-continue）
 - 响应：`Content-Length` 定长；SSE 用 chunked（只写不读，实现简单）
 - 方法：GET / POST / DELETE；其余返回 405
 - 头解析：逐行直到 CRLF CRLF；单行上限 32KB，头部总数上限 100
@@ -114,9 +116,9 @@ ap-web（主进程）
 
 ### 内置静态资源
 
-- `assets.odin` 用 `#load_directory("dist")` 把整个 `dist/` 编进 exe，得到编译期的 `{name, data}` 表；查找按文件名精确匹配，`index.html` 兜底
+- `assets.odin` 用 `#load_directory("dist")` 把整个 `dist/` 编进 exe，得到编译期的 `{name, data}` 表；查找按文件名精确匹配，根路径与目录路径回落到 `index.html`
 - MIME 按扩展名查静态表（html/js/css/svg/png/ico/wasm）
-- ETag 用编译期算的文件内容 hash（`#load_hash`），命中 `If-None-Match` 返回 304——静态资源没有修改时间概念，内容 hash 是唯一可用的缓存键
+- ETag 是文件内容的 FNV-1a hash（内置资源在启动时算一次，磁盘模式每个请求算），命中 `If-None-Match` 返回 304——静态资源没有修改时间概念，内容 hash 是唯一可用的缓存键
 - `--web-root <dir>` 开发模式开关：给定时改从磁盘读该目录（前端改样式不用重编 exe）；默认走内置表。两条路径共用同一套查找/MIME/兜底逻辑，磁盘实现只是把「查表」换成「读文件」
 - 长度上限：单文件 8MB（esbuild 产物远小于此）；`app.js` 内已含 Alpine，不依赖 CDN
 
@@ -188,7 +190,7 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 | SSE event | data | 说明 |
 | --- | --- | --- |
 | `ap` | ap 的 stream-json 事件原样 | 前端按 `type` 分派（`session_start` / `message_update` / `message_end` / `tool_execution_start/update/end` / `turn_start/turn_end` / `error`） |
-| `turn_done` | `{exit_code, stop_reason, usage, stderr_preview}` | turn 结束信封；`stop_reason` 取自 `turn_end`/`session_end`，缺失时为 null |
+| `turn_done` | `{exit_code, stop_reason, usage, stderr_preview}` | turn 结束信封；`stop_reason` 取自 `turn_end`/`session_end`，主动取消但没有收尾事件时 ap-web 填 `cancelled`，其他缺失为 null |
 | `ping` | `{ts}` | 心跳（也作为 SSE 注释行发送） |
 
 事件顺序保证：单 session 内 ap-web 按收到顺序广播，天然与 stdout 行序一致；不做 seq 去重（ap 保证单调）。
@@ -198,7 +200,7 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 前端两条路径到同一份事实（transcript）：
 
 - 打开/切 session：`GET /api/history` 渲染存量；然后 `GET /api/events` 订阅增量
-- 竞态：订阅成功后若发现 `session_start` 或按 `seq` 比对与已有末尾重叝始化，直接跳过（transcript 事件的 `seq` 单调，前端以此为去重键）
+- 竞态：订阅成功后若发现 `session_start` 或按 `seq` 比对与已有末尾重复，初始化状态时直接跳过（transcript 事件的 `seq` 单调，前端以此为去重键）
 - 刷新页面重连：重新走 history + subscribe；不做断点续传（phase 2 可用 `Last-Event-ID` + transcript seq 补差）
 
 ## 前端
@@ -260,8 +262,8 @@ npm --prefix ap-web run watch      # 开发期监听
 
 ```
 ap-web [--port 8417] [--host 127.0.0.1] [--web-root <dir>]
-       [--agent-bin <path>] [-s <id>] [-c] [--model ...] [--max-steps ...]
-       [--max-tokens ...] [--config-dir <dir>] [--cwd <dir>]
+       [--agent-bin <path>] [-s <id>] [-c] [--model ...] [--agent ...]
+       [--max-steps ...] [--max-tokens ...] [--config-dir <dir>] [--cwd <dir>]
 ```
 
 - `--agent-bin` / `AP_AGENT_BIN` / 同目录 / PATH：可执行文件查找顺序与 ap-tui 相同
@@ -285,7 +287,7 @@ ap-web 不 import ap、不 import ap-tui
 1. 默认只监听 `127.0.0.1`；显式 `--host 0.0.0.0` 时启动日志打印醒目警告（agent 可执行任意 bash）
 2. 无鉴权是接受的设计：本工具与 `ap` CLI 本身同权限运行，攻击面等价于「能访问端口就能用 shell」——因此默认回环 + 不做 CORS 放开（同源部署，`Origin` 校验 phase 2 有需要再加）
 3. 静态资源来自编译期内置表或 `--web-root` 白名单目录；磁盘模式下路径解析后必须落在 web-root 内，否则 403（内置表模式无路径可言，不存在穿越）
-4. `POST /api/turn` 的 prompt 长度上限 1MB；SSE 单事件 data 上限对齐 blob 阈值，超限走 `*_ref` + history 接口
+4. `POST /api/turn` 的 prompt 长度上限 1MB（超限 413）；ap 已把超过 blob 阈值的内容写成 blob，SSE 只转发带 `*_ref` 的事件，前端经 history 接口解析
 5. 转发到 ap 的命令行参数全部来自服务端白名单映射，不拼接 shell
 
 ## 风险与对策
@@ -306,8 +308,9 @@ ap-web 不 import ap、不 import ap-tui
 ## 测试
 
 1. `odin test ap-web`：HTTP 解析（request line/headers/body 上限、keep-alive）、SSE 帧编码、事件泵、路由、内置资源查找
-2. 集成（真 spawn ap，沿用 ap 的 test_helpers）：一轮完整 turn 的 SSE 事件序列、取消语义、异常退出 stderr 呈现
-3. 手动矩阵：Chrome/Edge/Firefox `EventSource` 行为；Windows/Linux 双平台管道与进程树终止
+2. `npm --prefix ap-web test`：前端事件归约（delta 累积、工具卡片、history 重放、seq 去重、turn_done 状态机）
+3. 集成（真 spawn 假 agent）：一轮完整 turn 的 SSE 事件序列、409 单飞、取消与进程树终止、异常退出 stderr 呈现
+4. 手动矩阵：Chrome/Edge/Firefox `EventSource` 行为；Windows/Linux 双平台管道与进程树终止
 
 ## Phase 2 待做
 
