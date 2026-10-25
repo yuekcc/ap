@@ -402,8 +402,8 @@ history_enrich_event :: proc(value: ^json.Value, ev: Event, project: Project) {
 			return
 		}
 		for block_value, i in blocks {
-			block, is_object := block_value.(json.Object)
-			if !is_object {
+			block, block_is_object := block_value.(json.Object)
+			if !block_is_object {
 				continue
 			}
 			block_type, _ := json_string_field(block, "type")
