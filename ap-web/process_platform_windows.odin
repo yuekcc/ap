@@ -3,6 +3,7 @@ package main
 
 import "core:fmt"
 import "core:os"
+import "core:sync"
 import win32 "core:sys/windows"
 
 // 进程树终止沿用 ap 的语义：优先 Job Object，失败时退化为 taskkill /T /F。
@@ -20,7 +21,9 @@ foreign k32 {
 	CloseHandle              :: proc(handle: win32.HANDLE) -> win32.BOOL ---
 }
 
+// turn 线程注册/释放，主线程（Ctrl+C）清理：表必须加锁。
 running_jobs: [dynamic]Job_Handle
+running_jobs_mu: sync.Mutex
 
 // 管道两端默认都可继承；stdin 的写端、stdout/stderr 的读端如果被 ap 继承，
 // ap 读 stdin 时永远等不到 EOF（它自己还握着一份写端）。这里清掉继承标志。
@@ -47,6 +50,8 @@ register_job :: proc(job: Job_Handle) {
 	if job == 0 {
 		return
 	}
+	sync.mutex_lock(&running_jobs_mu)
+	defer sync.mutex_unlock(&running_jobs_mu)
 	for existing in running_jobs {
 		if existing == job {
 			return
@@ -60,6 +65,8 @@ release_job :: proc(job: Job_Handle) {
 	if job == 0 {
 		return
 	}
+	sync.mutex_lock(&running_jobs_mu)
+	defer sync.mutex_unlock(&running_jobs_mu)
 	for existing, i in running_jobs {
 		if existing == job {
 			unordered_remove(&running_jobs, i)
@@ -71,6 +78,8 @@ release_job :: proc(job: Job_Handle) {
 
 // 服务退出前终止所有仍挂着的子进程树。
 cleanup_jobs :: proc() {
+	sync.mutex_lock(&running_jobs_mu)
+	defer sync.mutex_unlock(&running_jobs_mu)
 	for job in running_jobs {
 		TerminateJobObject(win32.HANDLE(uintptr(job)), 1)
 		CloseHandle(win32.HANDLE(uintptr(job)))
