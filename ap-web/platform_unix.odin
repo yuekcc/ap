@@ -2,7 +2,6 @@
 package main
 
 import "../internal"
-import "base:runtime"
 import "core:fmt"
 import "core:net"
 import "core:sys/posix"
@@ -46,20 +45,12 @@ socket_set_read_timeout :: proc(socket: net.TCP_Socket, timeout: time.Duration) 
 	return net.set_option(socket, .Receive_Timeout, timeout) == nil
 }
 
-// SIGINT/SIGTERM 时先做收尾（终止运行中的 turn），再退出。
-g_shutdown_handler: proc(user: rawptr)
-g_shutdown_user:    rawptr
-
+// 信号处理器只置原子标志（async-signal-safe）；收尾由 shutdown watcher 线程执行。
 shutdown_signal_handler :: proc "c" (signal: posix.Signal) {
-	if handler := g_shutdown_handler; handler != nil {
-		context = runtime.default_context()
-		handler(g_shutdown_user)
-	}
+	shutdown_request()
 }
 
-install_shutdown_handler :: proc(handler: proc(user: rawptr), user: rawptr) {
-	g_shutdown_handler = handler
-	g_shutdown_user = user
+install_shutdown_signal_handler :: proc() {
 	action: posix.sigaction_t
 	action.sa_handler = shutdown_signal_handler
 	posix.sigemptyset(&action.sa_mask)

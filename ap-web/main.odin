@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:net"
 import "core:os"
@@ -7,6 +8,7 @@ import "core:strconv"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:time"
 
 WEB_VERSION :: "0.1.0"
 DEFAULT_PORT :: 8417
@@ -321,9 +323,60 @@ app_shutdown :: proc(app: ^App) {
 }
 
 on_shutdown_signal :: proc(user: rawptr) {
-	app := (^App)(user)
-	app_shutdown(app)
-	os.exit(0)
+	app_shutdown((^App)(user))
+}
+
+// 信号处理器只置这个原子标志；收尾（停心跳、终止 turn、清理作业表）由
+// shutdown watcher 线程执行。Unix 的信号处理器必须 async-signal-safe：
+// 不能在处理器里加锁、轮询或分配。
+SHUTDOWN_POLL_INTERVAL :: 20 * time.Millisecond
+
+Shutdown_State :: struct {
+	handler: proc(user: rawptr),
+	user:    rawptr,
+	pending: i32,
+}
+
+SHUTDOWN: Shutdown_State
+
+shutdown_configure :: proc(handler: proc(user: rawptr), user: rawptr) {
+	SHUTDOWN.handler = handler
+	SHUTDOWN.user = user
+}
+
+// contextless：调用方是 C/系统调用约定的信号处理器，没有 Odin context。
+shutdown_request :: proc "contextless" () {
+	sync.atomic_store(&SHUTDOWN.pending, 1)
+}
+
+shutdown_pending :: proc() -> bool {
+	return sync.atomic_load(&SHUTDOWN.pending) != 0
+}
+
+// 消费一次挂起请求并执行收尾；只由 watcher 线程调用。
+shutdown_dispatch :: proc() -> bool {
+	if !shutdown_pending() {
+		return false
+	}
+	sync.atomic_store(&SHUTDOWN.pending, 0)
+	if handler := SHUTDOWN.handler; handler != nil {
+		handler(SHUTDOWN.user)
+	}
+	return true
+}
+
+shutdown_watch_thread :: proc() {
+	context = runtime.default_context()
+	for {
+		if shutdown_dispatch() {
+			os.exit(0)
+		}
+		time.sleep(SHUTDOWN_POLL_INTERVAL)
+	}
+}
+
+shutdown_watcher_start :: proc() {
+	_ = thread.create_and_start(shutdown_watch_thread, self_cleanup = true, name = "shutdown-watch")
 }
 
 main :: proc() {
@@ -417,7 +470,9 @@ main :: proc() {
 	}
 
 	heartbeat_start(&app.heartbeat, &app.hub)
-	install_shutdown_handler(on_shutdown_signal, &app)
+	shutdown_configure(on_shutdown_signal, &app)
+	install_shutdown_signal_handler()
+	shutdown_watcher_start()
 	defer app_shutdown(&app)
 
 	if opts.host_explicit && !is_loopback_host(opts.host) {
