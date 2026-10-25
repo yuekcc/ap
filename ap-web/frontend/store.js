@@ -10,6 +10,7 @@ import {
 	applyTurnDone,
 	createState,
 	ingestHistory,
+	stateAfterCwdChange,
 } from "./render.js";
 
 function asArray(value) {
@@ -74,6 +75,12 @@ export function createStore() {
 
 		reset(sessionId = null) {
 			view = createState({ sessionId });
+			publish();
+		},
+
+		// 目录切换成功后服务器已清空 session 指针；前端丢弃旧 transcript 并提示。
+		resetAfterCwdChange() {
+			view = stateAfterCwdChange();
 			publish();
 		},
 
