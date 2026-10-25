@@ -190,6 +190,27 @@ api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 // 平台实现
 // ---------------------------------------------------------------------------
 
+// Win32 的 GetPath 返回 CoTaskMemAlloc 的 UTF-16 NUL 结尾字符串；转成拥有
+// 所有权的 UTF-8。放在 when 外面只为让 import 在所有平台都被使用（函数本身
+// 仅 Windows 分支调用）。
+utf16_to_utf8 :: proc(wide: [^]u16) -> string {
+	if wide == nil {
+		return ""
+	}
+	length := 0
+	for wide[length] != 0 {
+		length += 1
+	}
+	if length == 0 {
+		return ""
+	}
+	// 一个 UTF-16 code unit 最多产生 3 字节 UTF-8。
+	scratch := make([]byte, length * 3, runtime.heap_allocator())
+	defer delete(scratch, runtime.heap_allocator())
+	written := utf16.decode_to_utf8(scratch, wide[:length])
+	return strings.clone(string(scratch[:written]), runtime.heap_allocator())
+}
+
 when ODIN_OS == .Windows {
 	HResult :: distinct i32
 
@@ -300,25 +321,6 @@ when ODIN_OS == .Windows {
 
 	hresult_failed :: proc(hr: HResult) -> bool {
 		return i32(hr) < 0
-	}
-
-	// GetPath 返回 CoTaskMemAlloc 的 UTF-16 字符串；转成拥有所有权的 UTF-8。
-	utf16_to_utf8 :: proc(wide: [^]u16) -> string {
-		if wide == nil {
-			return ""
-		}
-		length := 0
-		for wide[length] != 0 {
-			length += 1
-		}
-		if length == 0 {
-			return ""
-		}
-		// 一个 UTF-16 code unit 最多产生 3 字节 UTF-8。
-		scratch := make([]byte, length * 3, runtime.heap_allocator())
-		defer delete(scratch, runtime.heap_allocator())
-		written := utf16.decode_to_utf8(scratch, wide[:length])
-		return strings.clone(string(scratch[:written]), runtime.heap_allocator())
 	}
 
 	// 必须在 STA 线程上调用（pick_directory_async 已保证）；Show(NULL) 阻塞到
