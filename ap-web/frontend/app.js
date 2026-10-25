@@ -4,10 +4,6 @@
 import { api } from "./api.js";
 import { createEventStream } from "./sse.js";
 
-function isAbort(error) {
-	return error?.name === "AbortError";
-}
-
 export function registerApp(Alpine) {
 	Alpine.data("apApp", () => ({
 		stream: null,
@@ -146,7 +142,7 @@ export function registerApp(Alpine) {
 				await this.$nextTick();
 				this.autoScroll();
 			} catch (error) {
-				if (!isAbort(error)) this.fail("重连后同步失败", error);
+				this.fail("重连后同步失败", error);
 			} finally {
 				this.resyncing = false;
 			}
