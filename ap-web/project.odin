@@ -2,7 +2,7 @@ package main
 
 import "../internal"
 
-// TUI 直接复用 internal 的路径、project 与 session 发现逻辑。
+// 直接复用 internal 的路径、project 与 session 发现逻辑。
 // 这些规则必须与 ap 完全一致，否则 -c/-s 会找不到 transcript。
 
 Error :: internal.Error
@@ -33,7 +33,7 @@ default_config_dir :: proc(cli_config_dir: Maybe(string)) -> (string, Error) {
 
 Project :: internal.Project
 
-// TUI 只读：不创建 project 目录，也不写 path.txt。
+// 只读：不创建 project 目录，也不写 path.txt。
 open_project :: proc(config_dir, cwd: string) -> (Project, Error) {
 	return internal.locate_project(config_dir, cwd)
 }
@@ -52,10 +52,6 @@ blob_read :: proc(project: Project, sha256: string, allocator := context.allocat
 
 session_ids :: proc(project: Project) -> ([]string, Error) {
 	return internal.session_ids(project)
-}
-
-session_is_root :: proc(project: Project, session_id: string) -> (bool, i64, Error) {
-	return internal.session_is_root(project, session_id)
 }
 
 find_latest_root_session :: proc(project: Project) -> (string, Error) {

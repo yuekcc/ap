@@ -27,15 +27,18 @@ Runner_Start :: enum {
 	Failed, // 线程创建失败等内部错误
 }
 
-// 运行中 turn 的取消信号。token 常驻 runner，每轮开始清零；
+// 运行中 turn 的取消信号。token 常驻 runner，每轮开始与结束都在锁内清零；
 // DELETE /api/turn 在连接线程里置位，泵在轮询点检查。
 Runner :: struct {
-	mu:         sync.Mutex,
-	running:    bool,
-	exiting:    bool,
-	session_id: string, // 当前 session 指针（拥有）
-	turn:       Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
-	cancel:     Agent_Cancel_Token,
+	mu:          sync.Mutex,
+	running:     bool,
+	exiting:     bool,
+	session_id:  string, // 当前 session 指针（拥有）
+	turn:        Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
+	cancel:      Agent_Cancel_Token,
+	// 已结束但还没回收的 turn 线程句柄。下一轮开始前或关停时 join + destroy，
+	// 否则每轮都会泄漏 Thread 结构体与平台线程句柄。
+	turn_thread: ^thread.Thread,
 }
 
 // 一轮 turn 的私有上下文。所有字符串都由本结构拥有，线程退出时释放。
@@ -56,6 +59,20 @@ runner_init :: proc(app: ^App) {
 	app.runner.session_id = ""
 	app.runner.turn = nil
 	app.runner.cancel = {}
+	app.runner.turn_thread = nil
+}
+
+// 回收上一轮 turn 线程。调用方必须持有 runner.mu，且 running 已为 false
+// （线程在退出前会先把 running 置回 false，随后只剩 free_job 与返回）。
+// 持锁 join 不会死锁：turn 线程退出路径上不再获取 runner.mu。
+runner_reap_thread_locked :: proc(app: ^App) {
+	handle := app.runner.turn_thread
+	if handle == nil {
+		return
+	}
+	app.runner.turn_thread = nil
+	thread.join(handle)
+	thread.destroy(handle)
 }
 
 runner_running :: proc(app: ^App) -> bool {
@@ -104,17 +121,19 @@ runner_set_turn :: proc(app: ^App, turn: int) {
 	app.runner.turn = turn
 }
 
-// 启动一轮 turn。锁只覆盖状态切换与 session 快照，spawn 在锁外进行。
+// 启动一轮 turn。状态切换、session 快照与线程句柄归位放在同一把锁里：
+// 句柄一旦交给 runner，下一轮开始前就不会有第二个 turn 抢跑。
 runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_Start, message: string) {
 	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+
 	if app.runner.exiting {
-		sync.mutex_unlock(&app.runner.mu)
 		return .Shutting_Down, "server is shutting down"
 	}
 	if app.runner.running {
-		sync.mutex_unlock(&app.runner.mu)
 		return .Busy, "a turn is already running"
 	}
+	runner_reap_thread_locked(app)
 	app.runner.running = true
 	app.runner.turn = nil
 	sync.atomic_store(&app.runner.cancel.value, 0)
@@ -122,7 +141,6 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 	if len(app.runner.session_id) > 0 {
 		session_snapshot = strings.clone(app.runner.session_id, runtime.heap_allocator())
 	}
-	sync.mutex_unlock(&app.runner.mu)
 
 	// 请求里的可选字段优先；没带就用 ap-web 启动参数里的默认值（与 ap-tui 一致）。
 	model := request.model if request.model != nil else app.options.model
@@ -143,27 +161,29 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 			max_steps = max_steps,
 			max_tokens = max_tokens,
 			cancel = &app.runner.cancel,
+			// 结果在 turn 线程分配、在 runner 线程释放：所有权交给 heap，不依赖线程 context。
+			allocator = runtime.heap_allocator(),
 		},
 		prompt = strings.clone(request.prompt, runtime.heap_allocator()),
 	}
 
 	handle := thread.create_and_start_with_data(rawptr(job), runner_thread, name = "turn-runner")
 	if handle == nil {
-		sync.mutex_lock(&app.runner.mu)
 		app.runner.running = false
-		sync.mutex_unlock(&app.runner.mu)
 		free_job(job)
 		return .Failed, "cannot start turn thread"
 	}
+	app.runner.turn_thread = handle
 	return .Started, ""
 }
 
 // DELETE /api/turn：置位取消 token，泵会终止整棵进程树。
+// 检查与置位在同一把锁内完成：否则检查到 running 后 turn 可能已经结束、
+// 下一轮已经清零 token，这次置位就会误杀新一轮。
 runner_cancel :: proc(app: ^App) -> bool {
 	sync.mutex_lock(&app.runner.mu)
-	running := app.runner.running
-	sync.mutex_unlock(&app.runner.mu)
-	if !running {
+	defer sync.mutex_unlock(&app.runner.mu)
+	if !app.runner.running {
 		return false
 	}
 	agent_cancel_token_cancel(&app.runner.cancel)
@@ -176,14 +196,21 @@ runner_shutdown :: proc(app: ^App) {
 	app.runner.exiting = true
 	running := app.runner.running
 	sync.mutex_unlock(&app.runner.mu)
-	if !running {
-		return
+	if running {
+		agent_cancel_token_cancel(&app.runner.cancel)
+		start := time.tick_now()
+		for runner_running(app) && time.tick_since(start) < 5 * time.Second {
+			time.sleep(10 * time.Millisecond)
+		}
 	}
-	agent_cancel_token_cancel(&app.runner.cancel)
-	start := time.tick_now()
-	for runner_running(app) && time.tick_since(start) < 5 * time.Second {
-		time.sleep(10 * time.Millisecond)
+
+	// 最后一个 turn 的线程句柄也要回收；重复调用是安全的（nil 直接返回）。
+	// 若 turn 在 5s 内没停下，join 会无限等待，所以只回收已经结束的线程。
+	sync.mutex_lock(&app.runner.mu)
+	if !app.runner.running {
+		runner_reap_thread_locked(app)
 	}
+	sync.mutex_unlock(&app.runner.mu)
 }
 
 clone_maybe_string :: proc(value: Maybe(string)) -> Maybe(string) {
@@ -292,7 +319,7 @@ runner_thread :: proc(user: rawptr) {
 		user          = rawptr(job),
 		on_event_line = runner_on_event_line,
 	}
-	result := run_agent_turn(job.options, job.prompt, callbacks)
+	result := pump_agent(&job.options, job.prompt, callbacks)
 
 	// session 指针已在每条 session_start 回调里更新；这里不再覆盖，
 	// 否则用户 turn 中调 /api/session/new 清掉的指针会被重新写回。
@@ -323,6 +350,8 @@ runner_thread :: proc(user: rawptr) {
 
 	sync.mutex_lock(&app.runner.mu)
 	app.runner.running = false
+	// 这一轮的取消信号到此为止；不清零会让「取消后立刻开新 turn」继承旧状态。
+	sync.atomic_store(&app.runner.cancel.value, 0)
 	sync.mutex_unlock(&app.runner.mu)
 	free_job(job)
 }

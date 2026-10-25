@@ -142,7 +142,8 @@ canonicalize_temp :: proc(path: string) -> (string, internal.Error) {
 	return result, err
 }
 
-lookup_disk :: proc(root, name: string) -> Asset_Lookup {	joined, _ := os.join_path([]string{root, name}, context.temp_allocator)
+lookup_disk :: proc(root, name: string) -> Asset_Lookup {
+	joined, _ := os.join_path([]string{root, name}, context.temp_allocator)
 	info, err := os.stat(joined, context.temp_allocator)
 	if err != nil {
 		return {status = 404}

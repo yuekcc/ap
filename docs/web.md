@@ -141,7 +141,7 @@ ap-web（主进程）
 | POST | `/api/session/new` | – | `{session_id: null}` | 语义动作：清空当前指针，下一条提示词让 ap 新建 session（同 ap-tui `/new`）；不落盘任何东西 |
 | GET | `/api/sessions` | – | `[{session_id, ts, turns}]` | 复用 `internal/sessions.odin` 列表，前端选择恢复 |
 | POST | `/api/session/resume` | `{session_id}` | `{session_id}` | 指针切换；不校验合法性，交给下一轮 ap 报错 |
-| GET | `/api/history?session_id=<id>` | – | `{events: [...]}` | transcript 重放：逐行读 JSONL，`*_ref` 从 blobs 解析，超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
+| GET | `/api/history?session_id=<id>` | – | `{events: [...]}` | transcript 重放：逐行读 JSONL，`text_ref` / `input_ref` / `args_ref` / `content_ref` 从 blobs 解析（缺失则退化为对应 `*_preview`），超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
 | GET | `/api/cwd` | – | `{cwd}` | 当前工作目录（启动目录；切换后为最后设置的值） |
 | POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；用户确认后返回所选路径并更新 cwd。见「工作目录选择」 |
 | POST | `/api/turn` | `{prompt}` | `202 {accepted: true}` | 启动一轮；运行中 409 `turn_running`；`prompt` 为空 400 |
@@ -166,11 +166,11 @@ ap-web（主进程）
 
 实现要点：
 
-1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；不占用任何 HTTP 连接线程
+1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；accept 循环与其他连接不受影响（pick 请求自身会占用它的连接线程，见「实现细节与额外语义」）
 2. **Unix**：无统一的原生目录对话框 API，phase 1 直接 `501 not_implemented`，前端隐藏该入口（`GET /api/config` 返回 `platform` 字段区分）；phase 2 可考虑 `zenity`/`kdialog` 探测
 3. **取消语义**：用户关掉对话框 → `409 {error: {code: "cancelled"}}`，前端静默忽略
 4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；运行中调用 `POST /api/cwd/pick` 返回 409 `turn_running`
-5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加；前端切目录后应引导开新 session
+5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加。服务器在 pick 成功后清空 session 指针；前端收到新的 cwd 后也清空当前 session/消息列表，并提示「已切换工作目录，请开始新 session」
 6. **并发**：同一时刻只允许一个 pick 请求；重复调用返回 409 `picker_busy`（一个模态对话框只能有一份）
 
 ## SSE 事件流
@@ -304,6 +304,38 @@ ap-web 不 import ap、不 import ap-tui
 | 内置资源让 exe 变大 | dist 三个文件合计 < 100KB（Alpine ~15KB gzip），可忽略 |
 | SSE 被浏览器/代理缓冲 | `text/event-stream` + 立即 flush + 心跳；本地直连无中间代理，风险低 |
 | 事件解析三处漂移（ap/ap-tui/ap-web） | phase 1 先复制起步，phase 2 下沉 `internal/` 后只剩一处 |
+
+## 实现细节与额外语义
+
+本节记录实现相对上面接口表的补充约定，以及几处刻意保留的取舍。
+
+### 连接超时与错误体
+
+- 连接线程读完一个请求后复用连接等待下一个请求，空闲上限 30s；开始读取某个请求后改用 10s（`SO_RCVTIMEO`，`platform_*.odin` 的 `socket_set_read_timeout`）。读超时即关闭连接，不写错误响应——慢速客户端不能长期占住连接线程
+- 解析层的 4xx（含请求体超过 2MB 的 413）对 `/api/*` 目标同样返回 `{"error":{"code","message"}}`；静态资源仍回纯文本，方便直接用浏览器访问。请求体超限的 code 是 `payload_too_large`
+- `api_json` 编码失败（服务端 bug）固定返回 500 `internal_error`，不会把错误体挂在 2xx 上
+
+### 目录选择与连接线程
+
+`POST /api/cwd/pick` 的请求会一直占用它自己的连接线程，直到用户关闭对话框：处理函数必须同步取回选择结果才能更新 cwd 并返回 200/409/501。对话框本身在独立 STA 线程上跑（`CoInitializeEx` + `IFileDialog::Show`），因此 accept 循环和其他连接不受影响；这也是 `picker_busy` 只挡第二个 pick、不挡其他请求的原因。
+
+### SSE 订阅者按「已死」处理
+
+订阅者 channel 满了（`SSE_SUBSCRIBER_BUFFER`，默认 256 帧）说明对应连接线程已经不再消费。实现丢弃该订阅者并关闭它的 channel，连接随后收尾关闭；这比反压 agent 更安全（SSE 写失败本来也只丢弃订阅者）。前端在 EventSource 重连后重新走 `GET /api/history` + 订阅，用 transcript 的 `seq` 去重补齐，不依赖服务端重放。
+
+### 接口表的额外语义
+
+| 端点 | 额外行为 | 理由 |
+| --- | --- | --- |
+| `POST /api/session/resume` | 有 turn 运行时返回 409 `turn_running` | 运行中切 session 会让下一轮 `-s` 指向别的 transcript，也会破单飞语义 |
+| `DELETE /api/turn` | 202 `{"cancelled": bool}` | 前端需要区分「确实取消了」与「本来就没在跑」 |
+| `POST /api/turn` | `max_steps` / `max_tokens` 非正数返回 400 `invalid_request` | 非正数对 ap 没有意义，在边界提前拒绝 |
+| 任意 | 关停中（收到 SIGINT/SIGTERM 后）启动新 turn 返回 503 `shutting_down` | 进程即将退出，接受请求必然失败 |
+
+### 平台差异
+
+- Windows 监听使用 `SO_EXCLUSIVEADDRUSE`（而不是 `SO_REUSEADDR`），避免端口被其他进程抢占；Unix 侧仍用 `SO_REUSEADDR`，让崩溃后可以立刻重启
+- 信号处理器只置原子标志，收尾（停心跳、终止 turn、清理作业表）由 shutdown watcher 线程执行；Unix 信号处理器因此保持 async-signal-safe
 
 ## 测试
 

@@ -2,9 +2,9 @@
 package main
 
 import "../internal"
-import "base:runtime"
 import "core:fmt"
 import "core:net"
+import "core:time"
 import win32 "core:sys/windows"
 
 setup_console :: proc() {
@@ -58,25 +58,22 @@ close_listener :: proc(listener: ^Listener) {
 	net.close(listener.socket)
 }
 
-// Ctrl+C / 关闭控制台时先做收尾（终止运行中的 turn），再退出。
-g_shutdown_handler: proc(user: rawptr)
-g_shutdown_user:    rawptr
+// SO_RCVTIMEO：阻塞 recv 到点返回错误，连接线程据此断连（docs/web.md「风险与对策」）。
+socket_set_read_timeout :: proc(socket: net.TCP_Socket, timeout: time.Duration) -> bool {
+	return net.set_option(socket, .Receive_Timeout, timeout) == nil
+}
 
+// Ctrl+C / 关闭控制台：与 Unix 共用「只置标志、由 watcher 收尾」的路径。
 shutdown_control_handler :: proc "system" (ctrl_type: win32.DWORD) -> win32.BOOL {
 	if ctrl_type != win32.CTRL_C_EVENT &&
 	   ctrl_type != win32.CTRL_BREAK_EVENT &&
 	   ctrl_type != win32.CTRL_CLOSE_EVENT {
 		return false
 	}
-	if handler := g_shutdown_handler; handler != nil {
-		context = runtime.default_context()
-		handler(g_shutdown_user)
-	}
+	shutdown_request()
 	return true
 }
 
-install_shutdown_handler :: proc(handler: proc(user: rawptr), user: rawptr) {
-	g_shutdown_handler = handler
-	g_shutdown_user = user
+install_shutdown_signal_handler :: proc() {
 	win32.SetConsoleCtrlHandler(shutdown_control_handler, true)
 }

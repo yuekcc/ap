@@ -5,6 +5,8 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sync"
+import sync_chan "core:sync/chan"
 import "core:testing"
 import "core:thread"
 import "core:time"
@@ -62,6 +64,26 @@ api_fixture_setup :: proc(t: ^testing.T, app: ^App, dir: string) {
 	api_register_routes()
 	sse_hub_init(&app.hub)
 	runner_init(app)
+}
+
+// 编码失败不能把 2xx 和一句错误 JSON 混在一起：调用方会把它当成成功响应。
+@(test)
+test_api_json_encoding_failure_returns_500 :: proc(t: ^testing.T) {
+	response := Http_Response {
+		status  = 200,
+		headers = make([dynamic]Http_Header, 0, 4, context.temp_allocator),
+	}
+	// core:encoding/json 不支持函数类型，用它触发编码失败。
+	api_json(&response, 200, proc() {})
+	testing.expect_value(t, response.status, 500)
+	testing.expect_value(
+		t,
+		api_response_text(&response),
+		`{"error":{"code":"internal_error","message":"cannot encode response"}}`,
+	)
+	content_type, has_type := header_value(response.headers[:], "content-type")
+	testing.expect(t, has_type)
+	testing.expect(t, strings.contains(content_type, "application/json"))
 }
 
 @(test)
@@ -247,7 +269,9 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 
 	transcript := strings.concatenate(
 		{
-			`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_hist"}`,
+			`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_hist","content_ref":"`,
+			text_sha,
+			`"}`,
 			"\n",
 			`{"v":1,"seq":1,"ts":2,"type":"user_message","content":"hi"}`,
 			"\n",
@@ -255,7 +279,11 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 			text_sha,
 			`"},{"type":"text","text_ref":"`,
 			missing_sha,
-			`","text_preview":"fallback preview"}]}`,
+			`","text_preview":"fallback preview"},{"type":"tool_use","id":"call_2","name":"read_file","input_ref":"`,
+			args_sha,
+			`"},{"type":"tool_use","id":"call_3","name":"write_file","input_ref":"`,
+			missing_sha,
+			`","input_preview":"partial input"}]}`,
 			"\n",
 			`{"v":1,"seq":3,"ts":4,"type":"tool_execution_start","tool_call_id":"c1","name":"read_file","args_ref":"`,
 			args_sha,
@@ -278,11 +306,17 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	testing.expectf(t, err == nil, "cannot parse history: %v", err)
 	testing.expect_value(t, len(history.events), 5)
 
+	session_start, has_session_start := history_event(history.events, "session_start")
+	testing.expect(t, has_session_start)
+	session_content, session_content_ok := json_string_field(session_start, "content")
+	testing.expect(t, session_content_ok)
+	testing.expect_value(t, session_content, HISTORY_BLOB_TEXT)
+
 	message_end, has_message_end := history_event(history.events, "message_end")
 	testing.expect(t, has_message_end)
 	blocks, blocks_ok := message_end["content"].(json.Array)
 	testing.expect(t, blocks_ok)
-	if len(blocks) == 2 {
+	if len(blocks) == 4 {
 		first, _ := blocks[0].(json.Object)
 		text, text_ok := json_string_field(first, "text")
 		testing.expect(t, text_ok)
@@ -292,13 +326,27 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 		fallback, fallback_ok := json_string_field(second, "text")
 		testing.expect(t, fallback_ok)
 		testing.expect_value(t, fallback, "fallback preview")
+
+		// tool_use 的 input_ref 从 blobs 解析成 JSON，缺失时退化为 input_preview。
+		tool_use, tool_use_ok := blocks[2].(json.Object)
+		testing.expect(t, tool_use_ok)
+		input, input_ok := tool_use["input"].(json.Object)
+		testing.expect(t, input_ok)
+		file_path, path_ok := json_string_field(input, "file_path")
+		testing.expect(t, path_ok)
+		testing.expect_value(t, file_path, "x.txt")
+
+		missing_input, missing_input_ok := blocks[3].(json.Object)
+		testing.expect(t, missing_input_ok)
+		preview_input, preview_input_ok := json_string_field(missing_input, "input")
+		testing.expect(t, preview_input_ok)
+		testing.expect_value(t, preview_input, "partial input")
+	} else {
+		testing.expectf(t, false, "expected 4 message_end blocks, got %d", len(blocks))
 	}
 
 	tool_start, has_tool_start := history_event(history.events, "tool_execution_start")
 	testing.expect(t, has_tool_start)
-	args_text, args_ok := json_string_field(tool_start, "args_text")
-	testing.expect(t, args_ok)
-	testing.expect_value(t, args_text, HISTORY_ARGS_BLOB)
 	args_preview, args_preview_ok := json_string_field(tool_start, "args_preview")
 	testing.expect(t, args_preview_ok)
 	testing.expect_value(t, args_preview, HISTORY_ARGS_BLOB)
@@ -415,6 +463,68 @@ sse_test_broadcast_once :: proc(user: rawptr) {
 	_ = sse_hub_broadcast(state.hub, "ap", `{"type":"message_update"}`)
 	time.sleep(10 * time.Millisecond)
 	sse_hub_destroy(state.hub)
+}
+
+// 关停时 app_shutdown 必须销毁 hub：阻塞在 recv 上的 SSE 连接线程要立刻被唤醒，
+// 否则进程退出会丢下悬挂线程（也解释了前端为什么能靠重连 + history 恢复）。
+Sse_Recv_Probe :: struct {
+	sub:  ^Sse_Subscriber,
+	done: i32,
+	got:  i32, // 2 = channel 已关闭
+}
+
+sse_test_wait_for_close :: proc(user: rawptr) {
+	probe := (^Sse_Recv_Probe)(user)
+	_, ok := sse_subscriber_recv(probe.sub)
+	sync.atomic_store(&probe.got, 2 if !ok else 1)
+	sync.atomic_store(&probe.done, 1)
+}
+
+@(test)
+test_app_shutdown_wakes_sse_subscribers :: proc(t: ^testing.T) {
+	dir := test_temp_dir("api-shutdown-sse")
+	defer os.remove_all(dir)
+
+	app: App
+	api_fixture_setup(t, &app, dir)
+
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&app.hub, &sub, 4))
+
+	probe := Sse_Recv_Probe{sub = &sub}
+	handle := thread.create_and_start_with_data(
+		rawptr(&probe),
+		sse_test_wait_for_close,
+		name = "sse-shutdown-wait",
+	)
+	testing.expect(t, handle != nil)
+	if handle == nil {
+		return
+	}
+	// 给线程一点时间进入阻塞 recv（没有更可靠的“已阻塞”信号）。
+	time.sleep(20 * time.Millisecond)
+
+	app_shutdown(&app)
+
+	start := time.tick_now()
+	for sync.atomic_load(&probe.done) == 0 && time.tick_since(start) < 2 * time.Second {
+		time.sleep(2 * time.Millisecond)
+	}
+	done := sync.atomic_load(&probe.done)
+	got := sync.atomic_load(&probe.got)
+	if done == 0 {
+		// 收尾逻辑没唤醒 recv 时，手动关闭 channel，避免测试进程挂死。
+		sync_chan.close(sub.frames)
+	}
+	thread.join(handle)
+	thread.destroy(handle)
+	sse_hub_unsubscribe(&app.hub, &sub)
+
+	testing.expect_value(t, done, i32(1))
+	testing.expect_value(t, got, i32(2))
+
+	// 关停路径必须可重入。
+	app_shutdown(&app)
 }
 
 @(test)

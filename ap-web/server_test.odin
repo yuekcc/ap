@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:strings"
 import "core:testing"
+import "core:time"
 
 test_parse :: proc(request: string) -> Request_Parse {
 	return parse_request_bytes(transmute([]byte)request)
@@ -116,7 +117,63 @@ test_parse_body_too_large :: proc(t: ^testing.T) {
 	parsed := test_parse(request)
 	testing.expect_value(t, parsed.state, Parse_State.Error)
 	testing.expect_value(t, parsed.status, 413)
+	testing.expect_value(t, parsed.target, "/x")
 }
+
+// 解析层的 413 也必须遵守 API 的 JSON 错误契约；静态资源保持纯文本。
+@(test)
+test_serve_connection_413_api_uses_json_envelope :: proc(t: ^testing.T) {
+	request := strings.concatenate(
+		{
+			"POST /api/turn HTTP/1.1\r\nContent-Length: ",
+			fmt.tprintf("%d", MAX_REQUEST_BODY + 1),
+			"\r\n\r\n",
+		},
+		context.temp_allocator,
+	)
+	transport := test_transport(request)
+	record := Handler_Record{}
+	serve_connection(
+		{user = &transport, recv = test_transport_recv, send = test_transport_send},
+		record_handler,
+		&record,
+	)
+	out := test_transport_output(&transport)
+	testing.expect_value(t, len(record.paths), 0)
+	testing.expect(t, strings.has_prefix(out, "HTTP/1.1 413 Payload Too Large\r\n"))
+	testing.expect(t, strings.contains(out, "Content-Type: application/json; charset=utf-8\r\n"))
+	testing.expect(
+		t,
+		strings.contains(
+			out,
+			`{"error":{"code":"payload_too_large","message":"request body too large"}}`,
+		),
+	)
+}
+
+@(test)
+test_serve_connection_413_static_stays_plain_text :: proc(t: ^testing.T) {
+	request := strings.concatenate(
+		{
+			"POST /index.html HTTP/1.1\r\nContent-Length: ",
+			fmt.tprintf("%d", MAX_REQUEST_BODY + 1),
+			"\r\n\r\n",
+		},
+		context.temp_allocator,
+	)
+	transport := test_transport(request)
+	record := Handler_Record{}
+	serve_connection(
+		{user = &transport, recv = test_transport_recv, send = test_transport_send},
+		record_handler,
+		&record,
+	)
+	out := test_transport_output(&transport)
+	testing.expect(t, strings.has_prefix(out, "HTTP/1.1 413 Payload Too Large\r\n"))
+	testing.expect(t, strings.contains(out, "Content-Type: text/plain; charset=utf-8\r\n"))
+	testing.expect(t, !strings.contains(out, `"code":"payload_too_large"`))
+}
+
 
 @(test)
 test_parse_rejects_chunked :: proc(t: ^testing.T) {
@@ -193,10 +250,15 @@ Test_Transport :: struct {
 	output:    [dynamic]u8,
 	max_read:  int,
 	fail_send: bool,
+	fail_recv: bool, // 模拟 SO_RCVTIMEO 到期
+	timeouts:  [dynamic]time.Duration,
 }
 
 test_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) {
 	transport := (^Test_Transport)(user)
+	if transport.fail_recv {
+		return 0, false
+	}
 	if transport.pos >= len(transport.input) {
 		return 0, true
 	}
@@ -211,6 +273,12 @@ test_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) 
 	copy(buffer[:want], transport.input[transport.pos:transport.pos + want])
 	transport.pos += want
 	return want, true
+}
+
+test_transport_set_timeout :: proc(user: rawptr, timeout: time.Duration) -> bool {
+	transport := (^Test_Transport)(user)
+	append(&transport.timeouts, timeout)
+	return true
 }
 
 test_transport_send :: proc(user: rawptr, data: []byte) -> bool {
@@ -319,3 +387,48 @@ test_serve_connection_eof_mid_request :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(record.paths), 0)
 	testing.expect_value(t, len(transport.output), 0)
 }
+
+// 空闲 keep-alive 与半截请求用不同读超时：后者更短，慢速客户端不能长期占住连接线程。
+@(test)
+test_serve_connection_sets_idle_and_request_read_timeouts :: proc(t: ^testing.T) {
+	transport := test_transport("GET /a HTTP/1.1\r\nHost: x\r\n")
+	record := Handler_Record{}
+	serve_connection(
+		{
+			user = &transport,
+			recv = test_transport_recv,
+			send = test_transport_send,
+			set_read_timeout = test_transport_set_timeout,
+		},
+		record_handler,
+		&record,
+	)
+	testing.expect_value(t, transport.timeouts[0], IDLE_READ_TIMEOUT)
+	testing.expect(t, len(transport.timeouts) > 1)
+	for timeout in transport.timeouts[1:] {
+		testing.expect_value(t, timeout, REQUEST_READ_TIMEOUT)
+	}
+	testing.expect(t, IDLE_READ_TIMEOUT > REQUEST_READ_TIMEOUT)
+}
+
+// 读超时（recv 返回 !ok）必须直接断连：不写响应、不调用 handler。
+@(test)
+test_serve_connection_recv_timeout_closes_without_response :: proc(t: ^testing.T) {
+	transport := Test_Transport{fail_recv = true}
+	record := Handler_Record{}
+	serve_connection(
+		{
+			user = &transport,
+			recv = test_transport_recv,
+			send = test_transport_send,
+			set_read_timeout = test_transport_set_timeout,
+		},
+		record_handler,
+		&record,
+	)
+	testing.expect_value(t, len(record.paths), 0)
+	testing.expect_value(t, len(transport.output), 0)
+	testing.expect_value(t, len(transport.timeouts), 1)
+	testing.expect_value(t, transport.timeouts[0], IDLE_READ_TIMEOUT)
+}
+

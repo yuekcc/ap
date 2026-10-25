@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:net"
 import "core:strconv"
 import "core:strings"
+import "core:time"
 
 // HTTP/1.1 最小子集，约束见 docs/web.md「HTTP 层（手写）」。
 // 解析只接受内存 buffer，socket 读写通过 Transport 注入，测试可以完全不碰网络。
@@ -13,6 +14,11 @@ MAX_HEADERS :: 100
 // 在解析层就被 413 掉，API 的 prompt_too_large 错误体永远走不到。
 MAX_REQUEST_BODY :: 2 * 1024 * 1024
 READ_CHUNK :: 16 * 1024
+
+// 读超时（SO_RCVTIMEO）分两档：等新请求可以久一点，保持浏览器连接复用；
+// 一旦开始读某个请求，就必须在限期内收完，慢速客户端不能长期占住连接线程。
+IDLE_READ_TIMEOUT :: 30 * time.Second
+REQUEST_READ_TIMEOUT :: 10 * time.Second
 
 Http_Method :: enum {
 	Get,
@@ -45,6 +51,8 @@ Request_Parse :: struct {
 	consumed: int,
 	status:   int,
 	message:  string,
+	// 出错时保留已解析出的 request target：/api/ 前缀决定错误体用 JSON 还是纯文本。
+	target:   string,
 }
 
 Http_Response :: struct {
@@ -66,8 +74,8 @@ Http_Stream :: struct {
 	chunk_buf: [dynamic]u8,
 }
 
-// 路由表：精确路径在前台，prefix 路由兜底子路径。后续工单（api.odin）在
-// @(init) 里调用 register_route 注册即可，不需要改服务器主循环。
+// 路由表：精确路径在前台，prefix 路由兜底子路径。api.odin 在启动时调用
+// register_route 注册即可，不需要改服务器主循环。
 Http_Route :: struct {
 	method:  Http_Method,
 	path:    string,
@@ -146,6 +154,8 @@ Transport :: struct {
 	user: rawptr,
 	recv: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool),
 	send: proc(user: rawptr, data: []byte) -> bool,
+	// 可选：设置阻塞读的期限（SO_RCVTIMEO）。为 nil 时依赖 recv 自身实现。
+	set_read_timeout: proc(user: rawptr, timeout: time.Duration) -> bool,
 }
 
 method_from_text :: proc(text: string) -> Http_Method {
@@ -160,8 +170,8 @@ method_from_text :: proc(text: string) -> Http_Method {
 	return .Other
 }
 
-parse_fail :: proc(status: int, message: string) -> Request_Parse {
-	return {state = .Error, status = status, message = message}
+parse_fail :: proc(status: int, message: string, target := "") -> Request_Parse {
+	return {state = .Error, status = status, message = message, target = target}
 }
 
 find_header_end :: proc(buffer: []byte) -> int {
@@ -260,23 +270,23 @@ parse_request_bytes :: proc(
 	for line in lines[1:] {
 		colon := strings.index_byte(line, ':')
 		if colon <= 0 {
-			return parse_fail(400, "malformed header")
+			return parse_fail(400, "malformed header", target)
 		}
 		name := line[:colon]
 		if strings.contains_any(name, " \t") {
-			return parse_fail(400, "malformed header name")
+			return parse_fail(400, "malformed header name", target)
 		}
 		value := strings.trim_space(line[colon + 1:])
 		if strings.equal_fold(name, "content-length") {
 			content_length_count += 1
 			if content_length_count > 1 {
-				return parse_fail(400, "duplicate Content-Length")
+				return parse_fail(400, "duplicate Content-Length", target)
 			}
 			content_length_text = value
 		}
 		if strings.equal_fold(name, "transfer-encoding") {
 			// chunked 请求体不支持；identity 也不实现，直接拒绝。
-			return parse_fail(400, "Transfer-Encoding is not supported")
+			return parse_fail(400, "Transfer-Encoding is not supported", target)
 		}
 		append(&headers, Http_Header{name = name, value = value})
 	}
@@ -286,14 +296,14 @@ parse_request_bytes :: proc(
 	if content_length_count > 0 {
 		n, ok := strconv.parse_int(content_length_text, 10)
 		if !ok || n < 0 {
-			return parse_fail(400, "invalid Content-Length")
+			return parse_fail(400, "invalid Content-Length", target)
 		}
 		if n > MAX_REQUEST_BODY {
-			return parse_fail(413, "request body too large")
+			return parse_fail(413, "request body too large", target)
 		}
 		body_length = n
 	} else if method == .Post {
-		return parse_fail(400, "Content-Length is required")
+		return parse_fail(400, "Content-Length is required", target)
 	}
 
 	consumed := header_end + 4 + body_length
@@ -304,7 +314,7 @@ parse_request_bytes :: proc(
 	path_raw, query := split_target(target)
 	path, decoded := percent_decode(path_raw, allocator)
 	if !decoded {
-		return parse_fail(400, "invalid percent-encoding")
+		return parse_fail(400, "invalid percent-encoding", target)
 	}
 
 	keep_alive := version == "HTTP/1.1"
@@ -466,18 +476,58 @@ response_stream_end :: proc(response: ^Http_Response) {
 	_ = response.stream.transport.send(response.stream.transport.user, transmute([]byte)string("0\r\n\r\n"))
 }
 
-write_error_response :: proc(transport: Transport, status: int, message: string) {
+write_error_response :: proc(
+	transport: Transport,
+	status: int,
+	message: string,
+	json_api := false,
+) {
 	response := Http_Response {
 		status  = status,
 		headers = make([dynamic]Http_Header, 0, 4, context.temp_allocator),
 	}
-	body := status_text(status)
-	if len(message) > 0 {
-		body = message
+	if json_api {
+		// /api/* 的错误体必须与 handler 一致；这些 message 都是本文件的固定字面量，
+		// 不含需要 JSON 转义的字符。
+		body := fmt.tprintf(
+			`{{"error":{{"code":"%s","message":"%s"}}}}`,
+			http_error_code(status),
+			message,
+		)
+		response_text(&response, status, body)
+		response_set_header(&response, "Content-Type", "application/json; charset=utf-8")
+	} else {
+		body := status_text(status)
+		if len(message) > 0 {
+			body = message
+		}
+		response_text(&response, status, body)
+		response_set_header(&response, "Content-Type", "text/plain; charset=utf-8")
 	}
-	response_text(&response, status, body)
-	response_set_header(&response, "Content-Type", "text/plain; charset=utf-8")
 	_ = write_response(transport, &response, true)
+}
+
+// 解析层没有 api.odin 的 Api_Error，这里给出同样的 code 映射。
+http_error_code :: proc(status: int) -> string {
+	switch status {
+	case 400:
+		return "bad_request"
+	case 403:
+		return "forbidden"
+	case 404:
+		return "not_found"
+	case 405:
+		return "method_not_allowed"
+	case 413:
+		return "payload_too_large"
+	case 503:
+		return "service_unavailable"
+	}
+	return "internal_error"
+}
+
+is_api_target :: proc(target: string) -> bool {
+	return target == "/api" || strings.has_prefix(target, "/api/")
 }
 
 // 每连接一个状态机：读满头部 → 解析 → 交给 handler → 写出 → 保留 buffer 里
@@ -494,6 +544,10 @@ serve_connection :: proc(
 		parsed := parse_request_bytes(buffer[:])
 		switch parsed.state {
 		case .Incomplete:
+			if transport.set_read_timeout != nil {
+				timeout := IDLE_READ_TIMEOUT if len(buffer) == 0 else REQUEST_READ_TIMEOUT
+				_ = transport.set_read_timeout(transport.user, timeout)
+			}
 			chunk: [READ_CHUNK]u8
 			n, ok := transport.recv(transport.user, chunk[:])
 			if !ok || n <= 0 {
@@ -501,12 +555,22 @@ serve_connection :: proc(
 			}
 			append(&buffer, ..chunk[:n])
 		case .Error:
-			write_error_response(transport, parsed.status, parsed.message)
+			write_error_response(
+				transport,
+				parsed.status,
+				parsed.message,
+				is_api_target(parsed.target),
+			)
 			return
 		case .Complete:
 			request := parsed.request
 			if request.method == .Other {
-				write_error_response(transport, 405, "method not allowed")
+				write_error_response(
+					transport,
+					405,
+					"method not allowed",
+					is_api_target(request.target),
+				)
 				return
 			}
 
@@ -548,7 +612,13 @@ socket_transport :: proc(socket: ^net.TCP_Socket) -> Transport {
 		user = socket,
 		recv = socket_transport_recv,
 		send = socket_transport_send,
+		set_read_timeout = socket_transport_set_timeout,
 	}
+}
+
+socket_transport_set_timeout :: proc(user: rawptr, timeout: time.Duration) -> bool {
+	socket := (^net.TCP_Socket)(user)^
+	return socket_set_read_timeout(socket, timeout)
 }
 
 socket_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) {

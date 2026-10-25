@@ -1,7 +1,7 @@
 // 事件 → 视图模型。规则复刻 ap-tui/render.odin，但输出纯数据，不碰 DOM：
 // store.js 只负责把结果同步进 Alpine reactive 对象，测试可以直接喂事件断言。
 //
-// 关键规则（docs/web.md「前端」、events-notes.md）：
+// 关键规则（docs/web.md「前端」）：
 // - message_update 按 delta.text 逐段累积；reasoning 不展示。
 // - message_end 只在没有收到过 text delta 时补全文（history 模式则总是取全文）。
 // - tool_execution_start 建卡；update 追加流式输出（不截断）；end 标 ✓/✗、
@@ -226,6 +226,12 @@ export function appendUserMessage(state, text) {
 
 export function appendNotice(state, text, tone = "muted") {
 	return addNotice(state, text, tone);
+}
+
+// 切工作目录：服务器已经清空 session 指针，前端也必须丢弃旧 transcript。
+// 旧消息属于旧 project，保留会让下一轮新 session 叠在旧画面上。
+export function stateAfterCwdChange() {
+	return addNotice(createState(), "已切换工作目录，请开始新 session", "muted");
 }
 
 // ---------------------------------------------------------------------------

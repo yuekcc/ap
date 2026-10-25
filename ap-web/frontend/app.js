@@ -1,6 +1,6 @@
 // 页面交互：加载 config/current/history，订阅 SSE，发送/取消 turn，
 // 切换或新建 session，Windows 下选择工作目录。所有异步错误都落成 notice，
-// 不让页面因为一个接口 404/501 就白屏（工单 04 未联调时也能看到 UI）。
+// 不让页面因为一个接口 404/501 就白屏。
 import { api } from "./api.js";
 import { createEventStream } from "./sse.js";
 
@@ -268,10 +268,9 @@ export function registerApp(Alpine) {
 				const result = await api.pickCwd();
 				if (result?.cwd) {
 					store.setCwd(result.cwd);
-					store.notice(
-						`工作目录已切换为 ${result.cwd}；如需干净上下文，请新建会话`,
-						"muted",
-					);
+					// 服务器已清空 session 指针；前端同步丢弃旧 project 的 transcript。
+					store.resetAfterCwdChange();
+					await this.loadSessions();
 				}
 			} catch (error) {
 				// 用户主动关掉对话框不是错误。
