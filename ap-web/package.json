@@ -1,0 +1,18 @@
+{
+  "name": "ap-web-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ap-web 浏览器端 UI（Alpine.js + esbuild）",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "test": "node --test frontend/render.test.mjs"
+  },
+  "dependencies": {
+    "alpinejs": "^3.17.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
