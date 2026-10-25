@@ -6,4 +6,4 @@
 
 **Blocked by:** 04（API 与 SSE 流成型后 UI 才能端到端联调）
 
-**Status:** ready-for-agent
+**Status:** done
