@@ -29,6 +29,7 @@ export function registerApp(Alpine) {
 			store.setLoading(true);
 			try {
 				await Promise.all([this.loadConfig(), this.loadSessions()]);
+				await this.loadCwd();
 
 				let sessionId = null;
 				try {
@@ -67,6 +68,16 @@ export function registerApp(Alpine) {
 				this.$store.ap.setSessions(await api.sessions());
 			} catch (error) {
 				this.fail("读取会话列表失败", error);
+			}
+		},
+
+		// /api/config 给的是启动参数里的 cwd；运行期切换过目录后以 /api/cwd 为准。
+		async loadCwd() {
+			try {
+				const data = await api.cwd();
+				if (data?.cwd) this.$store.ap.setCwd(data.cwd);
+			} catch {
+				// 老服务端可能还没有这个端点；config.cwd 仍可作为回显。
 			}
 		},
 
