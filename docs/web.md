@@ -1,0 +1,319 @@
+# ap-web：HTTP/SSE 服务器与 Web UI
+
+`ap-web` 是 ap 的第三个外部消费者（CLI 脚本、ap-tui 之外），把 agent 能力以 HTTP + SSE 的形式暴露给浏览器。它**不是** ap 的一部分：不实现 agent、provider、工具或 transcript 写入，每个用户 turn 都启动一个新的 `ap` 子进程，通过 `stream-json` 读取事件并转发给浏览器——进程模型与 [tui.md](tui.md) 的 ap-tui 完全同构，只是「渲染器」从终端换成了 HTTP 连接上的浏览器。
+
+```
+浏览器 ──fetch──► ap-web ──spawn──► ap --print0 --output-format stream-json [-s <id>]
+                    │                        │
+                    │◄── HTTP API ───────────┤
+                    │◄── SSE: 转发的事件 ────┤  stdout: 事件
+                    │                        │  stderr: 日志（缓存）
+                    ▼
+              Web UI（Alpine.js SPA，内置于 exe）
+```
+
+一个 `ap-web/` 目录承载全部内容：Odin 服务器源码、前端源码、前端构建配置；最终产物是单个 `ap-web.exe`（Web 资源编译期内置，不需要随 exe 分发任何文件）。
+
+## 目标
+
+1. 用 `core:net` 手写 HTTP/1.1 + SSE 服务器，零第三方依赖（不引入 laytan/odin-http）
+2. 复用 ap-tui 已验证的子进程模型与事件解析；协议层复用 `internal/` 与 ap-tui 的既有结构
+3. Web UI 用 Alpine.js + 原生 `fetch`/`EventSource`，esbuild 打包；npm 依赖只有 `esbuild` + `alpinejs` 两个
+4. 跨平台行为与 ap-tui 一致（Windows/Linux/macOS）；产物形态与 ap 一致：单 exe，无运行时文件依赖
+
+## 非目标
+
+1. 不做多用户/鉴权/CORS 开放：默认只监听 `127.0.0.1`，是单用户本地工具
+2. 不做 HTTPS/TLS 终止：本地回环明文；需要外网时由反向代理承担
+3. ap 本体不感知 HTTP；不修改 ap 的 CLI 契约与事件 schema
+4. 不做 HTTP/2、WebSocket、gzip
+5. 不内嵌 Node 运行时；esbuild 只是构建期依赖，运行时不需要 Node
+
+## 目录结构
+
+```
+ap-web/
+├── main.odin            # 入口：参数解析、监听、accept 循环（package main）
+├── server.odin          # HTTP 层：请求解析、响应写出、keep-alive 状态机
+├── http_util.odin       # MIME、percent-decode、状态行/头部写出
+├── api.odin             # 路由表 → handler；JSON 编解码
+├── sse.odin             # SSE 帧编码、hub（订阅表 + 互斥锁 + 广播）、心跳
+├── agent.odin           # 复刻 ap-tui/agent.odin：spawn ap、pipe、事件泵、退出码
+├── runner.odin          # turn runner：单飞锁、取消、stderr 缓存、turn_done 组装
+├── events.odin          # 与 ap-tui/events.odin 同构的 Event 解析（先复制，后下沉）
+├── pickdir.odin         # 工作目录选择对话框：Windows IFileDialog（COM STA）；Unix 返回 501
+├── assets.odin          # 内置资源表：#load_directory("dist") + 查找/兜底
+├── platform_windows.odin / platform_unix.odin
+├── package.json         # deps: esbuild + alpinejs；scripts: build / watch
+├── build.mjs            # esbuild 脚本：frontend/main.js → dist/（app.js + styles.css），拷贝 index.html
+├── index.html           # Alpine 模板宿主（构建时拷入 dist/）
+├── frontend/            # 前端源码（无 .odin 文件，不影响 Odin 包）
+│   ├── main.js          # 入口：import Alpine 与 styles.css，注册 store 后启动
+│   ├── styles.css       # Josh's Custom CSS Reset 开头 + 应用样式
+│   ├── api.js           # fetch 封装
+│   ├── sse.js           # EventSource 封装：重连、事件分派
+│   ├── store.js         # Alpine.reactive store：session 状态、消息列表、工具卡片
+│   ├── render.js         # 事件 → 视图模型（复刻 ap-tui 渲染规则）
+│   └── app.js           # 输入框、发送/取消、session 切换、目录选择
+└── dist/                # esbuild 产物（提交进仓库）：index.html + app.js + styles.css
+```
+
+说明：
+
+- Odin 的包规则是「目录内所有 `.odin` 文件同属一个包」；`frontend/`、`dist/`、`node_modules/` 里没有 `.odin` 文件，与包不冲突
+- `dist/` **必须提交进仓库**：`#load_directory` 在编译期读取它，仓库里始终要有一份可编译的产物；同时这让 Odin 构建不依赖 Node
+- 前端源码放 `frontend/` 子目录，避免 `dist/` 生成物与源码混在一起难以辨认
+
+## 进程模型
+
+```
+ap-web（主进程）
+├── accept 线程：core:net 阻塞 accept 循环（SO_REUSEADDR）
+├── 每连接一个线程（core:thread.spawn，连接关闭即回收）
+│     ├── 静态资源请求 → 内置资源表查找 → 返回
+│     ├── API 请求 → 解析 → 路由 → JSON 响应
+│     └── SSE 请求 → 注册到 hub → 阻塞读 hub channel → 写 chunk
+└── turn runner：单飞（同一时刻至多一个 ap 子进程在跑）
+```
+
+### 为什么每连接一线程而不是事件循环
+
+- 目标规模是 1 个浏览器标签页（至多几个）；线程数个位数，`core:thread` 足够
+- 阻塞 IO 的代码与 ap-tui 的子进程读取逻辑同构，可以直接照搬 `ap-tui/agent.odin` 的 spawn/pipe 模式（含 Windows 继承标志清理）
+- Odin 没有 async/await；写一个 select/epoll 抽象层的复杂度远超收益
+
+### Turn 生命周期
+
+与 ap-tui 一轮完全一致：
+
+1. `POST /api/turn` 校验参数，检查当前没有运行中的 turn（409 否则）
+2. spawn `ap --print0 --output-format stream-json [-s <id>] <透传>`，提示词写 stdin 后关写端（Windows 上清理管道句柄继承标志，见 [tui.md](tui.md) 的坑）
+3. 逐行读 stdout：`parse_event_line`（复用 ap-tui 的事件结构）→ 逐事件推给 hub → SSE 广播
+4. stderr 缓存；turn 异常退出时随 `turn_done` 的 `stderr_preview` 带给前端
+5. 进程退出：从最后一条 `session_start` 拿 `session_id` 存为当前 session；广播 `turn_done`（含退出码与 stop_reason）
+6. 运行中收到 `DELETE /api/turn`：向 ap 进程树发终止（复用 ap 内部的进程树终止语义：Unix SIGTERM→SIGKILL，Windows Job Object），ap 自己写 `session_end(reason=signal)`
+
+### 取消与并发约束
+
+- **单飞**：同一 session 同一时刻只允许一个 turn；运行中再 `POST /api/turn` 返回 409。多 session 并发是 phase 2
+- turn runner 在独立线程执行，SSE 连接挂掉**不**取消 turn（浏览器刷新后通过 `GET /api/history` + 重新订阅恢复画面）
+- ap-web 进程退出时向运行中的 ap 发终止并等待至多 5s
+
+## HTTP 层（手写）
+
+只实现 HTTP/1.1 的最小子集，够本 UI 用即可：
+
+- 请求：request line + headers + body（`Content-Length` 必填，**不支持** `Transfer-Encoding: chunked` 请求体；不支持 100-continue）
+- 响应：`Content-Length` 定长；SSE 用 chunked（只写不读，实现简单）
+- 方法：GET / POST / DELETE；其余返回 405
+- 头解析：逐行直到 CRLF CRLF；单行上限 32KB，头部总数上限 100
+- keep-alive：默认开启；读下一请求前等完整头部；SSE/出错响应后关闭连接
+- URL：只做 percent-decode 与 `?` query 切分；路由匹配纯前缀 + 精确表，不写通配框架
+
+明确不做：管线化、range、If-Modified-Since、gzip、多 part。
+
+### 内置静态资源
+
+- `assets.odin` 用 `#load_directory("dist")` 把整个 `dist/` 编进 exe，得到编译期的 `{name, data}` 表；查找按文件名精确匹配，`index.html` 兜底
+- MIME 按扩展名查静态表（html/js/css/svg/png/ico/wasm）
+- ETag 用编译期算的文件内容 hash（`#load_hash`），命中 `If-None-Match` 返回 304——静态资源没有修改时间概念，内容 hash 是唯一可用的缓存键
+- `--web-root <dir>` 开发模式开关：给定时改从磁盘读该目录（前端改样式不用重编 exe）；默认走内置表。两条路径共用同一套查找/MIME/兜底逻辑，磁盘实现只是把「查表」换成「读文件」
+- 长度上限：单文件 8MB（esbuild 产物远小于此）；`app.js` 内已含 Alpine，不依赖 CDN
+
+### SSE
+
+- `Content-Type: text/event-stream`，`Cache-Control: no-cache`，`Connection: close`，禁用 Nagle（`TCP_NODELAY`）
+- 帧格式：`event: <type>\ndata: <json>\nid: <seq>\n\n`；`id` 单调递增，浏览器 `Last-Event-ID` 重连时从 transcript 补齐缺口（phase 1 可只做「重连即重放全量」）
+- 心跳：每 15s 发 `: ping\n\n` 注释行，防代理超时
+- 写失败（EPIPE/连接 reset）即丢弃该订阅者，不影响 turn
+
+## HTTP API
+
+约定：请求/响应都是 `application/json; charset=utf-8`；错误用 `{"error": {"code": "...", "message": "..."}}`；status 一律语义化。
+
+| 方法 | 路径 | 请求 | 响应 | 说明 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/health` | – | `{"ok": true, "version": ...}` | 探活 |
+| GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 从 ap-web 启动参数/env 组装，前端展示；`platform` 决定是否显示目录选择入口 |
+| GET | `/api/session/current` | – | `{session_id, running, turn}` | 当前 session 与运行状态 |
+| POST | `/api/session/new` | – | `{session_id: null}` | 语义动作：清空当前指针，下一条提示词让 ap 新建 session（同 ap-tui `/new`）；不落盘任何东西 |
+| GET | `/api/sessions` | – | `[{session_id, ts, turns}]` | 复用 `internal/sessions.odin` 列表，前端选择恢复 |
+| POST | `/api/session/resume` | `{session_id}` | `{session_id}` | 指针切换；不校验合法性，交给下一轮 ap 报错 |
+| GET | `/api/history?session_id=<id>` | – | `{events: [...]}` | transcript 重放：逐行读 JSONL，`*_ref` 从 blobs 解析，超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
+| GET | `/api/cwd` | – | `{cwd}` | 当前工作目录（启动目录；切换后为最后设置的值） |
+| POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；用户确认后返回所选路径并更新 cwd。见「工作目录选择」 |
+| POST | `/api/turn` | `{prompt}` | `202 {accepted: true}` | 启动一轮；运行中 409 `turn_running`；`prompt` 为空 400 |
+| DELETE | `/api/turn` | – | `202` | 取消当前 turn（终止进程树） |
+| GET | `/api/events` | – | SSE 流 | 见下节 |
+
+透传：`POST /api/turn` 可带可选 `model` / `agent` / `max_steps` / `max_tokens`，ap-web 原样转成命令行参数——与 ap-tui 透传规则一致。
+
+## 工作目录选择
+
+输入框旁有一个「选择目录」入口，点击后：
+
+```
+前端 ──POST /api/cwd/pick──► ap-web ──COM──► Windows 目录选择对话框（IFileDialog）
+     ◄──── 200 {cwd} ────────  （用户确认）
+```
+
+为什么由服务器弹原生对话框，而不是浏览器自己的 `<input type="file" webkitdirectory>`：
+
+- 浏览器出于安全只把 `<input type=file>` 的 `value` 暴露为 `C:\fakepath\`；`showDirectoryPicker()` 也只给句柄不给绝对路径。前端拿不到真实的 Windows 路径，而 ap 的工作目录必须是绝对路径
+- 反过来，拿到路径也传不回去：`<input>` 没有赋值 API。所以必须由 ap-web 侧出对话框
+
+实现要点：
+
+1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；不占用任何 HTTP 连接线程
+2. **Unix**：无统一的原生目录对话框 API，phase 1 直接 `501 not_implemented`，前端隐藏该入口（`GET /api/config` 返回 `platform` 字段区分）；phase 2 可考虑 `zenity`/`kdialog` 探测
+3. **取消语义**：用户关掉对话框 → `409 {error: {code: "cancelled"}}`，前端静默忽略
+4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；运行中调用 `POST /api/cwd/pick` 返回 409 `turn_running`
+5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加；前端切目录后应引导开新 session
+6. **并发**：同一时刻只允许一个 pick 请求；重复调用返回 409 `picker_busy`（一个模态对话框只能有一份）
+
+## SSE 事件流
+
+SSE 事件是 ap stream-json 事件的**直转发**加上一层薄信封。不重新设计事件 schema：
+
+```
+event: ap
+id: 42
+data: {"v":1,"seq":7,"ts":...,"type":"message_update","delta":{"text":"..."}}
+
+event: turn_done
+id: 43
+data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
+```
+
+| SSE event | data | 说明 |
+| --- | --- | --- |
+| `ap` | ap 的 stream-json 事件原样 | 前端按 `type` 分派（`session_start` / `message_update` / `message_end` / `tool_execution_start/update/end` / `turn_start/turn_end` / `error`） |
+| `turn_done` | `{exit_code, stop_reason, usage, stderr_preview}` | turn 结束信封；`stop_reason` 取自 `turn_end`/`session_end`，缺失时为 null |
+| `ping` | `{ts}` | 心跳（也作为 SSE 注释行发送） |
+
+事件顺序保证：单 session 内 ap-web 按收到顺序广播，天然与 stdout 行序一致；不做 seq 去重（ap 保证单调）。
+
+### 历史与实时的衔接
+
+前端两条路径到同一份事实（transcript）：
+
+- 打开/切 session：`GET /api/history` 渲染存量；然后 `GET /api/events` 订阅增量
+- 竞态：订阅成功后若发现 `session_start` 或按 `seq` 比对与已有末尾重叝始化，直接跳过（transcript 事件的 `seq` 单调，前端以此为去重键）
+- 刷新页面重连：重新走 history + subscribe；不做断点续传（phase 2 可用 `Last-Event-ID` + transcript seq 补差）
+
+## 前端
+
+- 依赖仅 `esbuild`（dev）+ `alpinejs`（runtime，~15KB gzip）；`EventSource`、`fetch` 全用浏览器原生
+- **目标浏览器**：只面向现代浏览器（Chrome/Edge/Firefox/Safari 近两年版本），CSS 可放心用 `interpolate-size`、`:has()`、CSS 嵌套等新特性，不写 polyfill、不做厂商前缀（reset 里保留的 `-webkit-font-smoothing` 除外）
+- **样式基线**：`frontend/styles.css` 以 Josh's Custom CSS Reset（joshwcomeau.com/css/custom-css-reset）开头原样引入，应用样式接在其后；不引入其他 reset/normalize/框架
+
+### 布局约定
+
+| 层级 | 用什么 | 落在哪 |
+| --- | --- | --- |
+| 页面骨架 | **grid** | `index.html` 的 `body`/根容器：`grid-template-rows: auto minmax(0, 1fr) auto`（顶栏 / 滚动消息区 / 输入区），消息区自身可 `overflow-y: auto` |
+| 组件内部（块级布局） | **flex** | 消息行、工具卡片头部（图标+名称+耗时）、顶栏按钮组、输入区（textarea + 发送/取消/选目录按钮）一律 flexbox |
+
+规则：grid 只出现在页面级骨架（定义行列区域），其余所有块级排列都是 flex；不用 float、不写绝对定位布局（仅个别 `position: sticky` 类效果允许）。消息区用 `minmax(0, 1fr)` 而不是 `1fr`，避免长内容把 grid 撑开——这是 grid 滚动容器的常见坑。
+
+- store 状态机与 ap-tui 渲染一一对应：`idle` / `running`；`message_update` 按 delta 累积，`message_end` 只补缺（避免重复，同 ap-tui 规则）
+- 工具卡片：`tool_execution_start` 建卡片（名称 + 参数），`tool_execution_update` 增量追加（bash 流式），`tool_execution_end` 标记 ✓/✗、耗时、退出码；结果超限截断提示（完整内容在 transcript）
+- 转义：所有模型输出/工具输出经 `textContent` 写入，不做 innerHTML；Markdown 渲染 phase 2 再议
+- phase 1 单页单 session，无路由库
+
+## 构建与运行
+
+### 前端（可选，需要 Node）
+
+```sh
+npm --prefix ap-web install        # 仅 esbuild + alpinejs
+npm --prefix ap-web run build      # esbuild → dist/（index.html + app.js + styles.css）
+npm --prefix ap-web run watch      # 开发期监听
+```
+
+`dist/` 提交进仓库，所以平时改 Odin 代码不需要 Node。
+
+### 全量构建
+
+```sh
+./build.sh        # Windows 下 ./build.ps1
+# 产物：bin/ap.exe  bin/ap-tui.exe  bin/ap-web.exe
+```
+
+构建脚本逻辑：
+
+1. 探测 `npx`：存在则先跑 `npm --prefix ap-web run build` 刷新 dist；不存在则跳过（用仓库里已提交的 dist）
+2. `odin build ../ap-web -out:ap-web -vet`（与 ap、ap-tui 并列）
+
+注意：`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，目录不存在直接编译失败——这就是 dist 必须提交仓库、且前端构建必须先于 Odin 构建的原因。
+
+### 运行
+
+```sh
+./bin/ap-web                       # http://127.0.0.1:8417
+./bin/ap-web --web-root ap-web/dist   # 开发模式：静态资源走磁盘，前端改动刷新即生效
+./bin/ap-web -c                    # 启动即定位当前项目最近的 session
+./bin/ap-web -s ses_...
+```
+
+## CLI
+
+```
+ap-web [--port 8417] [--host 127.0.0.1] [--web-root <dir>]
+       [--agent-bin <path>] [-s <id>] [-c] [--model ...] [--max-steps ...]
+       [--max-tokens ...] [--config-dir <dir>] [--cwd <dir>]
+```
+
+- `--agent-bin` / `AP_AGENT_BIN` / 同目录 / PATH：可执行文件查找顺序与 ap-tui 相同
+- `-s` / `-c`：启动时定位初始 session（复用 internal/sessions）
+- `--cwd <dir>`：初始工作目录，默认进程启动目录；运行期可通过 Web UI 的目录选择修改（进程级，不持久化）
+- `--port` 默认 8417；`--host` 默认 `127.0.0.1`，写死本机回环为默认值是刻意的安全默认
+
+## 依赖方向与代码复用
+
+对齐 [architecture.md](architecture.md)：
+
+```
+ap-web ──► internal ──► (core only)
+ap-web 不 import ap、不 import ap-tui
+```
+
+事件解析、spawn/pipe、project hash 三块与 ap-tui 重复度高。方案：**先复制，后下沉**——phase 1 直接把 `ap-tui/agent.odin`、`events.odin`、`project.odin` 拷进 ap-web 起步（同一仓库，无碍）；跑通后把无 UI 依赖的部分（事件解析、spawn 封装）下沉到 `internal/`，ap-tui 与 ap-web 共同引用。避免第一版就做跨三个包的大重构。
+
+## 安全
+
+1. 默认只监听 `127.0.0.1`；显式 `--host 0.0.0.0` 时启动日志打印醒目警告（agent 可执行任意 bash）
+2. 无鉴权是接受的设计：本工具与 `ap` CLI 本身同权限运行，攻击面等价于「能访问端口就能用 shell」——因此默认回环 + 不做 CORS 放开（同源部署，`Origin` 校验 phase 2 有需要再加）
+3. 静态资源来自编译期内置表或 `--web-root` 白名单目录；磁盘模式下路径解析后必须落在 web-root 内，否则 403（内置表模式无路径可言，不存在穿越）
+4. `POST /api/turn` 的 prompt 长度上限 1MB；SSE 单事件 data 上限对齐 blob 阈值，超限走 `*_ref` + history 接口
+5. 转发到 ap 的命令行参数全部来自服务端白名单映射，不拼接 shell
+
+## 风险与对策
+
+| 风险 | 对策 |
+| --- | --- |
+| 手写 HTTP 的边界 case（慢速攻击、畸形请求） | 只回环监听 + 头部/行上限 + 超时即断连；不追求公网健壮性 |
+| `core:thread` 与 Odin runtime 交互（heap/allocator） | 每连接线程用独立 arena，请求结束释放；hub 用 `sync.Mutex` + 动态数组，不依赖复杂并发原语 |
+| Windows 管道继承（ap-tui 已踩过的坑） | 直接复用 ap-tui 的 `mark_non_inheritable` 模式 |
+| COM 对话框与 Odin 的交互（COM 头文件/绑定需手写、STA 要求） | `IFileDialog` 只用 5 个 vtable 方法（`SetOptions` / `Show` / `GetResult` / `GetPath` + `Release`），手写最小 COM 绑定放 `pickdir.odin`；专用 STA 线程隔离，失败时返回 500 并提示手输路径 |
+| 模态对话框阻塞期间用户关掉浏览器 | pick 请求结果作废即可，无状态残留；对话框由用户自行关闭 |
+| nightly stdlib 变动（`core:net` API 漂移） | 构建脚本已 pin 版本；socket 用法集中在一个文件 |
+| `#load_directory` 要求 dist 在编译期存在 | dist 提交仓库 + 构建脚本先跑 esbuild（有 npx 时）；CI 无 Node 也能用提交的 dist 编译 |
+| 内置资源让 exe 变大 | dist 三个文件合计 < 100KB（Alpine ~15KB gzip），可忽略 |
+| SSE 被浏览器/代理缓冲 | `text/event-stream` + 立即 flush + 心跳；本地直连无中间代理，风险低 |
+| 事件解析三处漂移（ap/ap-tui/ap-web） | phase 1 先复制起步，phase 2 下沉 `internal/` 后只剩一处 |
+
+## 测试
+
+1. `odin test ap-web`：HTTP 解析（request line/headers/body 上限、keep-alive）、SSE 帧编码、事件泵、路由、内置资源查找
+2. 集成（真 spawn ap，沿用 ap 的 test_helpers）：一轮完整 turn 的 SSE 事件序列、取消语义、异常退出 stderr 呈现
+3. 手动矩阵：Chrome/Edge/Firefox `EventSource` 行为；Windows/Linux 双平台管道与进程树终止
+
+## Phase 2 待做
+
+1. `Last-Event-ID` 断点续传（transcript seq 补差）
+2. 多 session 并发 turn（多标签页）
+3. Markdown/diff 渲染、reasoning 展示开关、usage 状态条
+4. session fork / 删除；文件附件上传
+5. 事件解析与 spawn 层下沉 `internal/`，三消费者共用一份
+6. 远程访问模式：`--host` 放开 + token 鉴权 + HTTPS 由外部代理
