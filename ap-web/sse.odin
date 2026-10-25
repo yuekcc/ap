@@ -86,6 +86,12 @@ Sse_Subscriber :: struct {
 	frames: sync_chan.Chan(string),
 }
 
+// 连接线程阻塞等待下一帧；ok=false 表示订阅已被关闭（hub 丢弃或关停），该收尾了。
+// 返回的字符串归调用方所有，写完后 delete(frame)。
+sse_subscriber_recv :: proc(sub: ^Sse_Subscriber) -> (frame: string, ok: bool) {
+	return sync_chan.recv(sub.frames)
+}
+
 // 订阅表 = 互斥锁 + 动态数组（docs/web.md「风险与对策」：不引入复杂并发原语）。
 // next_id 与订阅表共用一把锁，保证 id 分配和投递顺序一致。
 Sse_Hub :: struct {
@@ -180,15 +186,15 @@ sse_hub_fanout_locked :: proc(hub: ^Sse_Hub, chunk: string) {
 	}
 }
 
-// 关停时调用：关闭所有仍注册的订阅者 channel（唤醒它们的 recv），释放订阅表。
-// Sse_Subscriber 本身归调用方所有，等连接线程退出后由 sse_hub_unsubscribe 收尾。
+// 关停时调用：关闭所有仍注册的订阅者 channel（唤醒阻塞的 recv），释放订阅表。
+// 只 close 不 destroy：channel 归连接线程所有，它退出时会调 sse_hub_unsubscribe 收尾，
+// 所以调用方应先让连接线程结束、再销毁 hub，避免和线程里的 destroy 抢跑。
 sse_hub_destroy :: proc(hub: ^Sse_Hub) {
 	sync.mutex_lock(&hub.mu)
 	defer sync.mutex_unlock(&hub.mu)
 
 	for sub in hub.subscribers {
 		sync_chan.close(sub.frames)
-		sync_chan.destroy(sub.frames)
 	}
 	clear(&hub.subscribers)
 	delete(hub.subscribers)

@@ -2,7 +2,6 @@ package main
 
 import "core:testing"
 import "core:strings"
-import sync_chan "core:sync/chan"
 import "core:thread"
 
 import "../internal"
@@ -84,7 +83,7 @@ test_sse_turn_done_json :: proc(t: ^testing.T) {
 		`"stderr_preview":"line one\nline two\n"}`)
 }
 
-// 没有 turn_end / session_end 时 stop_reason 与 stderr 都是 null，usage 字段全为 null。
+// 空 stderr 与缺失 stop_reason 都编码成 null，前端不用区分「字段不存在」和「空字符串」。
 @(test)
 test_sse_turn_done_json_nulls :: proc(t: ^testing.T) {
 	data := sse_turn_done_json(Sse_Turn_Done{exit_code = 1})
@@ -97,9 +96,34 @@ test_sse_turn_done_json_nulls :: proc(t: ^testing.T) {
 		`"stderr_preview":null}`)
 }
 
+// 端到端：带换行的 stderr 预览进 turn_done 帧。JSON 先把它转义成 \n，
+// 所以帧里只有一行 data；真正的多行 data 编码由 multiline 测试单独锁住。
+@(test)
+test_sse_turn_done_frame_bytes :: proc(t: ^testing.T) {
+	done := Sse_Turn_Done {
+		exit_code      = 1,
+		stop_reason    = "max_steps",
+		stderr_preview = "boom\nsecond line",
+	}
+	data := sse_turn_done_json(done)
+	defer delete(data)
+
+	b := strings.builder_make()
+	defer strings.builder_destroy(&b)
+	sse_encode_event(&b, "turn_done", data, 43)
+
+	testing.expect_value(t, strings.to_string(b),
+		"event: turn_done\n" +
+		`data: {"exit_code":1,"stop_reason":"max_steps",` +
+		`"usage":{"input_tokens":null,"output_tokens":null,` +
+		`"cached_tokens":null,"reasoning_tokens":null,"total_tokens":null},` +
+		`"stderr_preview":"boom\nsecond line"}` + "\n" +
+		"id: 43\n\n")
+}
+
 // 从订阅者 channel 取一帧；测试里总是期望有帧可读。
 sse_test_take :: proc(t: ^testing.T, sub: ^Sse_Subscriber) -> string {
-	frame, ok := sync_chan.recv(sub.frames)
+	frame, ok := sse_subscriber_recv(sub)
 	testing.expect(t, ok, "expected one SSE frame")
 	return frame
 }
@@ -210,7 +234,7 @@ test_hub_drops_subscriber_when_buffer_is_full :: proc(t: ^testing.T) {
 	defer delete(frame)
 	testing.expect_value(t, frame, "event: ap\ndata: {\"n\":1}\nid: 1\n\n")
 
-	_, open := sync_chan.recv(sub.frames)
+	_, open := sse_subscriber_recv(&sub)
 	testing.expect(t, !open, "dropped subscriber's channel must be closed")
 
 	sse_hub_unsubscribe(&hub, &sub)
@@ -240,7 +264,8 @@ test_hub_heartbeat_sends_comment_and_ping :: proc(t: ^testing.T) {
 	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{}`), u64(2))
 }
 
-// 关停时 hub 关闭仍注册的 channel，阻塞在 recv 的连接线程会立刻拿到 !ok 退出。
+// 关停时 hub 关闭仍注册的 channel，阻塞在 recv 的连接线程会立刻拿到 !ok 退出；
+// channel 本身留到线程收尾时由 sse_hub_unsubscribe 销毁。
 @(test)
 test_hub_destroy_closes_subscriber_channels :: proc(t: ^testing.T) {
 	hub: Sse_Hub
@@ -251,8 +276,10 @@ test_hub_destroy_closes_subscriber_channels :: proc(t: ^testing.T) {
 
 	sse_hub_destroy(&hub)
 
-	_, open := sync_chan.recv(sub.frames)
+	_, open := sse_subscriber_recv(&sub)
 	testing.expect(t, !open, "destroyed hub must close subscriber channels")
+
+	sse_hub_unsubscribe(&hub, &sub)
 }
 
 // 事件泵线程和心跳线程会并发广播：id 必须无重复地覆盖 1..N。
