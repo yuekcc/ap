@@ -64,6 +64,26 @@ api_fixture_setup :: proc(t: ^testing.T, app: ^App, dir: string) {
 	runner_init(app)
 }
 
+// 编码失败不能把 2xx 和一句错误 JSON 混在一起：调用方会把它当成成功响应。
+@(test)
+test_api_json_encoding_failure_returns_500 :: proc(t: ^testing.T) {
+	response := Http_Response {
+		status  = 200,
+		headers = make([dynamic]Http_Header, 0, 4, context.temp_allocator),
+	}
+	// core:encoding/json 不支持函数类型，用它触发编码失败。
+	api_json(&response, 200, proc() {})
+	testing.expect_value(t, response.status, 500)
+	testing.expect_value(
+		t,
+		api_response_text(&response),
+		`{"error":{"code":"internal_error","message":"cannot encode response"}}`,
+	)
+	content_type, has_type := header_value(response.headers[:], "content-type")
+	testing.expect(t, has_type)
+	testing.expect(t, strings.contains(content_type, "application/json"))
+}
+
 @(test)
 test_api_health_and_config :: proc(t: ^testing.T) {
 	dir := test_temp_dir("api-basic")

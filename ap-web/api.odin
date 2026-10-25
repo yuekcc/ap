@@ -106,12 +106,17 @@ Api_History :: struct {
 // serve_connection 写完响应后统一回收。
 api_json :: proc(response: ^Http_Response, status: int, value: any) {
 	data, err := json.marshal(value, {}, context.temp_allocator)
-	response_set_header(response, "Content-Type", "application/json; charset=utf-8")
-	response.status = status
 	if err != nil {
-		response.body = transmute([]byte)string(`{"error":{"code":"internal_error","message":"cannot encode response"}}`)
+		// 编码失败说明服务端有 bug；不能保留调用方给的成功状态码。
+		response.status = 500
+		response_set_header(response, "Content-Type", "application/json; charset=utf-8")
+		response.body = transmute([]byte)string(
+			`{"error":{"code":"internal_error","message":"cannot encode response"}}`,
+		)
 		return
 	}
+	response_set_header(response, "Content-Type", "application/json; charset=utf-8")
+	response.status = status
 	response.body = data
 }
 
