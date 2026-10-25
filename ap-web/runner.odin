@@ -126,6 +126,12 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 	}
 	sync.mutex_unlock(&app.runner.mu)
 
+	// 请求里的可选字段优先；没带就用 ap-web 启动参数里的默认值（与 ap-tui 一致）。
+	model := request.model if request.model != nil else app.options.model
+	agent := request.agent if request.agent != nil else app.options.agent
+	max_steps := request.max_steps if request.max_steps != nil else app.options.max_steps
+	max_tokens := request.max_tokens if request.max_tokens != nil else app.options.max_tokens
+
 	job := new(Turn_Job, runtime.heap_allocator())
 	job^ = Turn_Job {
 		app = app,
@@ -134,28 +140,29 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 			session_id = session_snapshot,
 			config_dir = app.config_dir,
 			cwd = app.project.root,
-			model = clone_maybe_string(request.model),
-			agent = clone_maybe_string(request.agent),
-			max_steps = request.max_steps,
-			max_tokens = request.max_tokens,
+			model = clone_maybe_string(model),
+			agent = clone_maybe_string(agent),
+			max_steps = max_steps,
+			max_tokens = max_tokens,
 			cancel = &app.runner.cancel,
 		},
 		prompt = strings.clone(request.prompt, runtime.heap_allocator()),
 	}
 
+	// 先把 job 挂到 runner 再启动线程，避免线程结束得比赋值还快。
+	sync.mutex_lock(&app.runner.mu)
+	app.runner.job = job
+	sync.mutex_unlock(&app.runner.mu)
+
 	handle := thread.create_and_start_with_data(rawptr(job), runner_thread, name = "turn-runner")
 	if handle == nil {
-		free_job(job)
 		sync.mutex_lock(&app.runner.mu)
 		app.runner.running = false
 		app.runner.job = nil
 		sync.mutex_unlock(&app.runner.mu)
+		free_job(job)
 		return .Failed, "cannot start turn thread"
 	}
-
-	sync.mutex_lock(&app.runner.mu)
-	app.runner.job = job
-	sync.mutex_unlock(&app.runner.mu)
 	return .Started, ""
 }
 
@@ -295,11 +302,8 @@ runner_thread :: proc(user: rawptr) {
 	}
 	result := run_agent_turn(job.options, job.prompt, callbacks)
 
-	// 泵内部也从最后一条 session_start 捕获；这里兜底并保证指针是最新的。
-	if len(result.session_id) > 0 {
-		runner_set_session(app, result.session_id)
-	}
-
+	// session 指针已在每条 session_start 回调里更新；这里不再覆盖，
+	// 否则用户 turn 中调 /api/session/new 清掉的指针会被重新写回。
 	done := Sse_Turn_Done {
 		exit_code = result.exit_code,
 		stop_reason = runner_stop_reason(job),

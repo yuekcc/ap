@@ -86,3 +86,14 @@ test_parse_args_unknown_argument :: proc(t: ^testing.T) {
 	_, err := parse_args({"ap-web", "--nope"})
 	testing.expect(t, !cli_is_ok(err))
 }
+
+@(test)
+test_parse_args_agent :: proc(t: ^testing.T) {
+	opts, err := parse_args({"ap-web", "--agent", "general"})
+	testing.expect(t, cli_is_ok(err))
+	testing.expect_value(t, opts.agent.?, "general")
+
+	opts2, err2 := parse_args({"ap-web", "--agent=reviewer"})
+	testing.expect(t, cli_is_ok(err2))
+	testing.expect_value(t, opts2.agent.?, "reviewer")
+}
