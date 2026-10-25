@@ -187,10 +187,11 @@ test_build_response_304_has_no_body_length :: proc(t: ^testing.T) {
 }
 
 Test_Transport :: struct {
-	input:   []byte,
-	pos:     int,
-	output:  [dynamic]u8,
-	max_read: int,
+	input:     []byte,
+	pos:       int,
+	output:    [dynamic]u8,
+	max_read:  int,
+	fail_send: bool,
 }
 
 test_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) {
@@ -213,6 +214,9 @@ test_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) 
 
 test_transport_send :: proc(user: rawptr, data: []byte) -> bool {
 	transport := (^Test_Transport)(user)
+	if transport.fail_send {
+		return false
+	}
 	append(&transport.output, ..data)
 	return true
 }
