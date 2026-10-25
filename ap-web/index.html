@@ -45,15 +45,6 @@
       @click="newSession"
       :disabled="$store.ap.running || $store.ap.loading"
     >新会话</button>
-
-    <button
-      class="control"
-      type="button"
-      x-show="$store.ap.isWindows"
-      @click="pickDirectory"
-      :disabled="$store.ap.running || $store.ap.picking"
-      x-text="$store.ap.picking ? '选择中…' : '选择目录'"
-    ></button>
   </div>
 
   <div class="topbar__status">
@@ -121,6 +112,14 @@
     ></textarea>
 
     <div class="composer__actions">
+      <button
+        class="control"
+        type="button"
+        x-show="$store.ap.isWindows"
+        @click="pickDirectory"
+        :disabled="$store.ap.running || $store.ap.picking"
+        x-text="$store.ap.picking ? '选择中…' : '选择目录'"
+      ></button>
       <button
         class="control control--primary"
         type="button"
