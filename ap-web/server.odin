@@ -453,3 +453,40 @@ socket_transport_send :: proc(user: rawptr, data: []byte) -> bool {
 	written, err := net.send_tcp(socket, data)
 	return err == nil && written == len(data)
 }
+
+// 只接受主机名/IP + 端口，不做 URL 解析。resolve 对 IP 字面量会跳过 DNS。
+resolve_endpoint :: proc(host: string, port: int) -> (net.Endpoint, string) {
+	ep4, ep6, err := net.resolve(host)
+	if err != nil {
+		return {}, fmt.tprintf("cannot resolve --host %q: %v", host, err)
+	}
+	endpoint := ep4
+	if endpoint.address == nil {
+		endpoint = ep6
+	}
+	if endpoint.address == nil {
+		return {}, fmt.tprintf("cannot resolve --host %q", host)
+	}
+	endpoint.port = port
+	return endpoint, ""
+}
+
+Client_Context :: struct {
+	app:    ^App,
+	socket: net.TCP_Socket,
+}
+
+// 每连接一个线程；线程结束时释放 context 并关闭 socket。
+serve_client :: proc(user: rawptr) {
+	ctx := (^Client_Context)(user)
+	socket := ctx.socket
+	defer net.close(socket)
+	defer free(ctx)
+	serve_connection(socket_transport(&ctx.socket), app_handle_request, ctx.app)
+	free_all(context.temp_allocator)
+}
+
+close_client :: proc(socket: net.TCP_Socket) {
+	net.close(socket)
+}
+

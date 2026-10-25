@@ -42,7 +42,7 @@ test_parse_line_too_long :: proc(t: ^testing.T) {
 test_parse_too_many_headers :: proc(t: ^testing.T) {
 	b := strings.builder_make(context.temp_allocator)
 	strings.write_string(&b, "GET / HTTP/1.1\r\n")
-	for i in 0 ..< MAX_HEADERS + 1 {
+	for _ in 0 ..< MAX_HEADERS + 1 {
 		strings.write_string(&b, "X-Test: v\r\n")
 	}
 	strings.write_string(&b, "\r\n")

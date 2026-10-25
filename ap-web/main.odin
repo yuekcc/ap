@@ -1,9 +1,11 @@
 package main
 
 import "core:fmt"
+import "core:net"
 import "core:os"
 import "core:strconv"
 import "core:strings"
+import "core:thread"
 
 WEB_VERSION :: "0.1.0"
 DEFAULT_PORT :: 8417
@@ -262,6 +264,27 @@ Session:
 	)
 }
 
+is_loopback_host :: proc(host: string) -> bool {
+	if strings.equal_fold(host, "localhost") || host == "::1" || host == "[::1]" {
+		return true
+	}
+	if addr4, ok := net.parse_ip4_address(host); ok {
+		return addr4[0] == 127
+	}
+	if addr6, ok := net.parse_ip6_address(host); ok {
+		return addr6 == net.IP6_Address{0, 0, 0, 0, 0, 0, 0, 1}
+	}
+	return false
+}
+
+print_security_warning :: proc(host: string) {
+	fmt.eprintln("================================================================")
+	fmt.eprintfln("警告: ap-web 正在监听非回环地址 %s", host)
+	fmt.eprintln("任何能连上该端口的人都可以通过 agent 执行 shell 命令。")
+	fmt.eprintln("仅在可信网络中这样做，或改用 --host 127.0.0.1。")
+	fmt.eprintln("================================================================")
+}
+
 main :: proc() {
 	setup_console()
 	args := normalize_args(os.args)
@@ -279,5 +302,62 @@ main :: proc() {
 		fmt.printfln("ap-web %s", WEB_VERSION)
 		return
 	}
-	_ = opts
+
+	web_root := ""
+	if value, ok := opts.web_root.?; ok {
+		web_root = value
+	}
+	assets, asset_err := make_assets(web_root)
+	if len(asset_err) > 0 {
+		fmt.eprintln("ap-web: ", asset_err)
+		os.exit(2)
+	}
+	app := App {
+		options = opts,
+		assets = assets,
+	}
+
+	if opts.host_explicit && !is_loopback_host(opts.host) {
+		print_security_warning(opts.host)
+	}
+
+	endpoint, resolve_err := resolve_endpoint(opts.host, opts.port)
+	if len(resolve_err) > 0 {
+		fmt.eprintln("ap-web: ", resolve_err)
+		os.exit(1)
+	}
+	listener, listen_err := open_listener(endpoint)
+	if len(listen_err) > 0 {
+		fmt.eprintln("ap-web: ", listen_err)
+		os.exit(1)
+	}
+	defer close_listener(&listener)
+
+	display_host := opts.host
+	if strings.contains_rune(display_host, ':') {
+		display_host = fmt.tprintf("[%s]", display_host)
+	}
+	fmt.printfln("ap-web %s listening on http://%s:%d", WEB_VERSION, display_host, opts.port)
+	if len(assets.web_root) > 0 {
+		fmt.printfln("static: %s (disk)", assets.web_root)
+	} else {
+		fmt.printfln("static: embedded dist/ (%d files)", len(assets.embedded))
+	}
+
+	for {
+		client, _, accepted := accept_client(&listener)
+		if !accepted {
+			fmt.eprintln("ap-web: accept failed, stopping")
+			break
+		}
+		ctx := new(Client_Context)
+		ctx^ = {
+			app    = &app,
+			socket = client,
+		}
+		if thread.create_and_start_with_data(ctx, serve_client, self_cleanup = true) == nil {
+			close_client(client)
+			free(ctx)
+		}
+	}
 }
