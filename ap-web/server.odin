@@ -368,7 +368,8 @@ write_response :: proc(transport: Transport, response: ^Http_Response, close: bo
 
 write_error_response :: proc(transport: Transport, status: int, message: string) {
 	response := Http_Response {
-		status = status,
+		status  = status,
+		headers = make([dynamic]Http_Header, 0, 4, context.temp_allocator),
 	}
 	body := status_text(status)
 	if len(message) > 0 {
@@ -410,7 +411,8 @@ serve_connection :: proc(
 			}
 
 			response := Http_Response {
-				status = 200,
+				status  = 200,
+				headers = make([dynamic]Http_Header, 0, 8, context.temp_allocator),
 			}
 			handler(handler_user, &request, &response)
 			close := !request.keep_alive || response.close || response.status >= 400

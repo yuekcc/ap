@@ -28,9 +28,13 @@ Asset_Lookup :: struct {
 	etag:         string,
 }
 
-asset_etag :: proc(data: []byte) -> string {
+asset_etag :: proc(data: []byte, allocator := context.temp_allocator) -> string {
 	// ETag 是纯内容 hash：静态资源没有修改时间，内容就是唯一缓存键。
-	return fmt.aprintf("\"%s\"", internal.fnv32a_hex(data))
+	hash: u32 = 2166136261
+	for b in data {
+		hash = (hash ~ u32(b)) * 16777619
+	}
+	return strings.clone(fmt.tprintf("\"%08x\"", hash), allocator)
 }
 
 normalize_asset_name :: proc(name: string, allocator := context.allocator) -> string {
@@ -46,7 +50,7 @@ make_assets :: proc(web_root: string) -> (Assets, string) {
 			assets.embedded[i] = Asset {
 				name = normalize_asset_name(file.name),
 				data = file.data,
-				etag = asset_etag(file.data),
+				etag = asset_etag(file.data, context.allocator),
 			}
 		}
 		return assets, ""
@@ -131,6 +135,16 @@ within_root :: proc(root, target: string) -> bool {
 	return strings.has_prefix(target, prefix)
 }
 
+// internal.canonicalize_path 用 context.allocator；磁盘模式每个请求都要调用，
+// 临时把 allocator 指向 temp，避免静态文件服务持续泄漏。
+canonicalize_temp :: proc(path: string) -> (string, internal.Error) {
+	old_allocator := context.allocator
+	context.allocator = context.temp_allocator
+	result, err := internal.canonicalize_path(path, true)
+	context.allocator = old_allocator
+	return result, err
+}
+
 lookup_disk :: proc(root, name: string) -> Asset_Lookup {	joined, _ := os.join_path([]string{root, name}, context.temp_allocator)
 	info, err := os.stat(joined, context.temp_allocator)
 	if err != nil {
@@ -149,7 +163,7 @@ lookup_disk :: proc(root, name: string) -> Asset_Lookup {	joined, _ := os.join_p
 	}
 
 	// 解析符号链接后再检查是否仍在 web-root 内，防止 web-root 里的链接指向外部。
-	canonical, cerr := internal.canonicalize_path(candidate, true)
+	canonical, cerr := canonicalize_temp(candidate)
 	if !internal.is_ok(cerr) || !within_root(root, canonical) {
 		return {status = 403}
 	}
