@@ -1,3 +1,5 @@
+@import "github-markdown-css/github-markdown.css";
+
 /*
   Josh's Custom CSS Reset
   https://www.joshwcomeau.com/css/custom-css-reset/
@@ -401,6 +403,35 @@ body {
   background: var(--accent);
   vertical-align: -0.12em;
   animation: blink 1s steps(2, start) infinite;
+}
+
+/* Markdown 只借 github-markdown-css 的排版与代码块；
+   背景、前景和字体跟随应用主题，避免在暖色背景下出现一块冷色面板。 */
+.msg__text--markdown {
+  white-space: normal;
+}
+
+.msg__text--markdown.markdown-body {
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.7;
+}
+
+.msg__text--markdown > :first-child {
+  margin-top: 0;
+}
+
+.msg__text--markdown > :last-child {
+  margin-bottom: 0;
+}
+
+/* 宽表格/长代码不撑开消息区（grid 的 minmax(0, 1fr) 仍需要它们自己滚动）。 */
+.msg__text--markdown table,
+.msg__text--markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 /* 工具卡片：头部是 flex（图标 + 名称 + 参数 + 元信息）。 */

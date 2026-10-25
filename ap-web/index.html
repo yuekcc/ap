@@ -71,7 +71,11 @@
       <template x-if="item.kind === 'assistant'">
         <article class="msg msg--assistant">
           <span class="msg__marker" aria-hidden="true">●</span>
-          <p class="msg__text" :class="{ 'is-streaming': !item.ended }" x-text="item.text"></p>
+          <div
+            class="msg__text msg__text--markdown markdown-body"
+            :class="{ 'is-streaming': !item.ended }"
+            x-html="renderMarkdown(item.text)"
+          ></div>
         </article>
       </template>
 

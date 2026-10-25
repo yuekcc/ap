@@ -23,7 +23,7 @@ v1 已实现：
 - Windows 通过 `vendor:curl` 静态链接随 Odin 分发的 libcurl，产物是单个 exe。
 - Linux / macOS 链接系统 libcurl（`system:curl`）；构建和运行需要系统已安装 libcurl 开发包。
 - 构建产物需要能在 PATH 中找到 `bash`。
-- 修改 `ap-web` 前端时才需要 Node（`esbuild` + `alpinejs`）；`ap-web/dist/` 已提交，平时构建不需要 Node。
+- 修改 `ap-web` 前端时才需要 Node（`esbuild` + `alpinejs`、`markdown-exit`、`github-markdown-css`）；`ap-web/dist/` 已提交，平时构建不需要 Node。
 
 ## 构建
 

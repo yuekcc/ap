@@ -29,3 +29,18 @@ test("目录选择入口位于输入区，与发送/取消同一行", async () =
 		"pick button stays Windows-only",
 	);
 });
+
+test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", async () => {
+	const html = await readFile(indexPath, "utf8");
+	assert.ok(
+		html.includes('x-html="renderMarkdown(item.text)"'),
+		"assistant text must render markdown",
+	);
+	assert.ok(html.includes("markdown-body"), "markdown output must use github-markdown-css scope");
+	assert.ok(
+		html.includes('class="tool__output"') && html.includes('x-text="item.streamed || item.result"'),
+		"tool output must stay plain text",
+	);
+	assert.ok(!html.includes("x-html=\"item.streamed"), "tool output must not be rendered as html");
+});
+

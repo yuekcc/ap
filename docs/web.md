@@ -18,7 +18,7 @@
 
 1. 用 `core:net` 手写 HTTP/1.1 + SSE 服务器，零第三方依赖（不引入 laytan/odin-http）
 2. 复用 ap-tui 已验证的子进程模型与事件解析；协议层复用 `internal/` 与 ap-tui 的既有结构
-3. Web UI 用 Alpine.js + 原生 `fetch`/`EventSource`，esbuild 打包；npm 依赖只有 `esbuild` + `alpinejs` 两个
+3. Web UI 用 Alpine.js + 原生 `fetch`/`EventSource`，esbuild 打包；npm 依赖为 `esbuild`（dev）+ `alpinejs`、`markdown-exit`、`github-markdown-css`（runtime）
 4. 跨平台行为与 ap-tui 一致（Windows/Linux/macOS）；产物形态与 ap 一致：单 exe，无运行时文件依赖
 
 ## 非目标
@@ -45,7 +45,7 @@ ap-web/
 ├── assets.odin          # 内置资源表：#load_directory("dist") + 查找/兜底
 ├── platform_windows.odin / platform_unix.odin
 ├── process_platform_windows.odin / process_platform_unix.odin  # Job/进程树终止（与 ap 同构）
-├── package.json         # deps: esbuild + alpinejs；scripts: build / watch
+├── package.json         # deps: esbuild + alpinejs + markdown-exit + github-markdown-css；scripts: build / watch / test
 ├── build.mjs            # esbuild 脚本：frontend/main.js → dist/（app.js + styles.css），拷贝 index.html
 ├── index.html           # Alpine 模板宿主（构建时拷入 dist/）
 ├── frontend/            # 前端源码（无 .odin 文件，不影响 Odin 包）
@@ -54,7 +54,8 @@ ap-web/
 │   ├── api.js           # fetch 封装
 │   ├── sse.js           # EventSource 封装：重连、事件分派
 │   ├── store.js         # Alpine.reactive store：session 状态、消息列表、工具卡片
-│   ├── render.js         # 事件 → 视图模型（复刻 ap-tui 渲染规则）
+│   ├── render.js        # 事件 → 视图模型（复刻 ap-tui 渲染规则）
+│   ├── markdown.js      # assistant 文本 → HTML（markdown-exit，html:false）
 │   └── app.js           # 输入框、发送/取消、session 切换、目录选择
 └── dist/                # esbuild 产物（提交进仓库）：index.html + app.js + styles.css
 ```
@@ -205,9 +206,9 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 
 ## 前端
 
-- 依赖仅 `esbuild`（dev）+ `alpinejs`（runtime，~15KB gzip）；`EventSource`、`fetch` 全用浏览器原生
+- 依赖 `esbuild`（dev）+ `alpinejs`、`markdown-exit`、`github-markdown-css`（runtime）；`EventSource`、`fetch` 全用浏览器原生
 - **目标浏览器**：只面向现代浏览器（Chrome/Edge/Firefox/Safari 近两年版本），CSS 可放心用 `interpolate-size`、`:has()`、CSS 嵌套等新特性，不写 polyfill、不做厂商前缀（reset 里保留的 `-webkit-font-smoothing` 除外）
-- **样式基线**：`frontend/styles.css` 以 Josh's Custom CSS Reset（joshwcomeau.com/css/custom-css-reset）开头原样引入，应用样式接在其后；不引入其他 reset/normalize/框架
+- **样式基线**：`frontend/styles.css` 先 import `github-markdown-css`（供 assistant Markdown 使用），再以 Josh's Custom CSS Reset（joshwcomeau.com/css/custom-css-reset）原样引入，应用样式接在其后；不引入其他 reset/normalize/框架
 
 ### 布局约定
 
@@ -220,7 +221,7 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 
 - store 状态机与 ap-tui 渲染一一对应：`idle` / `running`；`message_update` 按 delta 累积，`message_end` 只补缺（避免重复，同 ap-tui 规则）
 - 工具卡片：`tool_execution_start` 建卡片（名称 + 参数），`tool_execution_update` 增量追加（bash 流式），`tool_execution_end` 标记 ✓/✗、耗时、退出码；结果超限截断提示（完整内容在 transcript）
-- 转义：所有模型输出/工具输出经 `textContent` 写入，不做 innerHTML；Markdown 渲染 phase 2 再议
+- 转义：用户输入与工具输出经 `textContent` 写入；仅 assistant 文本走 Markdown（`markdown-exit`，`html:false` 转义原始 HTML，危险协议链接不渲染，外链 `target="_blank" rel="noopener noreferrer"`，图片 `loading="lazy"` + 不发送 referrer），经 `x-html` 注入且只注入渲染器产物
 - phase 1 单页单 session，无路由库
 
 ## 构建与运行
@@ -228,7 +229,7 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 ### 前端（可选，需要 Node）
 
 ```sh
-npm --prefix ap-web install        # 仅 esbuild + alpinejs
+npm --prefix ap-web install        # esbuild + alpinejs + markdown-exit + github-markdown-css
 npm --prefix ap-web run build      # esbuild → dist/（index.html + app.js + styles.css）
 npm --prefix ap-web run watch      # 开发期监听
 ```
@@ -348,7 +349,7 @@ ap-web 不 import ap、不 import ap-tui
 
 1. `Last-Event-ID` 断点续传（transcript seq 补差）
 2. 多 session 并发 turn（多标签页）
-3. Markdown/diff 渲染、reasoning 展示开关、usage 状态条
+3. diff 渲染、reasoning 展示开关、usage 状态条
 4. session fork / 删除；文件附件上传
 5. 事件解析与 spawn 层下沉 `internal/`，三消费者共用一份
 6. 远程访问模式：`--host` 放开 + token 鉴权 + HTTPS 由外部代理

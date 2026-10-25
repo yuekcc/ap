@@ -2,6 +2,7 @@
 // 切换或新建 session，Windows 下选择工作目录。所有异步错误都落成 notice，
 // 不让页面因为一个接口 404/501 就白屏。
 import { api } from "./api.js";
+import { renderMarkdown } from "./markdown.js";
 import { createEventStream } from "./sse.js";
 
 export function registerApp(Alpine) {
@@ -9,6 +10,9 @@ export function registerApp(Alpine) {
 		stream: null,
 		wasOpen: false,
 		resyncing: false,
+
+		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
+		renderMarkdown,
 
 		init() {
 			// 消息区只在用户本来就在底部时自动跟随，避免打断向上翻看。
