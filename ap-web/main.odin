@@ -319,6 +319,8 @@ print_security_warning :: proc(host: string) {
 app_shutdown :: proc(app: ^App) {
 	heartbeat_stop(&app.heartbeat)
 	runner_shutdown(app)
+	// 关停时必须唤醒还阻塞在 SSE recv 上的连接线程，否则进程退出会留下悬挂线程。
+	sse_hub_destroy(&app.hub)
 	cleanup_jobs()
 }
 

@@ -69,7 +69,7 @@ append_stderr_line :: proc(log: ^[dynamic]u8, line: string) {
 	}
 }
 
-// 一个 turn 的启动参数。runner（工单 04）用当前 project 与 session 指针填充，
+// 一个 turn 的启动参数。runner 用当前 project 与 session 指针填充，
 // 每次 turn 都新建一个 ap 子进程。
 Turn_Options :: struct {
 	agent_bin:  string,
@@ -80,7 +80,6 @@ Turn_Options :: struct {
 	agent:      Maybe(string),
 	max_steps:  Maybe(int),
 	max_tokens: Maybe(int),
-	verbose:    bool,
 	cancel:     ^Agent_Cancel_Token, // 可为 nil；DELETE /api/turn 在另一线程置位
 	// 本轮回调与结果（session_id/stderr_preview）用的分配器；空 = context.allocator。
 	// runner 在 turn 线程里分配、在另一线程释放，所以显式传 heap_allocator()。
@@ -120,7 +119,6 @@ Turn_Callbacks :: struct {
 	on_event:      proc(user: rawptr, ev: Event),
 	on_event_line: proc(user: rawptr, ev: Event, line: string),
 	on_stderr:     proc(user: rawptr, line: string),
-	on_done:       proc(user: rawptr, exit_code: int, stderr_preview: string),
 }
 
 // session_id / stderr_preview 归调用方所有，需要 delete。
@@ -128,8 +126,7 @@ Turn_Result :: struct {
 	exit_code:      int,
 	session_id:     string, // 从本轮流里的 session_start 捕获；可能为空
 	stderr_preview: string, // 仅异常退出时非空
-	cancelled:      bool,   // 由 Agent_Cancel_Token 主动终止
-	interrupted:    bool,   // cancelled 或 130/143
+	cancelled:      bool, // 由 Agent_Cancel_Token 主动终止
 }
 
 Pump_State :: struct {
@@ -306,9 +303,6 @@ build_agent_command :: proc(options: ^Turn_Options) -> [dynamic]string {
 		append(&cmd, "--max-tokens", fmt.tprintf("%d", value))
 	}
 	append(&cmd, "--config-dir", options.config_dir)
-	if options.verbose {
-		append(&cmd, "--verbose")
-	}
 	return cmd
 }
 
@@ -332,7 +326,6 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	if agent_cancel_token_cancelled(options.cancel) {
 		result.exit_code = 130
 		result.cancelled = true
-		result.interrupted = true
 		return
 	}
 
@@ -519,7 +512,6 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 
 	result.exit_code = exit_code
 	result.cancelled = cancelled
-	result.interrupted = cancelled || exit_code == 130 || exit_code == 143
 	if len(state.session_id) > 0 {
 		result.session_id = state.session_id
 		state.session_id = ""
@@ -530,12 +522,8 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	return
 }
 
-// 执行一个 turn：每轮启动一个新的 ap 子进程，逐事件回调，结束时回调 on_done。
+// 执行一个 turn：每轮启动一个新的 ap 子进程，逐事件回调。
 run_agent_turn :: proc(options: Turn_Options, prompt: string, callbacks: Turn_Callbacks) -> Turn_Result {
 	opts := options
-	result := pump_agent(&opts, prompt, callbacks)
-	if callbacks.on_done != nil {
-		callbacks.on_done(callbacks.user, result.exit_code, result.stderr_preview)
-	}
-	return result
+	return pump_agent(&opts, prompt, callbacks)
 }

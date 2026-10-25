@@ -331,8 +331,8 @@ session_turn_count :: proc(project: Project, session_id: string) -> int {
 // ---------------------------------------------------------------------------
 
 // 逐行读 JSONL；保留原始事件字段，只补前端渲染需要的解析结果：
-// - message_end 的 text_ref 解析成 text（缺失 blob 退化为 text_preview）
-// - tool_execution_start 增加 args_text/args_preview（与 ap-tui tool_args_text 相同规则）
+// - message_end 的 *\_ref 解析成 text/input（缺失 blob 退化为 *_preview）
+// - tool_execution_start 增加 args_preview（与 ap-tui tool_args_text 相同规则）
 // - tool_execution_end 超过 200 行/20KB 时换成 content_preview 并标记 content_truncated
 api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
@@ -404,8 +404,6 @@ history_enrich_event :: proc(obj: json.Object, ev: Event, project: Project) {
 	case "tool_execution_start":
 		local := project
 		args_text := tool_args_text(ev, &local)
-		// 前端（render.js）优先读 args_preview；args_text 也保留一份，便于其他消费者。
-		json_object_set(obj, "args_text", json.String(args_text))
 		json_object_set(obj, "args_preview", json.String(args_text))
 	case "tool_execution_end":
 		local := project
@@ -491,10 +489,6 @@ api_turn_cancel :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Re
 	cancelled := runner_cancel(app)
 	api_json(response, 202, Api_Cancelled{cancelled = cancelled})
 }
-
-// ---------------------------------------------------------------------------
-// cwd
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // SSE

@@ -121,7 +121,6 @@ test_build_agent_command_forwards_options :: proc(t: ^testing.T) {
 		agent      = "general",
 		max_steps  = 5,
 		max_tokens = 1000,
-		verbose    = true,
 	}
 	command := build_agent_command(&options)
 	defer delete(command)
@@ -146,7 +145,6 @@ test_build_agent_command_forwards_options :: proc(t: ^testing.T) {
 			"1000",
 			"--config-dir",
 			"C:/cfg",
-			"--verbose",
 		},
 	)
 }

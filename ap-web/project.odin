@@ -54,10 +54,6 @@ session_ids :: proc(project: Project) -> ([]string, Error) {
 	return internal.session_ids(project)
 }
 
-session_is_root :: proc(project: Project, session_id: string) -> (bool, i64, Error) {
-	return internal.session_is_root(project, session_id)
-}
-
 find_latest_root_session :: proc(project: Project) -> (string, Error) {
 	return internal.find_latest_root_session(project)
 }

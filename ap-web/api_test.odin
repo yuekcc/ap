@@ -5,6 +5,8 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sync"
+import sync_chan "core:sync/chan"
 import "core:testing"
 import "core:thread"
 import "core:time"
@@ -316,9 +318,6 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 
 	tool_start, has_tool_start := history_event(history.events, "tool_execution_start")
 	testing.expect(t, has_tool_start)
-	args_text, args_ok := json_string_field(tool_start, "args_text")
-	testing.expect(t, args_ok)
-	testing.expect_value(t, args_text, HISTORY_ARGS_BLOB)
 	args_preview, args_preview_ok := json_string_field(tool_start, "args_preview")
 	testing.expect(t, args_preview_ok)
 	testing.expect_value(t, args_preview, HISTORY_ARGS_BLOB)
@@ -435,6 +434,68 @@ sse_test_broadcast_once :: proc(user: rawptr) {
 	_ = sse_hub_broadcast(state.hub, "ap", `{"type":"message_update"}`)
 	time.sleep(10 * time.Millisecond)
 	sse_hub_destroy(state.hub)
+}
+
+// 关停时 app_shutdown 必须销毁 hub：阻塞在 recv 上的 SSE 连接线程要立刻被唤醒，
+// 否则进程退出会丢下悬挂线程（也解释了前端为什么能靠重连 + history 恢复）。
+Sse_Recv_Probe :: struct {
+	sub:  ^Sse_Subscriber,
+	done: i32,
+	got:  i32, // 2 = channel 已关闭
+}
+
+sse_test_wait_for_close :: proc(user: rawptr) {
+	probe := (^Sse_Recv_Probe)(user)
+	_, ok := sse_subscriber_recv(probe.sub)
+	sync.atomic_store(&probe.got, 2 if !ok else 1)
+	sync.atomic_store(&probe.done, 1)
+}
+
+@(test)
+test_app_shutdown_wakes_sse_subscribers :: proc(t: ^testing.T) {
+	dir := test_temp_dir("api-shutdown-sse")
+	defer os.remove_all(dir)
+
+	app: App
+	api_fixture_setup(t, &app, dir)
+
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&app.hub, &sub, 4))
+
+	probe := Sse_Recv_Probe{sub = &sub}
+	handle := thread.create_and_start_with_data(
+		rawptr(&probe),
+		sse_test_wait_for_close,
+		name = "sse-shutdown-wait",
+	)
+	testing.expect(t, handle != nil)
+	if handle == nil {
+		return
+	}
+	// 给线程一点时间进入阻塞 recv（没有更可靠的“已阻塞”信号）。
+	time.sleep(20 * time.Millisecond)
+
+	app_shutdown(&app)
+
+	start := time.tick_now()
+	for sync.atomic_load(&probe.done) == 0 && time.tick_since(start) < 2 * time.Second {
+		time.sleep(2 * time.Millisecond)
+	}
+	done := sync.atomic_load(&probe.done)
+	got := sync.atomic_load(&probe.got)
+	if done == 0 {
+		// 收尾逻辑没唤醒 recv 时，手动关闭 channel，避免测试进程挂死。
+		sync_chan.close(sub.frames)
+	}
+	thread.join(handle)
+	thread.destroy(handle)
+	sse_hub_unsubscribe(&app.hub, &sub)
+
+	testing.expect_value(t, done, i32(1))
+	testing.expect_value(t, got, i32(2))
+
+	// 关停路径必须可重入。
+	app_shutdown(&app)
 }
 
 @(test)
