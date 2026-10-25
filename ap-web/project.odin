@@ -42,6 +42,10 @@ session_file :: proc(project: Project, session_id: string) -> string {
 	return internal.session_file(project, session_id)
 }
 
+blob_file :: proc(project: Project, sha256: string) -> string {
+	return internal.blob_file(project, sha256)
+}
+
 blob_read :: proc(project: Project, sha256: string, allocator := context.allocator) -> ([]byte, Error) {
 	return internal.blob_read(project, sha256, allocator)
 }
