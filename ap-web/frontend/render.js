@@ -1,7 +1,7 @@
 // 事件 → 视图模型。规则复刻 ap-tui/render.odin，但输出纯数据，不碰 DOM：
 // store.js 只负责把结果同步进 Alpine reactive 对象，测试可以直接喂事件断言。
 //
-// 关键规则（docs/web.md「前端」、events-notes.md）：
+// 关键规则（docs/web.md「前端」）：
 // - message_update 按 delta.text 逐段累积；reasoning 不展示。
 // - message_end 只在没有收到过 text delta 时补全文（history 模式则总是取全文）。
 // - tool_execution_start 建卡；update 追加流式输出（不截断）；end 标 ✓/✗、

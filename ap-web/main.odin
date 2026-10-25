@@ -236,7 +236,7 @@ App :: struct {
 	project:     Project,
 	cwd:         string,
 	cwd_mu:      sync.Mutex, // 保护 cwd/project：pick 成功后会整体替换
-	picker_busy: i32, // 原子标志：同一时刻只允许一个目录对话框（工单 06）
+	picker_busy: i32, // 原子标志：同一时刻只允许一个目录对话框
 	// 可注入的目录选择实现：nil 时用 native_pick_directory，测试注入假 picker。
 	pick:        Pick_Fn,
 	pick_user:   rawptr,
@@ -274,7 +274,7 @@ print_usage :: proc() {	fmt.print(
   --web-root <dir>          开发模式：静态资源从磁盘读取，默认用编译进 exe 的 dist/
 
 Agent:
-  --agent-bin <path>        ap/ag 可执行文件（后续 turn 使用）
+  --agent-bin <path>        ap/ag 可执行文件（每轮 turn 使用）
   --config-dir <dir>        传给 ap 的 $AP_CONFIG，默认 ~/.ap
   --model <id>              传给 ap 的 --model
   --agent <name>            传给 ap 的 --agent（子代理/人格名）

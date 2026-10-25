@@ -1,6 +1,6 @@
 // 页面交互：加载 config/current/history，订阅 SSE，发送/取消 turn，
 // 切换或新建 session，Windows 下选择工作目录。所有异步错误都落成 notice，
-// 不让页面因为一个接口 404/501 就白屏（工单 04 未联调时也能看到 UI）。
+// 不让页面因为一个接口 404/501 就白屏。
 import { api } from "./api.js";
 import { createEventStream } from "./sse.js";
 

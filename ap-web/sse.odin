@@ -17,7 +17,7 @@ sse_encode_event :: proc(b: ^strings.Builder, event: string, data: string, id: u
 	fmt.sbprintf(b, "id: %d\n\n", id)
 }
 
-// data 可能含换行（工单要求的 stderr 预览场景）：按 SSE 规范每个物理行都加
+// data 可能含换行（stderr 预览等多行内容）：按 SSE 规范每个物理行都加
 // data: 前缀，客户端再拼回 \n。少了这步，换行会直接截断帧结构。
 sse_write_data_lines :: proc(b: ^strings.Builder, data: string) {
 	start := 0

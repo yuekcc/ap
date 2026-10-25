@@ -2,7 +2,7 @@ package main
 
 import "../internal"
 
-// TUI 直接复用 internal 的路径、project 与 session 发现逻辑。
+// 直接复用 internal 的路径、project 与 session 发现逻辑。
 // 这些规则必须与 ap 完全一致，否则 -c/-s 会找不到 transcript。
 
 Error :: internal.Error
@@ -33,7 +33,7 @@ default_config_dir :: proc(cli_config_dir: Maybe(string)) -> (string, Error) {
 
 Project :: internal.Project
 
-// TUI 只读：不创建 project 目录，也不写 path.txt。
+// 只读：不创建 project 目录，也不写 path.txt。
 open_project :: proc(config_dir, cwd: string) -> (Project, Error) {
 	return internal.locate_project(config_dir, cwd)
 }

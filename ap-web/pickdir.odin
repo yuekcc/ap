@@ -143,7 +143,7 @@ app_change_cwd :: proc(app: ^App, path: string) -> string {
 // POST /api/cwd/pick
 // ---------------------------------------------------------------------------
 
-// 并发顺序与工单 04 一致：运行中 turn 优先报 turn_running，其次 picker_busy。
+// 并发顺序：运行中 turn 优先报 turn_running，其次 picker_busy。
 // 占位在弹窗前拿、结果返回后释放，保证同一时刻只有一个模态对话框。
 api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)

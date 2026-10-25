@@ -75,8 +75,8 @@ Http_Stream :: struct {
 	chunk_buf: [dynamic]u8,
 }
 
-// 路由表：精确路径在前台，prefix 路由兜底子路径。后续工单（api.odin）在
-// @(init) 里调用 register_route 注册即可，不需要改服务器主循环。
+// 路由表：精确路径在前台，prefix 路由兜底子路径。api.odin 在启动时调用
+// register_route 注册即可，不需要改服务器主循环。
 Http_Route :: struct {
 	method:  Http_Method,
 	path:    string,
