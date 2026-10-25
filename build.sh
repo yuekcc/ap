@@ -3,23 +3,16 @@ set -eu
 
 version=$(odin version)
 echo "odin: $version"
-case "$version" in
-  *dev-2026-09-nightly*) ;;
-  *) echo "warning: 本项目在 dev-2026-09-nightly 上验证；当前编译器版本不同，nightly stdlib 可能不兼容。" >&2 ;;
-esac
 
-exe=""
-out=""
+ext=""
+out="bin"
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) exe=".exe" ;;
-  *)
-    # 源码目录 ap/ 与二进制 ap 同名，Unix 上不能都放在仓库根目录。
-    exe=""
-    out="bin/"
-    mkdir -p bin
-    ;;
+  MINGW*|MSYS*|CYGWIN*) ext=".exe" ;;
 esac
 
-odin build ap -out:${out}ap$exe -vet
-odin build ap-tui -out:${out}ap-tui$exe -vet
-echo "built ${out}ap$exe ${out}ap-tui$exe"
+mkdir -p $out
+cd $out
+
+odin build ../ap -out:ap$ext -vet
+odin build ../ap-tui -out:ap-tui$ext -vet
+echo "built ${out}/ap$ext ${out}/ap-tui$ext"

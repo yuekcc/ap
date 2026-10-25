@@ -30,8 +30,9 @@ Windows：
 ```powershell
 .\build.ps1
 # 或
-odin build ap -out:ap.exe -vet
-odin build ap-tui -out:ap-tui.exe -vet
+mkdir bin
+odin build ap -out:bin/ap.exe -vet
+odin build ap-tui -out:bin/ap-tui.exe -vet
 ```
 
 Linux / macOS：
@@ -44,7 +45,7 @@ odin build ap -out:bin/ap -vet
 odin build ap-tui -out:bin/ap-tui -vet
 ```
 
-Unix 上因为源码目录 `ap/` 与二进制 `ap` 同名，产物统一放在 `bin/`。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`。
+构建产物统一放在 `bin/`（Unix 上源码目录 `ap/` 与二进制 `ap` 同名，不能都放在仓库根目录）。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。
 
 ## 配置
 
