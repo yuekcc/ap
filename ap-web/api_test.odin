@@ -156,22 +156,37 @@ test_api_session_pointer_new_and_resume :: proc(t: ^testing.T) {
 	testing.expect_value(
 		t,
 		api_response_text(&current),
-		`{"session_id":null,"running":false,"turn":null}`,
+		`{"session_key":null,"session_id":null,"running":false,"turn":null}`,
 	)
 
 	resume := api_call(&app, .Post, "/api/session/resume", "", `{"session_id":"ses_abc"}`)
 	testing.expect_value(t, resume.status, 200)
-	testing.expect_value(t, api_response_text(&resume), `{"session_id":"ses_abc"}`)
+	testing.expect_value(
+		t,
+		api_response_text(&resume),
+		`{"session_id":"ses_abc","session_key":"ses_abc"}`,
+	)
 
 	current2 := api_call(&app, .Get, "/api/session/current")
 	testing.expect(t, strings.contains(api_response_text(&current2), `"session_id":"ses_abc"`))
+	testing.expect(t, strings.contains(api_response_text(&current2), `"session_key":"ses_abc"`))
 
 	new_session := api_call(&app, .Post, "/api/session/new")
 	testing.expect_value(t, new_session.status, 200)
-	testing.expect_value(t, api_response_text(&new_session), `{"session_id":null}`)
+	new_body := api_response_text(&new_session)
+	testing.expect(t, strings.contains(new_body, `"session_id":null`))
+	key_value, has_key := api_json_field(t, new_body, "session_key")
+	testing.expect(t, has_key)
+	testing.expect(t, strings.has_prefix(key_value.(json.String), WEB_SLOT_PREFIX))
 
 	current3 := api_call(&app, .Get, "/api/session/current")
 	testing.expect(t, strings.contains(api_response_text(&current3), `"session_id":null`))
+	testing.expect(t, strings.contains(api_response_text(&current3), `"session_key":"web_new_`))
+
+	// 带 session_key 查询时返回对应 session 的运行态，而不是「最近活跃」。
+	by_key := api_call(&app, .Get, "/api/session/current", "session_key=ses_abc")
+	testing.expect(t, strings.contains(api_response_text(&by_key), `"session_id":"ses_abc"`))
+	testing.expect(t, strings.contains(api_response_text(&by_key), `"session_key":"ses_abc"`))
 
 	bad := api_call(&app, .Post, "/api/session/resume", "", `{}`)
 	testing.expect_value(t, bad.status, 400)
@@ -418,7 +433,14 @@ test_api_turn_validation_and_single_flight :: proc(t: ^testing.T) {
 
 	started := api_call(&app, .Post, "/api/turn", "", `{"prompt":"[scenario:cancel]"}`)
 	testing.expect_value(t, started.status, 202)
-	testing.expect_value(t, api_response_text(&started), `{"accepted":true}`)
+	started_body := api_response_text(&started)
+	accepted, has_accepted := api_json_field(t, started_body, "accepted")
+	testing.expect(t, has_accepted)
+	testing.expect_value(t, accepted.(json.Boolean), json.Boolean(true))
+	key_value, has_key := api_json_field(t, started_body, "session_key")
+	testing.expect(t, has_key)
+	slot_key := string(key_value.(json.String))
+	testing.expect(t, strings.has_prefix(slot_key, WEB_SLOT_PREFIX))
 
 	testing.expect(t, test_wait_session(&app, "ses_cancel", 10 * time.Second), "agent did not start")
 
@@ -427,26 +449,108 @@ test_api_turn_validation_and_single_flight :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(api_response_text(&current), `"session_id":"ses_cancel"`))
 	testing.expect(t, strings.contains(api_response_text(&current), `"turn":1`))
 
-	busy := api_call(&app, .Post, "/api/turn", "", `{"prompt":"second"}`)
+	// 同一 session 仍然单飞。
+	busy_body := strings.concatenate(
+		{`{"prompt":"second","session_key":"`, slot_key, `"}`},
+		context.temp_allocator,
+	)
+	busy := api_call(&app, .Post, "/api/turn", "", busy_body)
 	testing.expect_value(t, busy.status, 409)
 	testing.expect(t, strings.contains(api_response_text(&busy), `"code":"turn_running"`))
 
+	// 切换/恢复另一个 session 不再被别的 session 的运行中 turn 挡住。
 	resume := api_call(&app, .Post, "/api/session/resume", "", `{"session_id":"ses_other"}`)
-	testing.expect_value(t, resume.status, 409)
-	testing.expect(t, strings.contains(api_response_text(&resume), `"code":"turn_running"`))
+	testing.expect_value(t, resume.status, 200)
+
+	// 不同 session 可以并发跑：第二个 turn 直接启动。
+	second := api_call(&app, .Post, "/api/turn", "", `{"prompt":"[scenario:cancel]","session_key":"ses_other"}`)
+	testing.expect_value(t, second.status, 202)
 
 	pick := api_call(&app, .Post, "/api/cwd/pick")
 	testing.expect_value(t, pick.status, 409)
 	testing.expect(t, strings.contains(api_response_text(&pick), `"code":"turn_running"`))
 
-	cancelled := api_call(&app, .Delete, "/api/turn")
-	testing.expect_value(t, cancelled.status, 202)
-	testing.expect_value(t, api_response_text(&cancelled), `{"cancelled":true}`)
+	first_cancel := api_call(&app, .Delete, "/api/turn", fmt.aprintf("session_key=%s", slot_key, allocator = context.temp_allocator))
+	testing.expect_value(t, first_cancel.status, 202)
+	testing.expect_value(t, api_response_text(&first_cancel), `{"cancelled":true}`)
+	testing.expect(t, test_wait_key_idle(&app, slot_key, 10 * time.Second), "cancel did not stop turn")
+	testing.expect(t, runner_session_running(&app, "ses_other"), "other session must keep running")
+
+	second_cancel := api_call(&app, .Delete, "/api/turn", "session_key=ses_other")
+	testing.expect_value(t, second_cancel.status, 202)
+	testing.expect_value(t, api_response_text(&second_cancel), `{"cancelled":true}`)
 	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "cancel did not stop turn")
 
 	idle_cancel := api_call(&app, .Delete, "/api/turn")
 	testing.expect_value(t, idle_cancel.status, 202)
 	testing.expect_value(t, api_response_text(&idle_cancel), `{"cancelled":false}`)
+}
+
+
+// 多 session 并发的核心不变量：每个标签页的 SSE 只收到自己 session 的事件，
+// 取消也只作用于自己那一轮。
+@(test)
+test_api_concurrent_sessions_are_isolated :: proc(t: ^testing.T) {
+	dir := test_temp_dir("api-concurrent")
+	defer os.remove_all(dir)
+
+	app: App
+	runner_test_setup(t, &app, dir)
+	if len(app.agent_bin) == 0 {
+		return
+	}
+	api_register_routes()
+	defer sse_hub_destroy(&app.hub)
+	defer runner_shutdown(&app)
+
+	created := api_call(&app, .Post, "/api/session/new")
+	key_value, has_key := api_json_field(t, api_response_text(&created), "session_key")
+	testing.expect(t, has_key)
+	slot_key := string(key_value.(json.String))
+
+	sub_a: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe_topic(&app.hub, &sub_a, slot_key, 512))
+	defer sse_hub_unsubscribe(&app.hub, &sub_a)
+	sub_b: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe_topic(&app.hub, &sub_b, "ses_other", 512))
+	defer sse_hub_unsubscribe(&app.hub, &sub_b)
+
+	first_body := strings.concatenate(
+		{`{"prompt":"[scenario:cancel]","session_key":"`, slot_key, `"}`},
+		context.temp_allocator,
+	)
+	first := api_call(&app, .Post, "/api/turn", "", first_body)
+	testing.expect_value(t, first.status, 202)
+
+	second := api_call(&app, .Post, "/api/turn", "", `{"prompt":"hello","session_key":"ses_other"}`)
+	testing.expect_value(t, second.status, 202)
+
+	testing.expect(t, test_wait_key_idle(&app, "ses_other", 10 * time.Second), "second turn did not finish")
+	time.sleep(50 * time.Millisecond)
+
+	b_frames := test_drain_frames(&sub_b)
+	defer delete(b_frames)
+	testing.expect(t, strings.contains(b_frames, `"type":"turn_end"`))
+	testing.expect(t, strings.contains(b_frames, `"exit_code":0`))
+
+	// A 还挂着：它的连接看不到 B 的 turn_end / turn_done。
+	a_frames := test_drain_frames(&sub_a)
+	defer delete(a_frames)
+	testing.expect(t, strings.contains(a_frames, `"text":"working"`))
+	testing.expect(t, !strings.contains(a_frames, `"type":"turn_end"`))
+	testing.expect(t, !strings.contains(a_frames, "event: turn_done"))
+
+	cancel_query := fmt.aprintf("session_key=%s", slot_key, allocator = context.temp_allocator)
+	cancelled := api_call(&app, .Delete, "/api/turn", cancel_query)
+	testing.expect_value(t, cancelled.status, 202)
+	testing.expect_value(t, api_response_text(&cancelled), `{"cancelled":true}`)
+	testing.expect(t, test_wait_key_idle(&app, slot_key, 10 * time.Second), "cancel did not stop turn")
+
+	done_frames := test_drain_frames(&sub_a)
+	defer delete(done_frames)
+	testing.expect(t, strings.contains(done_frames, "event: turn_done"))
+	testing.expect(t, strings.contains(done_frames, `"stop_reason":"cancelled"`))
+	testing.expect_value(t, sse_hub_subscriber_count(&app.hub), 2)
 }
 
 // SSE 端点：注册 hub → 头部 chunked → 广播帧 → hub 关停后收尾。

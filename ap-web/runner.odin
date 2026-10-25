@@ -2,48 +2,65 @@ package main
 
 import "../internal"
 import "base:runtime"
+import "core:fmt"
 import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
 
-// turn runner：同一时刻至多一个 ap 子进程（单飞）。HTTP handler 只负责
-// 校验参数与抢锁，真正的 spawn/泵事件在独立线程里跑，SSE 连接断开不影响 turn。
-// 进程模型与 docs/web.md「Turn 生命周期」一致。
+// turn runner：按 session 分飞。同一个 session 同一时刻至多一个 ap 子进程，
+// 不同 session 可以并发（多标签页各跑各的）。HTTP handler 只负责校验参数
+// 与抢对应 session 的锁，真正的 spawn/泵事件在独立线程里跑，SSE 连接断开
+// 不影响 turn。进程模型与 docs/web.md「Turn 生命周期」一致。
 
 // 一轮 turn 的 API 入参。字符串由调用方持有，runner_start_turn 会克隆。
 Turn_Request :: struct {
-	prompt:     string,
-	model:      Maybe(string),
-	agent:      Maybe(string),
-	max_steps:  Maybe(int),
-	max_tokens: Maybe(int),
+	prompt:      string,
+	session_key: string, // 空 = 使用当前 session（没有则新建 slot）
+	model:       Maybe(string),
+	agent:       Maybe(string),
+	max_steps:   Maybe(int),
+	max_tokens:  Maybe(int),
 }
 
 Runner_Start :: enum {
 	Started,
-	Busy, // 已有 turn 在跑（API 映射 409 turn_running）
+	Busy, // 该 session 已有 turn 在跑（API 映射 409 turn_running）
 	Shutting_Down, // 服务正在退出，不再接受新 turn
 	Failed, // 线程创建失败等内部错误
 }
 
-// 运行中 turn 的取消信号。token 常驻 runner，每轮开始与结束都在锁内清零；
-// DELETE /api/turn 在连接线程里置位，泵在轮询点检查。
+// 新会话在 ap 生成真实 session id 之前也需要一个稳定标识：客户端用这个
+// slot key 订阅 SSE、发起取消；session_start 之后再把它别名到真实 id。
+WEB_SLOT_PREFIX :: "web_new_"
+
+// 一个 session 的运行态。字符串全部堆分配，因为会在多个连接线程与 turn
+// 线程之间共享；只有 registry 锁内可以改写。
+Session_Runtime :: struct {
+	key:        string, // 客户端订阅/调用使用的稳定 key（新会话是 slot）
+	session_id: string, // ap 的真实 session id；新会话首轮之前为空
+	running:    bool,
+	turn:       Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
+	cancel:     Agent_Cancel_Token,
+	// 已结束但还没回收的 turn 线程句柄。同一 session 下一轮开始前或关停时
+	// join + destroy，否则每轮都会泄漏 Thread 结构体与平台线程句柄。
+	thread:     ^thread.Thread,
+}
+
+// 所有 session 运行态的注册表。线性数组足够：同时打开的 session 是个位数。
 Runner :: struct {
-	mu:          sync.Mutex,
-	running:     bool,
-	exiting:     bool,
-	session_id:  string, // 当前 session 指针（拥有）
-	turn:        Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
-	cancel:      Agent_Cancel_Token,
-	// 已结束但还没回收的 turn 线程句柄。下一轮开始前或关停时 join + destroy，
-	// 否则每轮都会泄漏 Thread 结构体与平台线程句柄。
-	turn_thread: ^thread.Thread,
+	mu:       sync.Mutex,
+	sessions: [dynamic]^Session_Runtime,
+	current:  string, // 最近活跃的 key，用于 /api/session/current 的默认值（拥有）
+	exiting:  bool,
+	slots:    u64,
 }
 
 // 一轮 turn 的私有上下文。所有字符串都由本结构拥有，线程退出时释放。
 Turn_Job :: struct {
 	app:          ^App,
+	key:          string, // Session_Runtime.key（owner）
+	session_id:   string, // 当前已知的真实 session id（owner，session_start 后更新）
 	options:      Turn_Options,
 	prompt:       string,
 	stop_reason:  string, // 最后一条 turn_end.stop_reason
@@ -52,94 +69,245 @@ Turn_Job :: struct {
 	have_usage:   bool,
 }
 
-runner_init :: proc(app: ^App) {
-	app.runner.mu = {}
-	app.runner.running = false
-	app.runner.exiting = false
-	app.runner.session_id = ""
-	app.runner.turn = nil
-	app.runner.cancel = {}
-	app.runner.turn_thread = nil
+Runner_State :: struct {
+	key:        string,
+	session_id: string,
+	running:    bool,
+	turn:       Maybe(int),
 }
 
-// 回收上一轮 turn 线程。调用方必须持有 runner.mu，且 running 已为 false
-// （线程在退出前会先把 running 置回 false，随后只剩 free_job 与返回）。
-// 持锁 join 不会死锁：turn 线程退出路径上不再获取 runner.mu。
-runner_reap_thread_locked :: proc(app: ^App) {
-	handle := app.runner.turn_thread
+runner_init :: proc(app: ^App) {
+	app.runner.mu = {}
+	app.runner.sessions = make([dynamic]^Session_Runtime, 0, 4, runtime.heap_allocator())
+	app.runner.current = ""
+	app.runner.exiting = false
+	app.runner.slots = 0
+}
+
+// 回收某个 session 已结束的 turn 线程。调用方必须持有 registry.mu，且该
+// session 的 running 已为 false（turn 线程在退出前会先把 running 置回 false，
+// 随后只剩 free_job 与返回，不再获取 registry.mu，所以持锁 join 不会死锁）。
+runner_reap_thread_locked :: proc(rt: ^Session_Runtime) {
+	handle := rt.thread
 	if handle == nil {
 		return
 	}
-	app.runner.turn_thread = nil
+	rt.thread = nil
 	thread.join(handle)
 	thread.destroy(handle)
 }
 
+// 调用方持有 registry.mu。key 可以是 slot key，也可以是真实 session id。
+runner_find_locked :: proc(app: ^App, key: string) -> ^Session_Runtime {
+	if len(key) == 0 {
+		return nil
+	}
+	for rt in app.runner.sessions {
+		if rt.key == key {
+			return rt
+		}
+	}
+	for rt in app.runner.sessions {
+		if len(rt.session_id) > 0 && rt.session_id == key {
+			return rt
+		}
+	}
+	return nil
+}
+
+runner_set_current_locked :: proc(app: ^App, key: string) {
+	if app.runner.current == key {
+		return
+	}
+	if len(app.runner.current) > 0 {
+		delete(app.runner.current, runtime.heap_allocator())
+	}
+	app.runner.current = strings.clone(key, runtime.heap_allocator())
+}
+
+// 调用方持有 registry.mu：分配一个新的 pending slot 并设为当前。
+runner_create_slot_locked :: proc(app: ^App) -> ^Session_Runtime {
+	app.runner.slots += 1
+	rt := new(Session_Runtime, runtime.heap_allocator())
+	rt^ = {
+		key = fmt.aprintf("%s%d", WEB_SLOT_PREFIX, app.runner.slots, allocator = runtime.heap_allocator()),
+	}
+	append(&app.runner.sessions, rt)
+	runner_set_current_locked(app, rt.key)
+	return rt
+}
+
+// 调用方持有 registry.mu。空 key 表示「当前 session」（没有就新建 slot）；
+// 带 WEB_SLOT_PREFIX 但未知的 key（例如 ap-web 重启后的旧 slot）也按
+// 「尚未落盘的新会话」处理，避免把内部 key 当成 session id 传给 ap。
+// 其他 key 视为真实 session id。
+runner_ensure_locked :: proc(app: ^App, key: string) -> ^Session_Runtime {
+	effective := key if len(key) > 0 else app.runner.current
+	if rt := runner_find_locked(app, effective); rt != nil {
+		return rt
+	}
+	if len(key) == 0 {
+		return runner_create_slot_locked(app)
+	}
+	rt := new(Session_Runtime, runtime.heap_allocator())
+	rt^ = {
+		key = strings.clone(key, runtime.heap_allocator()),
+	}
+	if !strings.has_prefix(key, WEB_SLOT_PREFIX) {
+		rt.session_id = strings.clone(key, runtime.heap_allocator())
+	}
+	append(&app.runner.sessions, rt)
+	runner_set_current_locked(app, rt.key)
+	return rt
+}
+
+runner_initialized :: proc(app: ^App) -> bool {
+	return app.runner.sessions != nil
+}
+
+// 新建一个尚未落盘的 session slot，返回客户端要用的 key（调用方 allocator）。
+runner_session_new :: proc(app: ^App, allocator := context.allocator) -> string {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	if !runner_initialized(app) {
+		return ""
+	}
+	rt := runner_create_slot_locked(app)
+	return strings.clone(rt.key, allocator)
+}
+
+// 恢复/切换 session 指针：只保证运行态条目存在，不校验 transcript 合法性。
+runner_session_resume :: proc(app: ^App, session_id: string, allocator := context.allocator) -> string {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	if !runner_initialized(app) {
+		return ""
+	}
+	rt := runner_ensure_locked(app, session_id)
+	return strings.clone(rt.key, allocator)
+}
+
+// 任意 session 在跑都算忙（cwd 切换等进程级操作需要全局静默）。
+runner_any_running :: proc(app: ^App) -> bool {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	for rt in app.runner.sessions {
+		if rt.running {
+			return true
+		}
+	}
+	return false
+}
+
+// 当前 session 是否在跑；没有当前 session 时为 false。
 runner_running :: proc(app: ^App) -> bool {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
-	return app.runner.running
+	rt := runner_find_locked(app, app.runner.current)
+	return rt != nil && rt.running
+}
+
+runner_session_running :: proc(app: ^App, key: string) -> bool {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	rt := runner_find_locked(app, key)
+	return rt != nil && rt.running
 }
 
 // 当前 session 指针的副本；调用方负责 delete。空字符串表示「下一条提示新建」。
-// 返回值走调用方 allocator，因为 runner 状态本身可能被另一线程改写。
 runner_session :: proc(app: ^App, allocator := context.allocator) -> string {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
-	if len(app.runner.session_id) == 0 {
+	rt := runner_find_locked(app, app.runner.current)
+	if rt == nil || len(rt.session_id) == 0 {
 		return ""
 	}
-	return strings.clone(app.runner.session_id, allocator)
+	return strings.clone(rt.session_id, allocator)
 }
 
-// runner 状态会跨线程访问（HTTP 线程写、turn 线程读/写），所以内部字符串
-// 一律用堆分配；测试里的 context.allocator 是按测试任务回收的 arena，
-// 在另一个线程释放会崩。
-runner_set_session :: proc(app: ^App, session_id: string) {
-	cloned := strings.clone(session_id, runtime.heap_allocator())
+runner_current_key :: proc(app: ^App, allocator := context.allocator) -> string {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
-	if len(app.runner.session_id) > 0 {
-		delete(app.runner.session_id, runtime.heap_allocator())
+	if len(app.runner.current) == 0 {
+		return ""
 	}
-	app.runner.session_id = cloned
+	return strings.clone(app.runner.current, allocator)
 }
 
-runner_clear_session :: proc(app: ^App) {
-	runner_set_session(app, "")
+// 某个 session 的运行态快照；key 为空时取当前 session。字符串归调用方。
+runner_state :: proc(app: ^App, key: string, allocator := context.allocator) -> Runner_State {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	rt := runner_find_locked(app, key if len(key) > 0 else app.runner.current)
+	if rt == nil {
+		return {}
+	}
+	return {
+		key = strings.clone(rt.key, allocator),
+		session_id = strings.clone(rt.session_id, allocator),
+		running = rt.running,
+		turn = rt.turn,
+	}
 }
 
 runner_turn :: proc(app: ^App) -> Maybe(int) {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
-	return app.runner.turn
+	rt := runner_find_locked(app, app.runner.current)
+	if rt == nil {
+		return nil
+	}
+	return rt.turn
 }
 
-runner_set_turn :: proc(app: ^App, turn: int) {
+runner_set_turn :: proc(app: ^App, key: string, turn: int) {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
-	app.runner.turn = turn
+	if rt := runner_find_locked(app, key); rt != nil {
+		rt.turn = turn
+	}
+}
+
+// session_start 之后把 slot 别名到真实 id。订阅了真实 id 的标签页/重连也
+// 就能收到这个 session 的后续事件。
+runner_set_session_id :: proc(app: ^App, key, session_id: string) {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	rt := runner_find_locked(app, key)
+	if rt == nil || rt.session_id == session_id {
+		return
+	}
+	if len(rt.session_id) > 0 {
+		delete(rt.session_id, runtime.heap_allocator())
+	}
+	rt.session_id = strings.clone(session_id, runtime.heap_allocator())
 }
 
 // 启动一轮 turn。状态切换、session 快照与线程句柄归位放在同一把锁里：
-// 句柄一旦交给 runner，下一轮开始前就不会有第二个 turn 抢跑。
-runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_Start, message: string) {
+// 同一 session 的下一轮不会抢跑，其他 session 不受影响。
+// 返回的 key 是本次 turn 所属 session 的稳定 key（调用方 allocator）。
+runner_start_turn :: proc(
+	app: ^App,
+	request: Turn_Request,
+	allocator := context.allocator,
+) -> (status: Runner_Start, key: string, message: string) {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
 
-	if app.runner.exiting {
-		return .Shutting_Down, "server is shutting down"
+	if app.runner.exiting || !runner_initialized(app) {
+		return .Shutting_Down, "", "server is shutting down"
 	}
-	if app.runner.running {
-		return .Busy, "a turn is already running"
+	rt := runner_ensure_locked(app, request.session_key)
+	if rt.running {
+		return .Busy, "", "a turn is already running in this session"
 	}
-	runner_reap_thread_locked(app)
-	app.runner.running = true
-	app.runner.turn = nil
-	sync.atomic_store(&app.runner.cancel.value, 0)
+	runner_reap_thread_locked(rt)
+	rt.running = true
+	rt.turn = nil
+	sync.atomic_store(&rt.cancel.value, 0)
 	session_snapshot := ""
-	if len(app.runner.session_id) > 0 {
-		session_snapshot = strings.clone(app.runner.session_id, runtime.heap_allocator())
+	if len(rt.session_id) > 0 {
+		session_snapshot = strings.clone(rt.session_id, runtime.heap_allocator())
 	}
 
 	// 请求里的可选字段优先；没带就用 ap-web 启动参数里的默认值（与 ap-tui 一致）。
@@ -151,6 +319,8 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 	job := new(Turn_Job, runtime.heap_allocator())
 	job^ = Turn_Job {
 		app = app,
+		key = strings.clone(rt.key, runtime.heap_allocator()),
+		session_id = strings.clone(rt.session_id, runtime.heap_allocator()),
 		options = {
 			agent_bin = app.agent_bin,
 			session_id = session_snapshot,
@@ -160,7 +330,7 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 			agent = clone_maybe_string(agent),
 			max_steps = max_steps,
 			max_tokens = max_tokens,
-			cancel = &app.runner.cancel,
+			cancel = &rt.cancel,
 			// 结果在 turn 线程分配、在 runner 线程释放：所有权交给 heap，不依赖线程 context。
 			allocator = runtime.heap_allocator(),
 		},
@@ -169,47 +339,109 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 
 	handle := thread.create_and_start_with_data(rawptr(job), runner_thread, name = "turn-runner")
 	if handle == nil {
-		app.runner.running = false
+		rt.running = false
 		free_job(job)
-		return .Failed, "cannot start turn thread"
+		return .Failed, "", "cannot start turn thread"
 	}
-	app.runner.turn_thread = handle
-	return .Started, ""
+	rt.thread = handle
+	runner_set_current_locked(app, rt.key)
+	return .Started, strings.clone(rt.key, allocator), ""
 }
 
 // DELETE /api/turn：置位取消 token，泵会终止整棵进程树。
-// 检查与置位在同一把锁内完成：否则检查到 running 后 turn 可能已经结束、
-// 下一轮已经清零 token，这次置位就会误杀新一轮。
-runner_cancel :: proc(app: ^App) -> bool {
+// key 为空时取当前 session；当前 session 没在跑且只有一个 session 在跑时，
+// 退化为取消那一个（兼容不带 session 的旧客户端）。
+runner_cancel :: proc(app: ^App, key := "") -> bool {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
-	if !app.runner.running {
+
+	rt: ^Session_Runtime
+	if len(key) > 0 {
+		rt = runner_find_locked(app, key)
+		if rt == nil || !rt.running {
+			return false
+		}
+	} else {
+		rt = runner_find_locked(app, app.runner.current)
+		if rt == nil || !rt.running {
+			rt = nil
+			count := 0
+			for candidate in app.runner.sessions {
+				if candidate.running {
+					rt = candidate
+					count += 1
+				}
+			}
+			if count != 1 {
+				return false
+			}
+		}
+	}
+	if rt == nil || !rt.running {
 		return false
 	}
-	agent_cancel_token_cancel(&app.runner.cancel)
+	agent_cancel_token_cancel(&rt.cancel)
 	return true
 }
 
-// 进程退出时收尾：拒绝新 turn、终止运行中的 turn，并最多等 5s。
+// 切工作目录后旧 project 的 session 全部作废。只应在没有 turn 运行时调用。
+runner_reset_sessions :: proc(app: ^App) {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	for rt in app.runner.sessions {
+		if rt.running {
+			continue
+		}
+		runner_reap_thread_locked(rt)
+		delete(rt.key, runtime.heap_allocator())
+		if len(rt.session_id) > 0 {
+			delete(rt.session_id, runtime.heap_allocator())
+		}
+		free(rt, runtime.heap_allocator())
+	}
+	clear(&app.runner.sessions)
+	if len(app.runner.current) > 0 {
+		delete(app.runner.current, runtime.heap_allocator())
+	}
+	app.runner.current = ""
+}
+
+// 进程退出时收尾：拒绝新 turn、终止所有运行中的 turn，并最多等 5s。
 runner_shutdown :: proc(app: ^App) {
 	sync.mutex_lock(&app.runner.mu)
 	app.runner.exiting = true
-	running := app.runner.running
-	sync.mutex_unlock(&app.runner.mu)
-	if running {
-		agent_cancel_token_cancel(&app.runner.cancel)
-		start := time.tick_now()
-		for runner_running(app) && time.tick_since(start) < 5 * time.Second {
-			time.sleep(10 * time.Millisecond)
+	for rt in app.runner.sessions {
+		if rt.running {
+			agent_cancel_token_cancel(&rt.cancel)
 		}
 	}
+	sync.mutex_unlock(&app.runner.mu)
 
-	// 最后一个 turn 的线程句柄也要回收；重复调用是安全的（nil 直接返回）。
-	// 若 turn 在 5s 内没停下，join 会无限等待，所以只回收已经结束的线程。
-	sync.mutex_lock(&app.runner.mu)
-	if !app.runner.running {
-		runner_reap_thread_locked(app)
+	start := time.tick_now()
+	for runner_any_running(app) && time.tick_since(start) < 5 * time.Second {
+		time.sleep(10 * time.Millisecond)
 	}
+
+	// 还有 turn 没停下时不拆注册表：turn 线程收尾还要回写 running 状态。
+	if runner_any_running(app) {
+		return
+	}
+
+	sync.mutex_lock(&app.runner.mu)
+	for rt in app.runner.sessions {
+		runner_reap_thread_locked(rt)
+		delete(rt.key, runtime.heap_allocator())
+		if len(rt.session_id) > 0 {
+			delete(rt.session_id, runtime.heap_allocator())
+		}
+		free(rt, runtime.heap_allocator())
+	}
+	delete(app.runner.sessions)
+	app.runner.sessions = nil
+	if len(app.runner.current) > 0 {
+		delete(app.runner.current, runtime.heap_allocator())
+	}
+	app.runner.current = ""
 	sync.mutex_unlock(&app.runner.mu)
 }
 
@@ -227,6 +459,12 @@ free_maybe_string :: proc(value: Maybe(string)) {
 }
 
 free_job :: proc(job: ^Turn_Job) {
+	if len(job.key) > 0 {
+		delete(job.key, runtime.heap_allocator())
+	}
+	if len(job.session_id) > 0 {
+		delete(job.session_id, runtime.heap_allocator())
+	}
 	if len(job.options.session_id) > 0 {
 		delete(job.options.session_id, runtime.heap_allocator())
 	}
@@ -244,27 +482,24 @@ free_job :: proc(job: ^Turn_Job) {
 	free(job, runtime.heap_allocator())
 }
 
-// 每个 stdout 事件：原始行广播 + 记录 session 指针与 turn_done 需要的信息。
+// 每个 stdout 事件：原始行按 session 广播 + 记录 session 指针与 turn_done
+// 需要的信息。
 runner_on_event_line :: proc(user: rawptr, ev: Event, line: string) {
 	job := (^Turn_Job)(user)
 	app := job.app
 
-	forwarded := line
-	if strings.has_suffix(forwarded, "\r") {
-		forwarded = forwarded[:len(forwarded) - 1]
-	}
-	if len(forwarded) > 0 {
-		_ = sse_hub_broadcast(&app.hub, "ap", forwarded)
-	}
-
 	switch ev.type {
 	case "session_start":
-		if len(ev.session_id) > 0 {
-			runner_set_session(app, ev.session_id)
+		if len(ev.session_id) > 0 && ev.session_id != job.session_id {
+			if len(job.session_id) > 0 {
+				delete(job.session_id, runtime.heap_allocator())
+			}
+			job.session_id = strings.clone(ev.session_id, runtime.heap_allocator())
+			runner_set_session_id(app, job.key, ev.session_id)
 		}
 	case "turn_start", "turn_end":
 		if ev.turn > 0 {
-			runner_set_turn(app, ev.turn)
+			runner_set_turn(app, job.key, ev.turn)
 		}
 	case "session_end":
 		if len(ev.reason) > 0 {
@@ -273,6 +508,14 @@ runner_on_event_line :: proc(user: rawptr, ev: Event, line: string) {
 			}
 			job.session_end = strings.clone(ev.reason, runtime.heap_allocator())
 		}
+	}
+
+	forwarded := line
+	if strings.has_suffix(forwarded, "\r") {
+		forwarded = forwarded[:len(forwarded) - 1]
+	}
+	if len(forwarded) > 0 {
+		_ = sse_hub_broadcast(&app.hub, "ap", forwarded, job.key, job.session_id)
 	}
 
 	if ev.type == "turn_end" {
@@ -310,7 +553,8 @@ runner_stop_reason :: proc(job: ^Turn_Job) -> Maybe(string) {
 	return nil
 }
 
-// turn 线程：spawn ap → 泵事件（回调里广播）→ 广播 turn_done → 交还单飞锁。
+// turn 线程：spawn ap → 泵事件（回调里按 session 广播）→ 广播 turn_done →
+// 交还该 session 的分飞锁。
 runner_thread :: proc(user: rawptr) {
 	job := (^Turn_Job)(user)
 	app := job.app
@@ -338,7 +582,7 @@ runner_thread :: proc(user: rawptr) {
 		done.stderr_preview = result.stderr_preview
 	}
 	data := sse_turn_done_json(done, runtime.heap_allocator())
-	_ = sse_hub_broadcast(&app.hub, "turn_done", data)
+	_ = sse_hub_broadcast(&app.hub, "turn_done", data, job.key, job.session_id)
 	delete(data)
 
 	if len(result.session_id) > 0 {
@@ -349,9 +593,11 @@ runner_thread :: proc(user: rawptr) {
 	}
 
 	sync.mutex_lock(&app.runner.mu)
-	app.runner.running = false
-	// 这一轮的取消信号到此为止；不清零会让「取消后立刻开新 turn」继承旧状态。
-	sync.atomic_store(&app.runner.cancel.value, 0)
+	if rt := runner_find_locked(app, job.key); rt != nil {
+		rt.running = false
+		// 这一轮的取消信号到此为止；不清零会让「取消后立刻开新 turn」继承旧状态。
+		sync.atomic_store(&rt.cancel.value, 0)
+	}
 	sync.mutex_unlock(&app.runner.mu)
 	free_job(job)
 }

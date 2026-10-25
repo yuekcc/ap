@@ -71,19 +71,22 @@ Api_Config :: struct {
 }
 
 Api_Session_Current :: struct {
-	session_id: Maybe(string) `json:"session_id"`,
-	running:    bool          `json:"running"`,
-	turn:       Maybe(int)    `json:"turn"`,
+	session_key: Maybe(string) `json:"session_key"`,
+	session_id:  Maybe(string) `json:"session_id"`,
+	running:     bool          `json:"running"`,
+	turn:        Maybe(int)    `json:"turn"`,
 }
 
 Api_Session_Id :: struct {
-	session_id: Maybe(string) `json:"session_id"`,
+	session_id:  Maybe(string) `json:"session_id"`,
+	session_key: string        `json:"session_key"`,
 }
 
 Api_Session_Entry :: struct {
 	session_id: string `json:"session_id"`,
 	ts:         i64    `json:"ts"`,
 	turns:      int    `json:"turns"`,
+	running:    bool   `json:"running"`,
 }
 
 Api_Cwd :: struct {
@@ -91,7 +94,8 @@ Api_Cwd :: struct {
 }
 
 Api_Accepted :: struct {
-	accepted: bool `json:"accepted"`,
+	accepted:    bool   `json:"accepted"`,
+	session_key: string `json:"session_key"`,
 }
 
 Api_Cancelled :: struct {
@@ -210,15 +214,21 @@ api_config :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respons
 	)
 }
 
+// session_key 缺省时返回「最近活跃」的 session；带 key 时返回该 session 的
+// 运行态，供前端重连后校正 running/turn（多标签页各自轮询自己的 session）。
 api_session_current :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
+	key, _ := query_param(request.query, "session_key")
+	state := runner_state(app, key, context.temp_allocator)
 	current := Api_Session_Current {
-		running = runner_running(app),
-		turn    = runner_turn(app),
+		running = state.running,
+		turn    = state.turn,
 	}
-	session := runner_session(app, context.temp_allocator)
-	if len(session) > 0 {
-		current.session_id = session
+	if len(state.key) > 0 {
+		current.session_key = state.key
+	}
+	if len(state.session_id) > 0 {
+		current.session_id = state.session_id
 	}
 	api_json(response, 200, current)
 }
@@ -232,10 +242,12 @@ api_cwd :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) 
 // session 指针
 // ---------------------------------------------------------------------------
 
+// 新建会话只分配一个 slot：下一条提示词让 ap 创建真实 session，不落盘任何东西。
+// 其他 session 的运行态完全不受影响（多标签页各开各的新会话）。
 api_session_new :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	runner_clear_session(app)
-	api_json(response, 200, Api_Session_Id{})
+	key := runner_session_new(app, context.temp_allocator)
+	api_json(response, 200, Api_Session_Id{session_key = key})
 }
 
 Api_Resume_Body :: struct {
@@ -253,12 +265,13 @@ api_session_resume :: proc(user: rawptr, request: ^Http_Request, response: ^Http
 		api_error(response, 400, "invalid_request", "session_id is required")
 		return
 	}
-	if runner_running(app) {
-		api_error(response, 409, "turn_running", "cannot switch session while a turn is running")
-		return
-	}
-	runner_set_session(app, body.session_id)
-	api_json(response, 200, Api_Session_Id{session_id = body.session_id})
+	// 切换视图不影响其他 session 的运行中 turn；同一 session 的分飞由
+	// POST /api/turn 自己保证。
+	key := runner_session_resume(app, body.session_id, context.temp_allocator)
+	api_json(response, 200, Api_Session_Id{
+		session_id = body.session_id,
+		session_key = key,
+	})
 }
 
 // 会话列表：id 来自 internal/sessions，ts 取文件 mtime（毫秒），
@@ -288,6 +301,7 @@ api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 			session_id = id,
 			ts         = ts,
 			turns      = session_turn_count(project, id),
+			running    = runner_session_running(app, id),
 		})
 	}
 	// 最近修改的在前，前端下拉框直接可用。
@@ -479,11 +493,12 @@ history_resolve_tool_input :: proc(block: ^json.Object, project: Project) {
 // ---------------------------------------------------------------------------
 
 Api_Turn_Body :: struct {
-	prompt:     string        `json:"prompt"`,
-	model:      Maybe(string) `json:"model"`,
-	agent:      Maybe(string) `json:"agent"`,
-	max_steps:  Maybe(int)    `json:"max_steps"`,
-	max_tokens: Maybe(int)    `json:"max_tokens"`,
+	prompt:      string        `json:"prompt"`,
+	session_key: string        `json:"session_key"`,
+	model:       Maybe(string) `json:"model"`,
+	agent:       Maybe(string) `json:"agent"`,
+	max_steps:   Maybe(int)    `json:"max_steps"`,
+	max_tokens:  Maybe(int)    `json:"max_tokens"`,
 }
 
 api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
@@ -511,16 +526,17 @@ api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Res
 	}
 
 	request_options := Turn_Request {
-		prompt     = body.prompt,
-		model      = non_empty_maybe(body.model),
-		agent      = non_empty_maybe(body.agent),
-		max_steps  = body.max_steps,
-		max_tokens = body.max_tokens,
+		prompt      = body.prompt,
+		session_key = strings.trim_space(body.session_key),
+		model       = non_empty_maybe(body.model),
+		agent       = non_empty_maybe(body.agent),
+		max_steps   = body.max_steps,
+		max_tokens  = body.max_tokens,
 	}
-	status, message := runner_start_turn(app, request_options)
+	status, key, message := runner_start_turn(app, request_options, context.temp_allocator)
 	switch status {
 	case .Started:
-		api_json(response, 202, Api_Accepted{accepted = true})
+		api_json(response, 202, Api_Accepted{accepted = true, session_key = key})
 	case .Busy:
 		api_error(response, 409, "turn_running", message)
 	case .Shutting_Down:
@@ -539,7 +555,8 @@ non_empty_maybe :: proc(value: Maybe(string)) -> Maybe(string) {
 
 api_turn_cancel :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	cancelled := runner_cancel(app)
+	key, _ := query_param(request.query, "session_key")
+	cancelled := runner_cancel(app, key)
 	api_json(response, 202, Api_Cancelled{cancelled = cancelled})
 }
 
@@ -547,10 +564,13 @@ api_turn_cancel :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Re
 // SSE
 // ---------------------------------------------------------------------------
 
+// 每个标签页订阅自己的 session（session_key 可以是 slot key 或真实 id），
+// 只收到这个 session 的事件；不带参数时保持旧的「订阅全部」行为。
 api_events :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
+	key, _ := query_param(request.query, "session_key")
 	sub: Sse_Subscriber
-	if !sse_hub_subscribe(&app.hub, &sub) {
+	if !sse_hub_subscribe_topic(&app.hub, &sub, key) {
 		api_error(response, 500, "internal_error", "cannot register SSE subscriber")
 		return
 	}

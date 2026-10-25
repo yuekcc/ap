@@ -21,6 +21,7 @@ test("会话列表标题取 id 里的日期时间，元信息带短 id 与轮数
 	const session = { session_id: "ses_20261022_120000_abcdef123456", turns: 3 };
 	assert.equal(sessionTitle(session), "10-22 12:00");
 	assert.equal(sessionMeta(session), "abcdef12 · 3 轮");
+	assert.equal(sessionMeta({ ...session, running: true }), "abcdef12 · 3 轮 · 运行中");
 	// 不符合命名规则时原样回退，不伪造日期。
 	assert.equal(sessionTitle({ session_id: "custom" }), "custom");
 	assert.equal(sessionMeta({ session_id: "custom" }), "custom · 0 轮");

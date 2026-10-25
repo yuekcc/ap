@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -82,8 +83,11 @@ SSE_HEARTBEAT_INTERVAL :: 15 * time.Second
 
 // 一个订阅者对应一个 SSE 连接。channel 里放的是已经编码好的完整 chunk，
 // 连接线程只需 recv → write → delete，hub 不碰 socket。
+// topic 是 session key（新会话的 slot key 或真实 session id）；空字符串表示
+// 订阅全部事件（心跳与旧客户端）。
 Sse_Subscriber :: struct {
 	frames: sync_chan.Chan(string),
+	topic:  string,
 }
 
 // 连接线程阻塞等待下一帧；ok=false 表示订阅已被关闭（hub 丢弃或关停），该收尾了。
@@ -107,12 +111,26 @@ sse_hub_init :: proc(hub: ^Sse_Hub) {
 }
 
 // 订阅：调用方持有 Sse_Subscriber 本身（通常挂在连接结构上），hub 只存指针。
+// 不传 topic 时订阅全部事件（测试、心跳广播与旧调用方）。
 sse_hub_subscribe :: proc(hub: ^Sse_Hub, sub: ^Sse_Subscriber, buffer := SSE_SUBSCRIBER_BUFFER) -> bool {
+	return sse_hub_subscribe_topic(hub, sub, "", buffer)
+}
+
+sse_hub_subscribe_topic :: proc(
+	hub: ^Sse_Hub,
+	sub: ^Sse_Subscriber,
+	topic: string,
+	buffer := SSE_SUBSCRIBER_BUFFER,
+) -> bool {
 	frames, err := sync_chan.create(sync_chan.Chan(string), buffer, context.allocator)
 	if err != nil {
 		return false
 	}
 	sub.frames = frames
+	sub.topic = ""
+	if len(topic) > 0 {
+		sub.topic = strings.clone(topic, runtime.heap_allocator())
+	}
 
 	sync.mutex_lock(&hub.mu)
 	defer sync.mutex_unlock(&hub.mu)
@@ -134,6 +152,10 @@ sse_hub_unsubscribe :: proc(hub: ^Sse_Hub, sub: ^Sse_Subscriber) {
 	}
 	sync_chan.close(sub.frames)
 	sync_chan.destroy(sub.frames)
+	if len(sub.topic) > 0 {
+		delete(sub.topic, runtime.heap_allocator())
+	}
+	sub.topic = ""
 }
 
 sse_hub_subscriber_count :: proc(hub: ^Sse_Hub) -> int {
@@ -142,9 +164,11 @@ sse_hub_subscriber_count :: proc(hub: ^Sse_Hub) -> int {
 	return len(hub.subscribers)
 }
 
-// 广播一个事件：分配 id、编码一次、给每个订阅者投递一份。
+// 广播一个事件：分配 id、编码一次、给匹配 topic 的订阅者投递一份。
+// topics 为空表示广播给所有人（心跳）；否则订阅者匹配任意一个 topic 即可
+// （新会话同时用 slot key 与真实 session id 作为 topic）。
 // 非阻塞：channel 满就丢弃该订阅者并关闭它的 channel（唤醒阻塞的 recv），turn 不受影响。
-sse_hub_broadcast :: proc(hub: ^Sse_Hub, event: string, data: string) -> u64 {
+sse_hub_broadcast :: proc(hub: ^Sse_Hub, event: string, data: string, topics: ..string) -> u64 {
 	sync.mutex_lock(&hub.mu)
 	defer sync.mutex_unlock(&hub.mu)
 
@@ -152,7 +176,7 @@ sse_hub_broadcast :: proc(hub: ^Sse_Hub, event: string, data: string) -> u64 {
 	b := strings.builder_make()
 	defer strings.builder_destroy(&b)
 	sse_encode_event(&b, event, data, hub.next_id)
-	sse_hub_fanout_locked(hub, strings.to_string(b))
+	sse_hub_fanout_locked(hub, strings.to_string(b), topics)
 	return hub.next_id
 }
 
@@ -165,16 +189,32 @@ sse_hub_heartbeat :: proc(hub: ^Sse_Hub, ts: i64) -> u64 {
 	b := strings.builder_make()
 	defer strings.builder_destroy(&b)
 	sse_encode_heartbeat(&b, ts, hub.next_id)
-	sse_hub_fanout_locked(hub, strings.to_string(b))
+	sse_hub_fanout_locked(hub, strings.to_string(b), nil)
 	return hub.next_id
+}
+
+sse_subscriber_matches :: proc(sub: ^Sse_Subscriber, topics: []string) -> bool {
+	if len(topics) == 0 || len(sub.topic) == 0 {
+		return true
+	}
+	for topic in topics {
+		if len(topic) > 0 && sub.topic == topic {
+			return true
+		}
+	}
+	return false
 }
 
 // 持 hub.mu 调用。channel 里的字符串归接收方所有，因此每个订阅者拿一份 clone；
 // 丢弃订阅者时顺便释放没送出去的那份。
-sse_hub_fanout_locked :: proc(hub: ^Sse_Hub, chunk: string) {
+sse_hub_fanout_locked :: proc(hub: ^Sse_Hub, chunk: string, topics: []string) {
 	i := 0
 	for i < len(hub.subscribers) {
 		sub := hub.subscribers[i]
+		if !sse_subscriber_matches(sub, topics) {
+			i += 1
+			continue
+		}
 		frame := strings.clone(chunk)
 		if sync_chan.try_send(sub.frames, frame) {
 			i += 1

@@ -135,7 +135,8 @@ app_change_cwd :: proc(app: ^App, path: string) -> string {
 	sync.mutex_unlock(&app.cwd_mu)
 
 	// 旧 session 属于旧 project，切目录后不应再被追加（docs/web.md 第 5 条）。
-	runner_clear_session(app)
+	// 所有 session 的运行态一起作废：不同标签页的旧 key 都不再指向有效 transcript。
+	runner_reset_sessions(app)
 	return ""
 }
 
@@ -147,7 +148,8 @@ app_change_cwd :: proc(app: ^App, path: string) -> string {
 // 占位在弹窗前拿、结果返回后释放，保证同一时刻只有一个模态对话框。
 api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	if runner_running(app) {
+	// cwd 是进程级状态：任意 session 在跑都不能切，否则跨标签页的 project 身份会漂移。
+	if runner_any_running(app) {
 		api_error(response, 409, "turn_running", "cannot change directory while a turn is running")
 		return
 	}

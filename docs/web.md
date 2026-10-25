@@ -39,7 +39,7 @@ ap-web/
 ├── api.odin             # 路由表 → handler；JSON 编解码
 ├── sse.odin             # SSE 帧编码、hub（订阅表 + 互斥锁 + 广播）、心跳
 ├── agent.odin           # 复刻 ap-tui/agent.odin：spawn ap、pipe、事件泵、退出码
-├── runner.odin          # turn runner：单飞锁、取消、stderr 缓存、turn_done 组装
+├── runner.odin          # session registry：按 session 分飞、取消、stderr 缓存、turn_done 组装
 ├── events.odin          # 与 ap-tui/events.odin 同构的 Event 解析（先复制，后下沉）
 ├── pickdir.odin         # 工作目录选择对话框：Windows IFileDialog（COM STA）；Unix 返回 501
 ├── assets.odin          # 内置资源表：#load_directory("dist") + 查找/兜底
@@ -75,12 +75,12 @@ ap-web（主进程）
 │     ├── 静态资源请求 → 内置资源表查找 → 返回
 │     ├── API 请求 → 解析 → 路由 → JSON 响应
 │     └── SSE 请求 → 注册到 hub → 阻塞读 hub channel → 写 chunk
-└── turn runner：单飞（同一时刻至多一个 ap 子进程在跑）
+└── turn runner：每个 session 一个运行态（slot key / 真实 id），不同 session 可并发
 ```
 
 ### 为什么每连接一线程而不是事件循环
 
-- 目标规模是 1 个浏览器标签页（至多几个）；线程数个位数，`core:thread` 足够
+- 目标规模是同一用户的几个浏览器标签页（每个标签页一个 session）；线程数仍是个位数，`core:thread` 足够
 - 阻塞 IO 的代码与 ap-tui 的子进程读取逻辑同构，可以直接照搬 `ap-tui/agent.odin` 的 spawn/pipe 模式（含 Windows 继承标志清理）
 - Odin 没有 async/await；写一个 select/epoll 抽象层的复杂度远超收益
 
@@ -88,19 +88,23 @@ ap-web（主进程）
 
 与 ap-tui 一轮完全一致：
 
-1. `POST /api/turn` 校验参数，检查当前没有运行中的 turn（409 否则）
+1. `POST /api/turn` 校验参数，用 `session_key` 定位该 session 的运行态；同一 session 已有 turn 返回 409，不同 session 可以并发启动
 2. spawn `ap --print0 --output-format stream-json [-s <id>] <透传>`，提示词写 stdin 后关写端（Windows 上清理管道句柄继承标志，见 [tui.md](tui.md) 的坑）
-3. 逐行读 stdout：`parse_event_line`（复用 ap-tui 的事件结构）→ 逐事件推给 hub → SSE 广播
+3. 逐行读 stdout：`parse_event_line`（复用 ap-tui 的事件结构）→ 逐事件推给 hub → 按该 session 的 key 广播 SSE
 4. stderr 缓存；turn 异常退出时随 `turn_done` 的 `stderr_preview` 带给前端
-5. 进程退出：从最后一条 `session_start` 拿 `session_id` 存为当前 session；广播 `turn_done`（含退出码与 stop_reason）
-6. 运行中收到 `DELETE /api/turn`：向 ap 进程树发终止（复用 ap 内部的进程树终止语义：Unix 先 SIGTERM、2s 后 SIGKILL；Windows 用 Job Object 整树终止）。Unix 上 ap 收到 SIGTERM 后会自己写 `cancel` / `turn_end(cancelled)` / `session_end(reason=signal)`；Windows 的 Job 终止会连同 ap 一起结束，ap 来不及写收尾事件。两种情况 ap-web 都广播 `turn_done`，主动取消时 `stop_reason` 至少为 `cancelled`
+5. 进程退出：把 slot key 别名到 `session_start` 里的真实 session id（新会话第一轮），广播 `turn_done`（含退出码与 stop_reason）
+6. 运行中收到 `DELETE /api/turn?session_key=<key>`：只终止该 session 的 ap 进程树（复用 ap 内部的进程树终止语义：Unix 先 SIGTERM、2s 后 SIGKILL；Windows 用 Job Object 整树终止）。Unix 上 ap 收到 SIGTERM 后会自己写 `cancel` / `turn_end(cancelled)` / `session_end(reason=signal)`；Windows 的 Job 终止会连同 ap 一起结束，ap 来不及写收尾事件。两种情况 ap-web 都广播 `turn_done`，主动取消时 `stop_reason` 至少为 `cancelled`
 
 ### 取消与并发约束
 
-- **单飞**：同一 session 同一时刻只允许一个 turn；运行中再 `POST /api/turn` 返回 409。多 session 并发是 phase 2
+- **单 session 单飞**：同一 session 同一时刻只允许一个 turn；用同一个 `session_key` 再 `POST /api/turn` 返回 409 `turn_running`
+- **按 session 并发**：不同 `session_key` 可以同时跑 turn（多标签页各跑各的）。resume 其他 session 不再因为某个 session 在跑而 409
+- **session key**：新会话先由 `POST /api/session/new` 分配 slot key（形如 `web_new_1`），`session_start` 后 registry 把它别名到真实 id；订阅 slot key 或真实 id 都能收到该 session 的事件。恢复已有 session 时 key 通常等于 session id
+- **取消只作用于一个 session**：`DELETE /api/turn?session_key=<key>`；不带 key 时退化为当前 session，若当前没跑且只有一个在跑则取消那一个（兼容旧客户端）
+- **cwd 是进程级状态**：任意 session 在跑时 `POST /api/cwd/pick` 都返回 409；切换成功后 `runner_reset_sessions` 清空所有 session 运行态
 - turn runner 在独立线程执行，SSE 连接挂掉**不**取消 turn（浏览器刷新后通过 `GET /api/history` + 重新订阅恢复画面）
 - Windows 上取消是整树强制终止，transcript 可能停在 `tool_execution_start` 等中间事件，没有 `turn_end` / `session_end`；刷新页面仍能重放已经落盘的部分。Unix 上走 SIGTERM 优雅中断，收尾事件齐全
-- ap-web 进程退出时向运行中的 ap 发终止并等待至多 5s
+- ap-web 进程退出时终止所有运行中的 ap，并等待至多 5s
 
 ## HTTP 层（手写）
 
@@ -138,18 +142,18 @@ ap-web（主进程）
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | – | `{"ok": true, "version": ...}` | 探活 |
 | GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 从 ap-web 启动参数/env 组装，前端展示；`platform` 决定是否显示目录选择入口 |
-| GET | `/api/session/current` | – | `{session_id, running, turn}` | 当前 session 与运行状态 |
-| POST | `/api/session/new` | – | `{session_id: null}` | 语义动作：清空当前指针，下一条提示词让 ap 新建 session（同 ap-tui `/new`）；不落盘任何东西 |
-| GET | `/api/sessions` | – | `[{session_id, ts, turns}]` | 复用 `internal/sessions.odin` 列表，前端选择恢复 |
-| POST | `/api/session/resume` | `{session_id}` | `{session_id}` | 指针切换；不校验合法性，交给下一轮 ap 报错 |
+| GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, running, turn}` | 指定 key 时返回该 session 的运行态；不带参数返回「最近活跃」session（仅作新标签页兜底） |
+| POST | `/api/session/new` | – | `{session_id: null, session_key}` | 只分配一个 slot，不落盘；下一条提示词让 ap 新建 session（同 ap-tui `/new`） |
+| GET | `/api/sessions` | – | `[{session_id, ts, turns, running}]` | 复用 `internal/sessions.odin` 列表；`running` 表示该 transcript 对应的 session 是否在跑 |
+| POST | `/api/session/resume` | `{session_id}` | `{session_id, session_key}` | 切换/注册该 session 的运行态；不因其他 session 在跑而 409，也不校验合法性（交给下一轮 ap 报错） |
 | GET | `/api/history?session_id=<id>` | – | `{events: [...]}` | transcript 重放：逐行读 JSONL，`text_ref` / `input_ref` / `args_ref` / `content_ref` 从 blobs 解析（缺失则退化为对应 `*_preview`），超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
 | GET | `/api/cwd` | – | `{cwd}` | 当前工作目录（启动目录；切换后为最后设置的值） |
-| POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；用户确认后返回所选路径并更新 cwd。见「工作目录选择」 |
-| POST | `/api/turn` | `{prompt}` | `202 {accepted: true}` | 启动一轮；运行中 409 `turn_running`；`prompt` 为空 400 |
-| DELETE | `/api/turn` | – | `202` | 取消当前 turn（终止进程树） |
-| GET | `/api/events` | – | SSE 流 | 见下节 |
+| POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；用户确认后返回所选路径、更新 cwd 并清空所有 session 运行态。见「工作目录选择」 |
+| POST | `/api/turn` | `{prompt, session_key?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409 `turn_running`，不同 session 可并发；`prompt` 为空 400 |
+| DELETE | `/api/turn?session_key=<key>` | – | `202 {"cancelled": bool}` | 取消该 session 的 turn（终止进程树）；不带 key 时退化为当前 session |
+| GET | `/api/events?session_key=<key>` | – | SSE 流 | 只订阅该 session 的事件；不带参数订阅全部（兼容/测试）。见下节 |
 
-透传：`POST /api/turn` 可带可选 `model` / `agent` / `max_steps` / `max_tokens`，ap-web 原样转成命令行参数——与 ap-tui 透传规则一致。
+透传：`POST /api/turn` 可带可选 `model` / `agent` / `max_steps` / `max_tokens`，ap-web 原样转成命令行参数——与 ap-tui 透传规则一致；`session_key` 只用于定位运行态，不传给 ap。
 
 ## 工作目录选择
 
@@ -170,8 +174,8 @@ ap-web（主进程）
 1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；accept 循环与其他连接不受影响（pick 请求自身会占用它的连接线程，见「实现细节与额外语义」）
 2. **Unix**：无统一的原生目录对话框 API，phase 1 直接 `501 not_implemented`，前端隐藏该入口（`GET /api/config` 返回 `platform` 字段区分）；phase 2 可考虑 `zenity`/`kdialog` 探测
 3. **取消语义**：用户关掉对话框 → `409 {error: {code: "cancelled"}}`，前端静默忽略
-4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显——输入区「选择目录」按钮旁与侧栏底部都显示当前 cwd；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；运行中调用 `POST /api/cwd/pick` 返回 409 `turn_running`
-5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加。服务器在 pick 成功后清空 session 指针；前端收到新的 cwd 后也清空当前 session/消息列表，并提示「已切换工作目录，请开始新 session」
+4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显——输入区「选择目录」按钮旁与侧栏底部都显示当前 cwd；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；任意 session 在跑时调用 `POST /api/cwd/pick` 都返回 409 `turn_running`
+5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加。服务器在 pick 成功后清空所有 session 运行态；前端收到新的 cwd 后也清空当前 session/消息列表，并重新分配一个 slot 提示「已切换工作目录，请开始新 session」
 6. **并发**：同一时刻只允许一个 pick 请求；重复调用返回 409 `picker_busy`（一个模态对话框只能有一份）
 
 ## SSE 事件流
@@ -194,13 +198,16 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 | `turn_done` | `{exit_code, stop_reason, usage, stderr_preview}` | turn 结束信封；`stop_reason` 取自 `turn_end`/`session_end`，主动取消但没有收尾事件时 ap-web 填 `cancelled`，其他缺失为 null |
 | `ping` | `{ts}` | 心跳（也作为 SSE 注释行发送） |
 
-事件顺序保证：单 session 内 ap-web 按收到顺序广播，天然与 stdout 行序一致；不做 seq 去重（ap 保证单调）。
+`GET /api/events?session_key=<key>` 只转发该 session 的 `ap` / `turn_done` 帧；订阅者匹配 slot key 或真实 session id 任一即可。心跳（空 topic）仍发给所有订阅者。不带 `session_key` 时保持旧的全量订阅，仅用于兼容与测试。
+
+事件顺序保证：单 session 内 ap-web 按收到顺序广播，天然与 stdout 行序一致；不做 seq 去重（ap 保证单调）。不同 session 的事件可能交错到达不同订阅者，但每个标签页只看到自己的 session。
 
 ### 历史与实时的衔接
 
 前端两条路径到同一份事实（transcript）：
 
-- 打开/切 session：`GET /api/history` 渲染存量；然后 `GET /api/events` 订阅增量
+- 打开/切 session：`GET /api/session/current?session_key=<key>` 校正运行态，`GET /api/history` 渲染存量，然后 `GET /api/events?session_key=<key>` 订阅该 session 的增量
+- 刷新页面：每个标签页从 `sessionStorage` 恢复自己的 `{session_key, session_id}`（优先真实 id，slot key 在 ap-web 重启后无意义）；没有记录时用 `/api/session/current` 兜底，仍为空则 `POST /api/session/new`
 - 竞态：订阅成功后若发现 `session_start` 或按 `seq` 比对与已有末尾重复，初始化状态时直接跳过（transcript 事件的 `seq` 单调，前端以此为去重键）
 - 刷新页面重连：重新走 history + subscribe；不做断点续传（phase 2 可用 `Last-Event-ID` + transcript seq 补差）
 
@@ -224,7 +231,8 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 - store 状态机与 ap-tui 渲染一一对应：`idle` / `running`；`message_update` 按 delta 累积，`message_end` 只补缺（避免重复，同 ap-tui 规则）
 - 工具卡片：`tool_execution_start` 建卡片（名称 + 参数），`tool_execution_update` 增量追加（bash 流式），`tool_execution_end` 标记 ✓/✗、耗时、退出码；结果超限截断提示（完整内容在 transcript）
 - 转义：用户输入与工具输出经 `textContent` 写入；仅 assistant 文本走 Markdown（`markdown-exit`，`html:false` 转义原始 HTML，危险协议链接不渲染，外链 `target="_blank" rel="noopener noreferrer"`，图片 `loading="lazy"` + 不发送 referrer），经 `x-html` 注入且只注入渲染器产物
-- phase 1 单页单 session，无路由库
+- 多标签页：每个标签页持有自己的 `session_key`，SSE 按该 key 过滤；`sessionStorage` 保存本标签页的 `{key, id}`，刷新后优先按真实 id 恢复。会话列表/新建入口只按 `loading` 禁用，不按 `running`，所以一个标签页在跑时仍可切换或新开其他 session
+- 单页应用，无路由库；同一 session 仍在客户端按 `running` 阻止重复发送，服务端再以 409 兜底
 
 ## 构建与运行
 
@@ -330,7 +338,8 @@ ap-web 不 import ap、不 import ap-tui
 
 | 端点 | 额外行为 | 理由 |
 | --- | --- | --- |
-| `POST /api/session/resume` | 有 turn 运行时返回 409 `turn_running` | 运行中切 session 会让下一轮 `-s` 指向别的 transcript，也会破单飞语义 |
+| `POST /api/session/resume` | 不因其他 session 在跑而返回 409；只有 `POST /api/turn` 按 session 判忙 | 不同标签页可以各自查看/运行不同 session；单 session 的单飞由 turn 入口保证 |
+| `GET /api/session/current` | 不带 `session_key` 时返回「最近活跃」session，仅作新标签页兜底 | 多标签页下不存在唯一的「当前 session」指针 |
 | `DELETE /api/turn` | 202 `{"cancelled": bool}` | 前端需要区分「确实取消了」与「本来就没在跑」 |
 | `POST /api/turn` | `max_steps` / `max_tokens` 非正数返回 400 `invalid_request` | 非正数对 ap 没有意义，在边界提前拒绝 |
 | 任意 | 关停中（收到 SIGINT/SIGTERM 后）启动新 turn 返回 503 `shutting_down` | 进程即将退出，接受请求必然失败 |
@@ -342,16 +351,15 @@ ap-web 不 import ap、不 import ap-tui
 
 ## 测试
 
-1. `odin test ap-web`：HTTP 解析（request line/headers/body 上限、keep-alive）、SSE 帧编码、事件泵、路由、内置资源查找
-2. `npm --prefix ap-web test`：前端事件归约（delta 累积、工具卡片、history 重放、seq 去重、turn_done 状态机）
-3. 集成（真 spawn 假 agent）：一轮完整 turn 的 SSE 事件序列、409 单飞、取消与进程树终止、异常退出 stderr 呈现
-4. 手动矩阵：Chrome/Edge/Firefox `EventSource` 行为；Windows/Linux 双平台管道与进程树终止
+1. `odin test ap-web`：HTTP 解析（request line/headers/body 上限、keep-alive）、SSE 帧编码、事件泵、路由、内置资源查找、按 session 的 SSE 过滤与并发隔离
+2. `npm --prefix ap-web test`：前端事件归约（delta 累积、工具卡片、history 重放、seq 去重、turn_done 状态机）与 session_key 请求构造
+3. 集成（真 spawn 假 agent）：一轮完整 turn 的 SSE 事件序列、同 session 409 单飞、不同 session 并发、按 session 取消与进程树终止、异常退出 stderr 呈现
+4. 手动矩阵：Chrome/Edge/Firefox `EventSource` 行为；两个标签页各跑一个 session；Windows/Linux 双平台管道与进程树终止
 
 ## Phase 2 待做
 
 1. `Last-Event-ID` 断点续传（transcript seq 补差）
-2. 多 session 并发 turn（多标签页）
-3. diff 渲染、reasoning 展示开关、usage 状态条
-4. session fork / 删除；文件附件上传
-5. 事件解析与 spawn 层下沉 `internal/`，三消费者共用一份
-6. 远程访问模式：`--host` 放开 + token 鉴权 + HTTPS 由外部代理
+2. diff 渲染、reasoning 展示开关、usage 状态条
+3. session fork / 删除；文件附件上传
+4. 事件解析与 spawn 层下沉 `internal/`，三消费者共用一份
+5. 远程访问模式：`--host` 放开 + token 鉴权 + HTTPS 由外部代理

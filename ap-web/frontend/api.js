@@ -14,14 +14,27 @@ export class ApiError extends Error {
 
 const TURN_OPTION_KEYS = ["model", "agent", "max_steps", "max_tokens"];
 
-function turnBody(payload) {
+// 带 session_key 的端点统一拼 query；空 key 保持旧行为（当前 session / 订阅全部）。
+function sessionPath(path, sessionKey) {
+	const key = String(sessionKey ?? "").trim();
+	if (!key) return path;
+	return `${path}?session_key=${encodeURIComponent(key)}`;
+}
+
+// 导出的纯函数便于单元测试；session_key 只在非空时进入请求体。
+export function turnBody(payload) {
 	const body = { prompt: payload.prompt };
+	if (payload.session_key) body.session_key = payload.session_key;
 	for (const key of TURN_OPTION_KEYS) {
 		if (payload[key] !== undefined && payload[key] !== null && payload[key] !== "") {
 			body[key] = payload[key];
 		}
 	}
 	return body;
+}
+
+export function eventsUrl(sessionKey) {
+	return sessionPath("/api/events", sessionKey);
 }
 
 async function request(path, { method = "GET", body } = {}) {
@@ -64,7 +77,7 @@ async function request(path, { method = "GET", body } = {}) {
 export const api = {
 	health: () => request("/api/health"),
 	config: () => request("/api/config"),
-	currentSession: () => request("/api/session/current"),
+	currentSession: (sessionKey) => request(sessionPath("/api/session/current", sessionKey)),
 	newSession: () => request("/api/session/new", { method: "POST" }),
 	resumeSession: (sessionId) =>
 		request("/api/session/resume", { method: "POST", body: { session_id: sessionId } }),
@@ -74,5 +87,6 @@ export const api = {
 	cwd: () => request("/api/cwd"),
 	pickCwd: () => request("/api/cwd/pick", { method: "POST" }),
 	startTurn: (payload) => request("/api/turn", { method: "POST", body: turnBody(payload) }),
-	cancelTurn: () => request("/api/turn", { method: "DELETE" }),
+	cancelTurn: (sessionKey) =>
+		request(sessionPath("/api/turn", sessionKey), { method: "DELETE" }),
 };

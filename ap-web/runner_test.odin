@@ -7,6 +7,7 @@ import "core:strings"
 import "core:testing"
 import "core:time"
 import "core:sync"
+import "core:thread"
 import sync_chan "core:sync/chan"
 
 FAKE_AGENT_SOURCE :: #load("testdata/fake_agent/main.odin", string)
@@ -63,9 +64,42 @@ runner_test_setup :: proc(t: ^testing.T, app: ^App, dir: string) {
 	runner_init(app)
 }
 
+// 测试探针：registry 内部字段在 phase 2 从「单个 runner」变成了按 session 存，
+// 断言仍然只关心当前 session 的线程句柄与取消位。
+runner_test_current_thread :: proc(app: ^App) -> ^thread.Thread {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	rt := runner_find_locked(app, app.runner.current)
+	if rt == nil {
+		return nil
+	}
+	return rt.thread
+}
+
+runner_test_cancel_value :: proc(app: ^App) -> i32 {
+	sync.mutex_lock(&app.runner.mu)
+	defer sync.mutex_unlock(&app.runner.mu)
+	rt := runner_find_locked(app, app.runner.current)
+	if rt == nil {
+		return 0
+	}
+	return sync.atomic_load(&rt.cancel.value)
+}
+
 test_wait_runner_idle :: proc(app: ^App, timeout: time.Duration) -> bool {
 	start := time.tick_now()
 	for runner_running(app) {
+		if time.tick_since(start) > timeout {
+			return false
+		}
+		time.sleep(5 * time.Millisecond)
+	}
+	return true
+}
+
+test_wait_key_idle :: proc(app: ^App, key: string, timeout: time.Duration) -> bool {
+	start := time.tick_now()
+	for runner_session_running(app, key) {
 		if time.tick_since(start) > timeout {
 			return false
 		}
@@ -121,13 +155,13 @@ test_runner_full_turn_forwards_raw_and_ends :: proc(t: ^testing.T) {
 	defer sse_hub_unsubscribe(&app.hub, &sub)
 	defer runner_shutdown(&app)
 
-	status, start_err := runner_start_turn(&app, {prompt = "hello"})
+	status, _, start_err := runner_start_turn(&app, {prompt = "hello"})
 	testing.expect_value(t, start_err, "")
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect_value(t, runner_running(&app), true)
 
 	// 单飞：running 期间再起一轮直接拒绝（API 层映射成 409）。
-	busy, _ := runner_start_turn(&app, {prompt = "second"})
+	busy, _, _ := runner_start_turn(&app, {prompt = "second"})
 	testing.expect_value(t, busy, Runner_Start.Busy)
 
 	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "turn did not finish")
@@ -174,17 +208,17 @@ test_runner_owns_and_releases_turn_thread :: proc(t: ^testing.T) {
 	}
 	defer sse_hub_destroy(&app.hub)
 
-	status, _ := runner_start_turn(&app, {prompt = "hello"})
+	status, _, _ := runner_start_turn(&app, {prompt = "hello"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "turn did not finish")
 	testing.expect(
 		t,
-		app.runner.turn_thread != nil,
+		runner_test_current_thread(&app) != nil,
 		"finished turn thread must stay owned until the next turn or shutdown",
 	)
 
 	runner_shutdown(&app)
-	testing.expect_value(t, app.runner.turn_thread, nil)
+	testing.expect_value(t, runner_test_current_thread(&app), nil)
 }
 
 @(test)
@@ -203,7 +237,7 @@ test_runner_cancel_terminates_turn :: proc(t: ^testing.T) {
 	defer sse_hub_unsubscribe(&app.hub, &sub)
 	defer runner_shutdown(&app)
 
-	status, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
+	status, _, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_session(&app, "ses_cancel", 10 * time.Second), "agent did not start")
 
@@ -236,7 +270,7 @@ test_runner_cancel_does_not_leak_into_next_turn :: proc(t: ^testing.T) {
 	defer sse_hub_unsubscribe(&app.hub, &sub)
 	defer runner_shutdown(&app)
 
-	status, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
+	status, _, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_session(&app, "ses_cancel", 10 * time.Second), "agent did not start")
 	testing.expect(t, runner_cancel(&app))
@@ -247,10 +281,10 @@ test_runner_cancel_does_not_leak_into_next_turn :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(first, `"stop_reason":"cancelled"`))
 
 	// 取消 token 属于刚结束的那一轮，必须已经复位。
-	testing.expect_value(t, sync.atomic_load(&app.runner.cancel.value), i32(0))
+	testing.expect_value(t, runner_test_cancel_value(&app), i32(0))
 
 	// 立刻开下一轮：不能继承上一轮的取消位。
-	status, _ = runner_start_turn(&app, {prompt = "hello"})
+	status, _, _ = runner_start_turn(&app, {prompt = "hello"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "second turn did not finish")
 
@@ -277,7 +311,7 @@ test_runner_reports_stderr_on_failure :: proc(t: ^testing.T) {
 	defer sse_hub_unsubscribe(&app.hub, &sub)
 	defer runner_shutdown(&app)
 
-	status, _ := runner_start_turn(&app, {prompt = "[scenario:stderr]"})
+	status, _, _ := runner_start_turn(&app, {prompt = "[scenario:stderr]"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "turn did not finish")
 
@@ -306,7 +340,7 @@ test_runner_turn_done_keeps_stop_reason_and_exit_code :: proc(t: ^testing.T) {
 	defer sse_hub_unsubscribe(&app.hub, &sub)
 	defer runner_shutdown(&app)
 
-	status, _ := runner_start_turn(&app, {prompt = "[scenario:exit7]"})
+	status, _, _ := runner_start_turn(&app, {prompt = "[scenario:exit7]"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "turn did not finish")
 
@@ -332,7 +366,7 @@ test_runner_shutdown_stops_running_turn :: proc(t: ^testing.T) {
 	testing.expect(t, sse_hub_subscribe(&app.hub, &sub, 64))
 	defer sse_hub_unsubscribe(&app.hub, &sub)
 
-	status, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
+	status, _, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
 	testing.expect_value(t, status, Runner_Start.Started)
 	testing.expect(t, test_wait_session(&app, "ses_cancel", 10 * time.Second), "agent did not start")
 

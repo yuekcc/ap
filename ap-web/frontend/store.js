@@ -20,11 +20,15 @@ function asArray(value) {
 
 export function createStore() {
 	// view 是非响应式的纯状态；每次 reducer 返回新对象后 publish() 同步到 store。
+	// sessionKey 是客户端稳定标识（新会话的 slot key，或真实 session id），
+	// 不属于 transcript 视图，单独保存，reset()/ingest() 都不会丢。
 	let view = createState();
+	let sessionKey = null;
 
 	const store = Alpine.reactive({
 		items: [],
 		sessionId: null,
+		sessionKey: null,
 		turn: 0,
 		lastSeq: 0,
 		running: false,
@@ -137,6 +141,13 @@ export function createStore() {
 			publish();
 		},
 
+		// 切换标签页自己的 session：key 变了才需要重连 SSE，id 用于载入 history。
+		setSessionKey(key) {
+			sessionKey = key || null;
+			publish();
+		},
+
+		// 只同步运行态；key 由客户端持有，服务端的“最近活跃”指针不能覆盖它。
 		syncCurrent(current = {}) {
 			if (current.session_id) view = { ...view, sessionId: current.session_id };
 			if (typeof current.running === "boolean") view = { ...view, running: current.running };
@@ -189,6 +200,7 @@ export function createStore() {
 	function publish() {
 		store.items = view.items;
 		store.sessionId = view.sessionId;
+		store.sessionKey = sessionKey;
 		store.turn = view.turn;
 		store.lastSeq = view.lastSeq;
 		store.running = view.running;

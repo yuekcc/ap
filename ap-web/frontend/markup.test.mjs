@@ -60,6 +60,10 @@ test("左侧会话栏承载新会话入口与历史会话", async () => {
 	assert.ok(sidebar.includes('class="new-session"'), "new session lives in the sidebar");
 	assert.ok(sidebar.includes("selectSession("), "sidebar sessions switch the active session");
 	assert.ok(sidebar.includes("sessionTitle(session)"), "sidebar shows formatted session titles");
+	assert.ok(
+		!sidebar.includes("$store.ap.running"),
+		"session actions must stay usable while another session is running",
+	);
 	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the sidebar");
 });
 

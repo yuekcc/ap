@@ -87,7 +87,7 @@ test_pick_success_updates_cwd_and_project :: proc(t: ^testing.T) {
 	pick_test_fixture(t, &app, base, &picker)
 	defer sse_hub_destroy(&app.hub)
 	defer runner_shutdown(&app)
-	runner_set_session(&app, "ses_old")
+	_ = runner_session_resume(&app, "ses_old")
 
 	response := api_call(&app, .Post, "/api/cwd/pick")
 	testing.expect_value(t, response.status, 200)

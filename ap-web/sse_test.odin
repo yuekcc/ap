@@ -282,6 +282,45 @@ test_hub_destroy_closes_subscriber_channels :: proc(t: ^testing.T) {
 	sse_hub_unsubscribe(&hub, &sub)
 }
 
+
+@(test)
+test_hub_filters_broadcast_by_session_topic :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	all: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &all, 8))
+	defer sse_hub_unsubscribe(&hub, &all)
+	first: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe_topic(&hub, &first, "web_new_1", 8))
+	defer sse_hub_unsubscribe(&hub, &first)
+	second: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe_topic(&hub, &second, "ses_b", 8))
+	defer sse_hub_unsubscribe(&hub, &second)
+
+	// 新会话同时用 slot key 与 session_start 之后的真实 id 作为 topic。
+	_ = sse_hub_broadcast(&hub, "ap", `{"n":1}`, "web_new_1", "ses_a")
+	_ = sse_hub_broadcast(&hub, "ap", `{"n":2}`, "ses_b")
+
+	all_frames := test_drain_frames(&all)
+	defer delete(all_frames)
+	first_frames := test_drain_frames(&first)
+	defer delete(first_frames)
+	second_frames := test_drain_frames(&second)
+	defer delete(second_frames)
+
+	testing.expect(t, strings.contains(all_frames, `"n":1`) && strings.contains(all_frames, `"n":2`))
+	testing.expect(t, strings.contains(first_frames, `"n":1`))
+	testing.expect(t, !strings.contains(first_frames, `"n":2`))
+	testing.expect(t, strings.contains(second_frames, `"n":2`))
+	testing.expect(t, !strings.contains(second_frames, `"n":1`))
+
+	// 心跳（无 topic）广播给所有订阅者。
+	_ = sse_hub_heartbeat(&hub, 1)
+	testing.expect_value(t, test_drain_frames(&first) != "", true)
+}
+
 // 事件泵线程和心跳线程会并发广播：id 必须无重复地覆盖 1..N。
 SSE_TEST_ID_STRESS_COUNT :: 200
 

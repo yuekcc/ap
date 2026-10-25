@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
-    "test": "node --test frontend/render.test.mjs frontend/markup.test.mjs frontend/pick.test.mjs frontend/markdown.test.mjs"
+    "test": "node --test frontend/render.test.mjs frontend/markup.test.mjs frontend/pick.test.mjs frontend/markdown.test.mjs frontend/api.test.mjs"
   },
   "dependencies": {
     "alpinejs": "^3.17.5",

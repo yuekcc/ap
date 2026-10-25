@@ -43,7 +43,7 @@ test_runner_does_not_leak_thread_handles_across_turns :: proc(t: ^testing.T) {
 
 	baseline := win32_process_handle_count(t)
 	for _ in 0 ..< 5 {
-		status, _ := runner_start_turn(&app, {prompt = "hello"})
+		status, _, _ := runner_start_turn(&app, {prompt = "hello"})
 		testing.expect_value(t, status, Runner_Start.Started)
 		testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "turn did not finish")
 	}

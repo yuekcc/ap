@@ -103,7 +103,8 @@ export function sessionMeta(session) {
 	const match = SESSION_ID_RE.exec(id);
 	const short = match ? match[7].slice(0, 8) : id;
 	const turns = Number.isFinite(session?.turns) ? session.turns : 0;
-	return `${short} · ${turns} 轮`;
+	const running = session?.running === true ? " · 运行中" : "";
+	return `${short} · ${turns} 轮${running}`;
 }
 
 export function messageTexts(event) {

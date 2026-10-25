@@ -444,11 +444,11 @@ main :: proc() {
 			fmt.eprintf("ap-web: session %q not found in project %s\n", id, project.hash)
 			os.exit(2)
 		}
-		runner_set_session(&app, id)
+		_ = runner_session_resume(&app, id)
 	} else if opts.continue_session {
 		latest, latest_err := find_latest_root_session(project)
 		if is_ok(latest_err) {
-			runner_set_session(&app, latest)
+			_ = runner_session_resume(&app, latest)
 			delete(latest, context.allocator)
 		} else {
 			fmt.println("ap-web: no previous session found, starting a new one")

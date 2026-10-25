@@ -24,7 +24,7 @@
     class="new-session"
     type="button"
     @click="newSession"
-    :disabled="$store.ap.running || $store.ap.loading"
+    :disabled="$store.ap.loading"
   >
     <svg class="new-session__icon" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -40,7 +40,7 @@
         class="session"
         type="button"
         :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
-        :disabled="$store.ap.running || $store.ap.loading"
+        :disabled="$store.ap.loading"
         :title="session.session_id"
         @click="selectSession(session.session_id)"
       >
