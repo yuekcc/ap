@@ -6,4 +6,4 @@
 
 **Blocked by:** 04（pick 路由与并发约束已定义）
 
-**Status:** ready-for-agent
+**Status:** done
