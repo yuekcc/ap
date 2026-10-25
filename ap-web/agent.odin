@@ -294,12 +294,9 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	state: Pump_State
 	cb := callbacks
 	defer {
+		// 若在 return 前没有转交所有权，session_id 仍归本函数，需要释放。
 		if len(state.session_id) > 0 {
-			result.session_id = state.session_id
-			state.session_id = ""
-		}
-		if len(state.stderr_log) > 0 && result.exit_code != 0 && len(result.stderr_preview) == 0 {
-			result.stderr_preview = strings.clone(string(state.stderr_log[:]), context.allocator)
+			delete(state.session_id, context.allocator)
 		}
 		delete(state.stderr_log)
 	}
@@ -496,6 +493,13 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	result.exit_code = exit_code
 	result.cancelled = cancelled
 	result.interrupted = cancelled || exit_code == 130 || exit_code == 143
+	if len(state.session_id) > 0 {
+		result.session_id = state.session_id
+		state.session_id = ""
+	}
+	if len(state.stderr_log) > 0 && exit_code != 0 {
+		result.stderr_preview = strings.clone(string(state.stderr_log[:]), context.allocator)
+	}
 	return
 }
 
