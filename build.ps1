@@ -16,4 +16,8 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-Write-Host "built $out\ap.exe $out\ap-tui.exe"
+& odin build ../ap-web -out:ap-web.exe -vet
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+Write-Host "built $out\ap.exe $out\ap-tui.exe $out\ap-web.exe"
