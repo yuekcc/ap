@@ -102,12 +102,14 @@ agent_cancel_token_cancelled :: proc(token: ^Agent_Cancel_Token) -> bool {
 }
 
 // runner 只需要三件事：逐事件转发、可选 stderr 日志、结束信封。
-// on_event / on_stderr 的字符串只在回调期间有效（解析用 temp arena）。
+// on_event_line 额外带 stdout 的原始 JSON 行：SSE 要求「原样直转发」，
+// 用结构体重新序列化会丢掉 ap 新增/未知字段。字符串只在回调期间有效。
 Turn_Callbacks :: struct {
-	user:      rawptr,
-	on_event:  proc(user: rawptr, ev: Event),
-	on_stderr: proc(user: rawptr, line: string),
-	on_done:   proc(user: rawptr, exit_code: int, stderr_preview: string),
+	user:          rawptr,
+	on_event:      proc(user: rawptr, ev: Event),
+	on_event_line: proc(user: rawptr, ev: Event, line: string),
+	on_stderr:     proc(user: rawptr, line: string),
+	on_done:       proc(user: rawptr, exit_code: int, stderr_preview: string),
 }
 
 // session_id / stderr_preview 归调用方所有，需要 delete。
@@ -146,6 +148,9 @@ on_agent_stdout_line :: proc(user: rawptr, line: string) {
 	}
 	if ctx.callbacks.on_event != nil {
 		ctx.callbacks.on_event(ctx.callbacks.user, ev)
+	}
+	if ctx.callbacks.on_event_line != nil {
+		ctx.callbacks.on_event_line(ctx.callbacks.user, ev, line)
 	}
 	free_all(context.temp_allocator)
 }

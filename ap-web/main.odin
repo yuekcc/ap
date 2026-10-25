@@ -216,8 +216,15 @@ parse_args :: proc(args: []string) -> (Web_Options, Cli_Error) {
 }
 
 App :: struct {
-	options: Web_Options,
-	assets:  Assets,
+	options:     Web_Options,
+	assets:      Assets,
+	hub:         Sse_Hub,
+	runner:      Runner,
+	config_dir:  string,
+	agent_bin:   string,
+	project:     Project,
+	cwd:         string,
+	picker_busy: bool,
 }
 
 // 所有请求的统一入口：先查 api 路由表，/api/* 本工单占位 404，其余走静态资源。
