@@ -91,6 +91,8 @@ status_text :: proc(status: int) -> string {
 	switch status {
 	case 200:
 		return "OK"
+	case 202:
+		return "Accepted"
 	case 304:
 		return "Not Modified"
 	case 400:
@@ -101,12 +103,16 @@ status_text :: proc(status: int) -> string {
 		return "Not Found"
 	case 405:
 		return "Method Not Allowed"
+	case 409:
+		return "Conflict"
 	case 413:
 		return "Payload Too Large"
 	case 500:
 		return "Internal Server Error"
 	case 501:
 		return "Not Implemented"
+	case 503:
+		return "Service Unavailable"
 	}
 	return "Unknown"
 }

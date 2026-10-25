@@ -120,6 +120,20 @@ router_dispatch :: proc(
 	return false
 }
 
+// 路径存在但方法不匹配时用来给出 405 而不是 404。
+router_path_exists :: proc(router: ^Http_Router, path: string) -> bool {
+	for route in router.routes {
+		if route.prefix {
+			if strings.has_prefix(path, route.path) {
+				return true
+			}
+		} else if path == route.path {
+			return true
+		}
+	}
+	return false
+}
+
 Http_Handler :: #type proc(
 	user: rawptr,
 	request: ^Http_Request,
@@ -578,6 +592,8 @@ serve_client :: proc(user: rawptr) {
 	socket := ctx.socket
 	defer net.close(socket)
 	defer free(ctx)
+	// SSE 需要低延迟：禁 Nagle，避免事件被攒包（docs/web.md「SSE」）。
+	_ = net.set_option(socket, .TCP_Nodelay, true)
 	serve_connection(socket_transport(&ctx.socket), app_handle_request, ctx.app)
 	free_all(context.temp_allocator)
 }

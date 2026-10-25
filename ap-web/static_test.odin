@@ -159,14 +159,15 @@ test_route_handler_exact :: proc(user: rawptr, request: ^Http_Request, response:
 }
 
 @(test)
-test_app_api_returns_404_this_ticket :: proc(t: ^testing.T) {
+test_app_unknown_api_returns_json_404 :: proc(t: ^testing.T) {
 	assets, _ := make_assets("")
 	app := App {
 		assets = assets,
 	}
+	api_register_routes()
 	request := Http_Request {
 		method = .Get,
-		path = "/api/sessions",
+		path = "/api/definitely-not-an-endpoint",
 		keep_alive = true,
 	}
 	response := Http_Response {
@@ -174,6 +175,7 @@ test_app_api_returns_404_this_ticket :: proc(t: ^testing.T) {
 	}
 	app_handle_request(&app, &request, &response)
 	testing.expect_value(t, response.status, 404)
+	testing.expect(t, strings.contains(string(response.body), `"code":"not_found"`))
 }
 
 @(test)

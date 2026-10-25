@@ -2,6 +2,7 @@
 package main
 
 import "../internal"
+import "base:runtime"
 import "core:fmt"
 import "core:net"
 
@@ -36,4 +37,26 @@ accept_client :: proc(listener: ^Listener) -> (client: net.TCP_Socket, source: n
 
 close_listener :: proc(listener: ^Listener) {
 	net.close(listener.socket)
+}
+
+// SIGINT/SIGTERM 时先做收尾（终止运行中的 turn），再退出。
+g_shutdown_handler: proc(user: rawptr)
+g_shutdown_user:    rawptr
+
+shutdown_signal_handler :: proc "c" (signal: posix.Signal) {
+	if handler := g_shutdown_handler; handler != nil {
+		context = runtime.default_context()
+		handler(g_shutdown_user)
+	}
+}
+
+install_shutdown_handler :: proc(handler: proc(user: rawptr), user: rawptr) {
+	g_shutdown_handler = handler
+	g_shutdown_user = user
+	action: posix.sigaction_t
+	action.sa_handler = shutdown_signal_handler
+	posix.sigemptyset(&action.sa_mask)
+	action.sa_flags = {}
+	posix.sigaction(.SIGINT, &action, nil)
+	posix.sigaction(.SIGTERM, &action, nil)
 }

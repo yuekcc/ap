@@ -2,6 +2,7 @@
 package main
 
 import "../internal"
+import "base:runtime"
 import "core:fmt"
 import "core:net"
 import win32 "core:sys/windows"
@@ -55,4 +56,27 @@ accept_client :: proc(listener: ^Listener) -> (client: net.TCP_Socket, source: n
 
 close_listener :: proc(listener: ^Listener) {
 	net.close(listener.socket)
+}
+
+// Ctrl+C / 关闭控制台时先做收尾（终止运行中的 turn），再退出。
+g_shutdown_handler: proc(user: rawptr)
+g_shutdown_user:    rawptr
+
+shutdown_control_handler :: proc "system" (ctrl_type: win32.DWORD) -> win32.BOOL {
+	if ctrl_type != win32.CTRL_C_EVENT &&
+	   ctrl_type != win32.CTRL_BREAK_EVENT &&
+	   ctrl_type != win32.CTRL_CLOSE_EVENT {
+		return false
+	}
+	if handler := g_shutdown_handler; handler != nil {
+		context = runtime.default_context()
+		handler(g_shutdown_user)
+	}
+	return true
+}
+
+install_shutdown_handler :: proc(handler: proc(user: rawptr), user: rawptr) {
+	g_shutdown_handler = handler
+	g_shutdown_user = user
+	win32.SetConsoleCtrlHandler(shutdown_control_handler, true)
 }

@@ -325,3 +325,47 @@ runner_thread :: proc(user: rawptr) {
 	sync.mutex_unlock(&app.runner.mu)
 	free_job(job)
 }
+
+// ---------------------------------------------------------------------------
+// SSE 心跳
+// ---------------------------------------------------------------------------
+
+// 后台线程按 SSE_HEARTBEAT_INTERVAL 发 `: ping` + ping 事件。hub 自己没有
+// 线程，节拍由这里驱动；分片睡眠，停止时最多等一小段。
+HEARTBEAT_POLL_INTERVAL :: SSE_HEARTBEAT_INTERVAL / 15
+
+Heartbeat_State :: struct {
+	hub:   ^Sse_Hub,
+	stop:  i32,
+	timer: time.Tick,
+}
+
+heartbeat_start :: proc(state: ^Heartbeat_State, hub: ^Sse_Hub) {
+	state^ = {
+		hub   = hub,
+		stop  = 0,
+		timer = time.tick_now(),
+	}
+	_ = thread.create_and_start_with_data(rawptr(state), heartbeat_thread, self_cleanup = true, name = "sse-heartbeat")
+}
+
+heartbeat_stop :: proc(state: ^Heartbeat_State) {
+	if state.hub == nil {
+		return
+	}
+	sync.atomic_store(&state.stop, 1)
+}
+
+heartbeat_thread :: proc(user: rawptr) {
+	state := (^Heartbeat_State)(user)
+	for sync.atomic_load(&state.stop) == 0 {
+		time.sleep(HEARTBEAT_POLL_INTERVAL)
+		if sync.atomic_load(&state.stop) != 0 {
+			break
+		}
+		if time.tick_since(state.timer) >= SSE_HEARTBEAT_INTERVAL {
+			state.timer = time.tick_now()
+			_ = sse_hub_heartbeat(state.hub, time.time_to_unix(time.now()))
+		}
+	}
+}

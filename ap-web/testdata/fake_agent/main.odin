@@ -34,7 +34,8 @@ main :: proc() {
 	case strings.contains(text, "[scenario:cancel]"):
 		// 先报到再挂着，测试据此确认 turn 已经跑起来，然后调 DELETE 取消。
 		emit(`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_cancel","parent_session_id":null}`)
-		emit(`{"type":"message_update","ts":2,"message_id":"m1","delta":{"text":"working"}}`)
+		emit(`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}`)
+		emit(`{"type":"message_update","ts":3,"message_id":"m1","delta":{"text":"working"}}`)
 		for {
 			time.sleep(100 * time.Millisecond)
 		}
