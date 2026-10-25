@@ -112,13 +112,22 @@ export function toolArgsText(event) {
 	return "";
 }
 
-export function toolResultText(event) {
+function inlineContentText(event) {
 	if (typeof event?.content === "string") return event.content;
-	if (Array.isArray(event?.content)) return event.content.map(blockText).join("");
+	if (Array.isArray(event?.content)) {
+		const text = event.content.map(blockText).join("");
+		return text.length > 0 ? text : null;
+	}
 	if (event?.content && typeof event.content === "object") {
 		const text = blockText(event.content);
 		if (text) return text;
 	}
+	return null;
+}
+
+export function toolResultText(event) {
+	const inline = inlineContentText(event);
+	if (inline !== null) return inline;
 	if (typeof event?.content_preview === "string") return event.content_preview;
 	return "";
 }
@@ -250,9 +259,9 @@ function applyMessageEnd(state, event, mode) {
 	let next = state;
 	if (index >= 0) {
 		const item = state.items[index];
-		// live：收到过 delta 就以 delta 为准，message_end 只补缺。
+		// history 是落盘事实，直接以全文为准；live 收到过 delta 就以 delta 为准，只补缺。
 		const nextText =
-			mode === "history" ? item.text || text : !hadDelta && !item.text ? text : item.text;
+			mode === "history" ? text || item.text : !hadDelta && !item.text ? text : item.text;
 		next = replaceItem(state, index, { ...item, text: nextText, ended: true });
 	} else if (text) {
 		next = addMessage(state, messageId, text, true);
@@ -285,6 +294,7 @@ function applyToolUpdate(state, event) {
 	}
 	const index = next.tools[toolId];
 	const item = next.items[index];
+	if (item.status !== "running") return next; // 已收尾的卡片不接受重放的流式片段。
 	return replaceItem(next, index, { ...item, streamed: item.streamed + chunk });
 }
 
@@ -298,6 +308,9 @@ function applyToolEnd(state, event) {
 	const index = next.tools[toolId];
 	const item = next.items[index];
 	const content = toolResultText(event);
+	// history 接口可能已经把超限结果换成 content_preview；用了它就意味着截断过。
+	const usedPreview =
+		inlineContentText(event) === null && typeof event.content_preview === "string";
 	let result = item.result;
 	let truncated = item.truncated;
 
@@ -305,7 +318,7 @@ function applyToolEnd(state, event) {
 	if (event.ok === true && !item.streamed && content) {
 		const preview = previewContent(content);
 		result = preview.text;
-		truncated = preview.truncated;
+		truncated = preview.truncated || usedPreview;
 	}
 
 	return replaceItem(next, index, {
@@ -370,6 +383,7 @@ export function applyEvent(state, event, mode = "live") {
 		case "cancel":
 			return addNotice(state, `cancelled [${event.scope || ""}]`, "muted");
 		case "turn_start":
+			if (mode !== "live") return state;
 			return {
 				...state,
 				running: true,

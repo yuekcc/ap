@@ -181,6 +181,47 @@ test("工具卡片：非流式结果超 200 行时截断并提示", () => {
 	assert.equal(tool.result.split("\n").length - 1, 200);
 });
 
+test("工具卡片：history 只给 content_preview 时也标记截断", () => {
+	let state = createState();
+	state = applyEvent(
+		state,
+		ev("tool_execution_start", { seq: 1, tool_call_id: "c4", name: "read" }),
+	);
+	state = applyEvent(
+		state,
+		ev("tool_execution_end", {
+			seq: 2,
+			tool_call_id: "c4",
+			ok: true,
+			content: null,
+			content_preview: "前 8KB…",
+			content_bytes: 123456,
+		}),
+	);
+	const tool = state.items.find((item) => item.kind === "tool");
+	assert.equal(tool.result, "前 8KB…");
+	assert.equal(tool.truncated, true);
+});
+
+test("已结束的工具卡片忽略重放的流式片段", () => {
+	let state = createState();
+	state = applyEvent(
+		state,
+		ev("tool_execution_start", { seq: 1, tool_call_id: "c5", name: "bash" }),
+	);
+	state = applyEvent(
+		state,
+		ev("tool_execution_end", { seq: 2, tool_call_id: "c5", ok: true, content: "done" }),
+	);
+	state = applyEvent(
+		state,
+		ev("tool_execution_update", { tool_call_id: "c5", chunk: "重放" }),
+	);
+	const tool = state.items.find((item) => item.kind === "tool");
+	assert.equal(tool.streamed, "");
+	assert.equal(tool.result, "done");
+});
+
 test("工具卡片：失败时标 ✗ 并保留 error", () => {
 	let state = createState();
 	state = applyEvent(
@@ -273,6 +314,16 @@ test("turn_done：异常退出带 stderr，正常结束清空 running", () => {
 	assert.equal(state.items[0].tone, "error");
 	assert.match(state.items[0].text, /exit 1/);
 	assert.match(state.items[0].text, /boom/);
+});
+
+test("history：turn_start 不把 UI 状态改成运行中（running 以 /api/session/current 为准）", () => {
+	let state = createState();
+	state = ingestHistory(state, [
+		ev("turn_start", { seq: 1, turn: 1 }),
+		ev("turn_end", { seq: 2, turn: 1, stop_reason: "stop" }),
+	]);
+	assert.equal(state.running, false);
+	assert.equal(state.turn, 0);
 });
 
 test("session_start 更新当前 session", () => {
