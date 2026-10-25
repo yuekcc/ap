@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:net"
 import "core:strconv"
 import "core:strings"
+import "core:time"
 
 // HTTP/1.1 最小子集，约束见 docs/web.md「HTTP 层（手写）」。
 // 解析只接受内存 buffer，socket 读写通过 Transport 注入，测试可以完全不碰网络。
@@ -13,6 +14,12 @@ MAX_HEADERS :: 100
 // 在解析层就被 413 掉，API 的 prompt_too_large 错误体永远走不到。
 MAX_REQUEST_BODY :: 2 * 1024 * 1024
 READ_CHUNK :: 16 * 1024
+
+// 读超时（SO_RCVTIMEO）分两档：等新请求可以久一点，保持浏览器连接复用；
+// 一旦开始读某个请求，就必须在限期内收完，慢速客户端不能长期占住连接线程。
+IDLE_READ_TIMEOUT :: 30 * time.Second
+REQUEST_READ_TIMEOUT :: 10 * time.Second
+
 
 Http_Method :: enum {
 	Get,
@@ -146,6 +153,8 @@ Transport :: struct {
 	user: rawptr,
 	recv: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool),
 	send: proc(user: rawptr, data: []byte) -> bool,
+	// 可选：设置阻塞读的期限（SO_RCVTIMEO）。为 nil 时依赖 recv 自身实现。
+	set_read_timeout: proc(user: rawptr, timeout: time.Duration) -> bool,
 }
 
 method_from_text :: proc(text: string) -> Http_Method {
@@ -494,6 +503,10 @@ serve_connection :: proc(
 		parsed := parse_request_bytes(buffer[:])
 		switch parsed.state {
 		case .Incomplete:
+			if transport.set_read_timeout != nil {
+				timeout := IDLE_READ_TIMEOUT if len(buffer) == 0 else REQUEST_READ_TIMEOUT
+				_ = transport.set_read_timeout(transport.user, timeout)
+			}
 			chunk: [READ_CHUNK]u8
 			n, ok := transport.recv(transport.user, chunk[:])
 			if !ok || n <= 0 {
@@ -548,7 +561,13 @@ socket_transport :: proc(socket: ^net.TCP_Socket) -> Transport {
 		user = socket,
 		recv = socket_transport_recv,
 		send = socket_transport_send,
+		set_read_timeout = socket_transport_set_timeout,
 	}
+}
+
+socket_transport_set_timeout :: proc(user: rawptr, timeout: time.Duration) -> bool {
+	socket := (^net.TCP_Socket)(user)^
+	return socket_set_read_timeout(socket, timeout)
 }
 
 socket_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) {

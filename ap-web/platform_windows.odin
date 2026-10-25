@@ -5,6 +5,7 @@ import "../internal"
 import "base:runtime"
 import "core:fmt"
 import "core:net"
+import "core:time"
 import win32 "core:sys/windows"
 
 setup_console :: proc() {
@@ -56,6 +57,11 @@ accept_client :: proc(listener: ^Listener) -> (client: net.TCP_Socket, source: n
 
 close_listener :: proc(listener: ^Listener) {
 	net.close(listener.socket)
+}
+
+// SO_RCVTIMEO：阻塞 recv 到点返回错误，连接线程据此断连（docs/web.md「风险与对策」）。
+socket_set_read_timeout :: proc(socket: net.TCP_Socket, timeout: time.Duration) -> bool {
+	return net.set_option(socket, .Receive_Timeout, timeout) == nil
 }
 
 // Ctrl+C / 关闭控制台时先做收尾（终止运行中的 turn），再退出。
