@@ -283,16 +283,16 @@ test_hub_destroy_closes_subscriber_channels :: proc(t: ^testing.T) {
 }
 
 // 事件泵线程和心跳线程会并发广播：id 必须无重复地覆盖 1..N。
-ID_STRESS_COUNT :: 200
+SSE_TEST_ID_STRESS_COUNT :: 200
 
-Id_Stress_Job :: struct {
+Sse_Test_Id_Stress_Job :: struct {
 	hub: ^Sse_Hub,
-	ids: [ID_STRESS_COUNT]u64,
+	ids: [SSE_TEST_ID_STRESS_COUNT]u64,
 }
 
-id_stress_worker :: proc(data: rawptr) {
-	job := (^Id_Stress_Job)(data)
-	for i in 0 ..< ID_STRESS_COUNT {
+sse_test_id_stress_worker :: proc(data: rawptr) {
+	job := (^Sse_Test_Id_Stress_Job)(data)
+	for i in 0 ..< SSE_TEST_ID_STRESS_COUNT {
 		job.ids[i] = sse_hub_broadcast(job.hub, "ap", `{}`)
 	}
 }
@@ -303,20 +303,20 @@ test_hub_allocates_ids_across_threads :: proc(t: ^testing.T) {
 	sse_hub_init(&hub)
 	defer sse_hub_destroy(&hub)
 
-	first, second: Id_Stress_Job
+	first, second: Sse_Test_Id_Stress_Job
 	first.hub = &hub
 	second.hub = &hub
 
-	t1 := thread.create_and_start_with_data(rawptr(&first), id_stress_worker, name = "sse-ids-1")
-	t2 := thread.create_and_start_with_data(rawptr(&second), id_stress_worker, name = "sse-ids-2")
+	t1 := thread.create_and_start_with_data(rawptr(&first), sse_test_id_stress_worker, name = "sse-ids-1")
+	t2 := thread.create_and_start_with_data(rawptr(&second), sse_test_id_stress_worker, name = "sse-ids-2")
 	thread.join(t1)
 	thread.join(t2)
 
-	total := 2 * ID_STRESS_COUNT
+	total := 2 * SSE_TEST_ID_STRESS_COUNT
 	seen := make([]bool, total + 1)
 	defer delete(seen)
 
-	for job in ([]^Id_Stress_Job{&first, &second}) {
+	for job in ([]^Sse_Test_Id_Stress_Job{&first, &second}) {
 		for id in job.ids {
 			testing.expectf(t, id >= 1 && id <= u64(total), "id %d out of range", id)
 			testing.expectf(t, !seen[id], "id %d assigned twice", id)
