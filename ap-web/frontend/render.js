@@ -88,6 +88,24 @@ function blockText(block) {
 	return "";
 }
 
+const SESSION_ID_RE = /^ses_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_(.+)$/i;
+
+// 会话列表只拿到 id 与轮数：标题用 id 里的日期时间，元信息用短 id。
+export function sessionTitle(session) {
+	const id = String(session?.session_id ?? "");
+	const match = SESSION_ID_RE.exec(id);
+	if (!match) return id || "会话";
+	return `${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
+}
+
+export function sessionMeta(session) {
+	const id = String(session?.session_id ?? "");
+	const match = SESSION_ID_RE.exec(id);
+	const short = match ? match[7].slice(0, 8) : id;
+	const turns = Number.isFinite(session?.turns) ? session.turns : 0;
+	return `${short} · ${turns} 轮`;
+}
+
 export function messageTexts(event) {
 	if (!Array.isArray(event?.content)) return [];
 	const out = [];

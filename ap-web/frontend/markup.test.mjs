@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const indexPath = fileURLToPath(new URL("../index.html", import.meta.url));
+const stylesPath = fileURLToPath(new URL("./styles.css", import.meta.url));
 
 test("目录选择入口位于输入区，与发送/取消同一行", async () => {
 	const html = await readFile(indexPath, "utf8");
@@ -43,4 +44,25 @@ test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", asy
 	);
 	assert.ok(!html.includes("x-html=\"item.streamed"), "tool output must not be rendered as html");
 });
+
+test("左侧会话栏承载新会话入口与历史会话", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const asideStart = html.indexOf('<aside class="sidebar">');
+	const asideEnd = html.indexOf("</aside>");
+	assert.ok(asideStart >= 0 && asideEnd > asideStart, "index.html must have a sidebar");
+
+	const sidebar = html.slice(asideStart, asideEnd);
+	assert.ok(sidebar.includes('class="new-session"'), "new session lives in the sidebar");
+	assert.ok(sidebar.includes("selectSession("), "sidebar sessions switch the active session");
+	assert.ok(sidebar.includes("sessionTitle(session)"), "sidebar shows formatted session titles");
+	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the sidebar");
+});
+
+test("只提供浅色主题", async () => {
+	const css = await readFile(stylesPath, "utf8");
+	assert.ok(!css.includes("prefers-color-scheme: dark"), "no dark theme");
+	assert.ok(css.includes("color-scheme: light"), "root pins light color scheme");
+	assert.ok(css.includes("github-markdown-light.css"), "markdown css must not flip with the OS");
+});
+
 

@@ -214,10 +214,12 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 
 | 层级 | 用什么 | 落在哪 |
 | --- | --- | --- |
-| 页面骨架 | **grid** | `index.html` 的 `body`/根容器：`grid-template-rows: auto minmax(0, 1fr) auto`（顶栏 / 滚动消息区 / 输入区），消息区自身可 `overflow-y: auto` |
-| 组件内部（块级布局） | **flex** | 消息行、工具卡片头部（图标+名称+耗时）、顶栏按钮组、输入区（textarea + 发送/取消/选目录按钮）一律 flexbox |
+| 页面骨架 | **grid** | `index.html` 的 `body`：`grid-template-columns: 16.5rem minmax(0, 1fr)`（会话侧栏 / 工作区）；工作区内部 `grid-template-rows: auto minmax(0, 1fr) auto`（标题栏 / 滚动消息区 / 输入区），消息区自身可 `overflow-y: auto`；窄屏（≤820px）侧栏折成顶部会话条 |
+| 组件内部（块级布局） | **flex** | 消息行、工具卡片头部（状态点+名称+参数+耗时）、侧栏会话项、标题栏按钮组、输入区（textarea + 发送/停止/选目录按钮）一律 flexbox |
 
 规则：grid 只出现在页面级骨架（定义行列区域），其余所有块级排列都是 flex；不用 float、不写绝对定位布局（仅个别 `position: sticky` 类效果允许）。消息区用 `minmax(0, 1fr)` 而不是 `1fr`，避免长内容把 grid 撑开——这是 grid 滚动容器的常见坑。
+
+视觉语言对齐 Codex 桌面版的浅色风格：纯白工作区 + `#f9f9f9` 会话侧栏、单色（黑/灰）强调、1px 发丝边框、系统无衬线 + 等宽数据、圆角输入框与圆形发送按钮。**只提供浅色主题**：`color-scheme: light`，不写 `prefers-color-scheme: dark` 分支；Markdown 样式固定使用 `github-markdown-light.css`，避免跟随系统切到暗色。
 
 - store 状态机与 ap-tui 渲染一一对应：`idle` / `running`；`message_update` 按 delta 累积，`message_end` 只补缺（避免重复，同 ap-tui 规则）
 - 工具卡片：`tool_execution_start` 建卡片（名称 + 参数），`tool_execution_update` 增量追加（bash 流式），`tool_execution_end` 标记 ✓/✗、耗时、退出码；结果超限截断提示（完整内容在 transcript）

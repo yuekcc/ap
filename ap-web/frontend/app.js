@@ -3,6 +3,7 @@
 // 不让页面因为一个接口 404/501 就白屏。
 import { api } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
+import { sessionMeta, sessionTitle } from "./render.js";
 import { createEventStream } from "./sse.js";
 
 export function registerApp(Alpine) {
@@ -247,16 +248,14 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		async onSessionChange(event) {
-			const value = event.target.value;
+		async onSessionSelect(sessionId) {
 			const store = this.$store.ap;
-			if (value === (store.sessionId ?? "")) return;
-			if (!value) {
-				await this.newSession();
-				event.target.value = this.$store.ap.sessionId ?? "";
-				return;
-			}
-			await this.resumeSession(value, event.target);
+			if (!sessionId || sessionId === (store.sessionId ?? "")) return;
+			await this.resumeSession(sessionId);
+		},
+
+		selectSession(sessionId) {
+			return this.onSessionSelect(sessionId);
 		},
 
 		async pickDirectory() {
@@ -297,6 +296,14 @@ export function registerApp(Alpine) {
 			const id = session?.session_id ?? "";
 			const turns = Number.isFinite(session?.turns) ? session.turns : 0;
 			return `${id} · ${turns} 轮`;
+		},
+
+		sessionTitle(session) {
+			return sessionTitle(session);
+		},
+
+		sessionMeta(session) {
+			return sessionMeta(session);
 		},
 
 		onKeydown(event) {

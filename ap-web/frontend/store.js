@@ -10,6 +10,7 @@ import {
 	applyTurnDone,
 	createState,
 	ingestHistory,
+	sessionTitle,
 	stateAfterCwdChange,
 } from "./render.js";
 
@@ -42,6 +43,10 @@ export function createStore() {
 
 		get isWindows() {
 			return this.platform === "windows";
+		},
+
+		get currentTitle() {
+			return this.sessionId ? sessionTitle({ session_id: this.sessionId }) : "新会话";
 		},
 
 		get statusKind() {
