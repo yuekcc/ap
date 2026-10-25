@@ -1,7 +1,10 @@
 package main
 
+import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
+
+import "../internal"
 
 // SSE 帧格式固定为 event / data / id 三行加一个空行（docs/web.md「SSE」）。
 // id 由 hub 单点分配，编码器只负责按协议写出字节。
@@ -39,4 +42,25 @@ sse_encode_heartbeat :: proc(b: ^strings.Builder, ts: i64, id: u64) {
 // ping 事件的 data（临时分配的短命字符串，编码完即丢弃）。
 sse_ping_data :: proc(ts: i64) -> string {
 	return fmt.tprintf("{{\"ts\":%d}}", ts)
+}
+
+// turn 结束信封。stop_reason 取自 turn_end，缺失时回退 session_end，两者都没有则 null；
+// stderr_preview 只放尾部一小段供前端展示（可能是空/多行文本）。
+// usage 用 internal.Usage：所有 token 字段可为 null，不用 0 冒充缺失。
+Sse_Turn_Done :: struct {
+	exit_code:      int            `json:"exit_code"`,
+	stop_reason:    Maybe(string)  `json:"stop_reason"`,
+	usage:          internal.Usage `json:"usage"`,
+	stderr_preview: Maybe(string)  `json:"stderr_preview"`,
+}
+
+// 把信封序列化成 SSE data。返回的字符串归调用方所有（delete 释放）。
+// 这里用标准库 marshal：非 ASCII 会转成 \uXXXX，JSON.parse 仍能正确还原。
+sse_turn_done_json :: proc(envelope: Sse_Turn_Done, allocator := context.allocator) -> string {
+	data, err := json.marshal(envelope, {}, allocator)
+	if err != nil {
+		return strings.clone("{}", allocator)
+	}
+	defer delete(data, allocator)
+	return strings.clone(string(data), allocator)
 }
