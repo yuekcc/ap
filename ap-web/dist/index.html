@@ -3,29 +3,145 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ap-web</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    display: grid;
-    place-items: center;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    background: #f6f5f2;
-    color: #1f1d1a;
-  }
-  main { max-width: 34rem; padding: 2rem; }
-  h1 { margin: 0 0 0.5rem; font-size: 1.6rem; letter-spacing: -0.02em; }
-  p { margin: 0.4rem 0; line-height: 1.6; color: #55514b; }
-  code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.9em; }
-</style>
+<title>ap</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/styles.css">
+<script defer src="/app.js"></script>
 </head>
-<body>
-<main>
-  <h1>ap-web 已启动</h1>
-  <p>这是占位页面。Web UI、会话列表与事件流会在后续工单接入。</p>
-  <p>静态资源内置在 <code>ap-web.exe</code> 中；开发时可用 <code>--web-root ap-web/dist</code> 改走磁盘。</p>
+<body x-data="apApp" x-init="init()" x-cloak>
+
+<header class="topbar">
+  <div class="topbar__identity">
+    <span class="topbar__brand" aria-label="ap">ap</span>
+    <span class="topbar__model" x-text="$store.ap.config?.model ?? ''"></span>
+    <span class="topbar__agent" x-show="$store.ap.config?.agent" x-text="$store.ap.config?.agent"></span>
+  </div>
+
+  <div class="topbar__session">
+    <label class="visually-hidden" for="session-select">切换会话</label>
+    <select
+      id="session-select"
+      class="control control--select"
+      @change="onSessionChange($event)"
+      :disabled="$store.ap.running || $store.ap.loading"
+    >
+      <option value="" :selected="$store.ap.sessionId === null">（新会话）</option>
+      <template x-for="session in $store.ap.sessions" :key="session.session_id">
+        <option
+          :value="session.session_id"
+          :selected="$store.ap.sessionId === session.session_id"
+          x-text="sessionLabel(session)"
+        ></option>
+      </template>
+      <template x-if="$store.ap.sessionId && !$store.ap.sessions.some((session) => session.session_id === $store.ap.sessionId)">
+        <option :value="$store.ap.sessionId" selected x-text="$store.ap.sessionId + ' · 当前'"></option>
+      </template>
+    </select>
+
+    <button
+      class="control"
+      type="button"
+      @click="newSession"
+      :disabled="$store.ap.running || $store.ap.loading"
+    >新会话</button>
+
+    <button
+      class="control"
+      type="button"
+      x-show="$store.ap.isWindows"
+      @click="pickDirectory"
+      :disabled="$store.ap.running || $store.ap.picking"
+      x-text="$store.ap.picking ? '选择中…' : '选择目录'"
+    ></button>
+  </div>
+
+  <div class="topbar__status">
+    <span class="status" :data-state="$store.ap.statusKind" x-text="$store.ap.statusLabel"></span>
+  </div>
+</header>
+
+<main class="messages" x-ref="messages">
+  <div class="messages__empty" x-show="$store.ap.items.length === 0">
+    <p class="messages__empty-title">ap</p>
+    <p class="messages__empty-hint" x-show="$store.ap.loading">正在载入会话…</p>
+    <p class="messages__empty-hint" x-show="!$store.ap.loading">输入提示词，开始一轮对话。</p>
+  </div>
+
+  <template x-for="item in $store.ap.items" :key="item.key">
+    <div class="event">
+      <template x-if="item.kind === 'user'">
+        <article class="msg msg--user">
+          <span class="msg__marker" aria-hidden="true">›</span>
+          <p class="msg__text" x-text="item.text"></p>
+        </article>
+      </template>
+
+      <template x-if="item.kind === 'assistant'">
+        <article class="msg msg--assistant">
+          <span class="msg__marker" aria-hidden="true">●</span>
+          <p class="msg__text" :class="{ 'is-streaming': !item.ended }" x-text="item.text"></p>
+        </article>
+      </template>
+
+      <template x-if="item.kind === 'tool'">
+        <article class="tool" :data-status="item.status">
+          <header class="tool__head">
+            <span class="tool__icon" aria-hidden="true" x-text="item.status === 'ok' ? '✓' : item.status === 'error' ? '✗' : '◆'"></span>
+            <span class="tool__name" x-text="item.name"></span>
+            <span class="tool__args" x-show="item.args" x-text="item.args"></span>
+            <span class="tool__meta" x-show="item.durationMs !== null" x-text="item.durationMs + 'ms'"></span>
+            <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
+          </header>
+          <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
+          <p class="tool__error" x-show="item.error" x-text="item.error"></p>
+          <p class="tool__note" x-show="item.truncated">… (truncated; full content is in the transcript)</p>
+        </article>
+      </template>
+
+      <template x-if="item.kind === 'notice'">
+        <p class="notice" :data-tone="item.tone" x-text="item.text"></p>
+      </template>
+    </div>
+  </template>
 </main>
+
+<footer class="composer">
+  <div class="composer__box">
+    <label class="visually-hidden" for="prompt">提示词</label>
+    <textarea
+      id="prompt"
+      class="composer__input"
+      x-ref="input"
+      rows="1"
+      x-model="$store.ap.draft"
+      @keydown="onKeydown($event)"
+      :disabled="$store.ap.loading"
+      placeholder="给 ap 一个提示词…"
+    ></textarea>
+
+    <div class="composer__actions">
+      <button
+        class="control control--primary"
+        type="button"
+        @click="send"
+        :disabled="$store.ap.running || $store.ap.loading || !$store.ap.draft.trim()"
+      >发送</button>
+      <button
+        class="control"
+        type="button"
+        x-show="$store.ap.running"
+        @click="cancel"
+        :disabled="$store.ap.cancelling"
+        x-text="$store.ap.cancelling ? '取消中…' : '取消'"
+      ></button>
+    </div>
+  </div>
+
+  <div class="composer__hint">
+    <span class="composer__cwd" x-text="$store.ap.config?.cwd ?? ''" :title="$store.ap.config?.cwd ?? ''"></span>
+    <span class="composer__keys">Enter 发送 · Shift+Enter 换行</span>
+  </div>
+</footer>
+
 </body>
 </html>

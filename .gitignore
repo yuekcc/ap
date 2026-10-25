@@ -4,3 +4,6 @@
 *.pdb
 *.log
 .ap/
+
+# ap-web 前端构建依赖（dist/ 产物需要提交，node_modules 不需要）
+ap-web/node_modules/
