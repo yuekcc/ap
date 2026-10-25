@@ -4,7 +4,6 @@ import "base:runtime"
 import "core:encoding/json"
 import "core:os"
 import "core:strings"
-import "core:sync"
 import "core:time"
 
 // HTTP API：路由表与全部 handler。约定见 docs/web.md「HTTP API」：
@@ -197,7 +196,7 @@ api_config :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respons
 			agent = app.options.agent,
 			max_steps = app.options.max_steps,
 			max_tokens = app.options.max_tokens,
-			cwd = app.cwd,
+			cwd = app_cwd(app),
 			platform = platform_name(),
 		},
 	)
@@ -218,7 +217,7 @@ api_session_current :: proc(user: rawptr, request: ^Http_Request, response: ^Htt
 
 api_cwd :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	api_json(response, 200, Api_Cwd{cwd = app.cwd})
+	api_json(response, 200, Api_Cwd{cwd = app_cwd(app)})
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +257,8 @@ api_session_resume :: proc(user: rawptr, request: ^Http_Request, response: ^Http
 // turns 数 turn_start 行（读不到文件时尽力而为，返回 0）。
 api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	ids, ids_err := session_ids(app.project)
+	project := app_project(app)
+	ids, ids_err := session_ids(project)
 	if !is_ok(ids_err) {
 		api_error(response, 500, "internal_error", ids_err.message)
 		return
@@ -273,13 +273,13 @@ api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 	entries := make([dynamic]Api_Session_Entry, 0, len(ids), context.temp_allocator)
 	for id in ids {
 		ts: i64 = 0
-		if info, stat_err := os.stat(session_file(app.project, id), context.temp_allocator); stat_err == nil {
+		if info, stat_err := os.stat(session_file(project, id), context.temp_allocator); stat_err == nil {
 			ts = time.time_to_unix_nano(info.modification_time) / 1_000_000
 		}
 		append(&entries, Api_Session_Entry{
 			session_id = id,
 			ts         = ts,
-			turns      = session_turn_count(app.project, id),
+			turns      = session_turn_count(project, id),
 		})
 	}
 	// 最近修改的在前，前端下拉框直接可用。
@@ -336,7 +336,8 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 		api_error(response, 400, "invalid_request", "session_id query parameter is required")
 		return
 	}
-	data, read_err := read_transcript(app.project, session_id)
+	project := app_project(app)
+	data, read_err := read_transcript(project, session_id)
 	if !is_ok(read_err) {
 		api_error(response, 404, "session_not_found", read_err.message)
 		return
@@ -359,7 +360,7 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 			continue
 		}
 		if obj, is_object := value.(json.Object); is_object {
-			history_enrich_event(obj, ev, app.project)
+			history_enrich_event(obj, ev, project)
 		}
 		append(&events, value)
 	}
@@ -489,33 +490,6 @@ api_turn_cancel :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Re
 // ---------------------------------------------------------------------------
 // cwd
 // ---------------------------------------------------------------------------
-
-// 目录选择对话框的并发占位：同一时刻只允许一个。工单 06 在弹窗前调
-// picker_begin，用户关闭后调 picker_end。
-picker_begin :: proc(app: ^App) -> bool {
-	_, acquired := sync.atomic_compare_exchange_strong(&app.picker_busy, i32(0), i32(1))
-	return acquired
-}
-
-picker_end :: proc(app: ^App) {
-	sync.atomic_store(&app.picker_busy, i32(0))
-}
-
-// 本工单只做并发语义占位：真实目录选择对话框见工单 06。
-api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
-	app := (^App)(user)
-	if runner_running(app) {
-		api_error(response, 409, "turn_running", "cannot change directory while a turn is running")
-		return
-	}
-	if !picker_begin(app) {
-		api_error(response, 409, "picker_busy", "a directory picker is already open")
-		return
-	}
-	// 501 路径不弹窗，立刻释放，避免后续调用永远 busy。
-	picker_end(app)
-	api_error(response, 501, "not_implemented", "native directory picker is not available in this build")
-}
 
 // ---------------------------------------------------------------------------
 // SSE

@@ -5,6 +5,7 @@ import "core:net"
 import "core:os"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
 import "core:thread"
 
 WEB_VERSION :: "0.1.0"
@@ -232,7 +233,11 @@ App :: struct {
 	agent_bin:   string,
 	project:     Project,
 	cwd:         string,
+	cwd_mu:      sync.Mutex, // 保护 cwd/project：pick 成功后会整体替换
 	picker_busy: i32, // 原子标志：同一时刻只允许一个目录对话框（工单 06）
+	// 可注入的目录选择实现：nil 时用 native_pick_directory，测试注入假 picker。
+	pick:        Pick_Fn,
+	pick_user:   rawptr,
 	heartbeat:   Heartbeat_State,
 }
 
@@ -389,6 +394,7 @@ main :: proc() {
 		agent_bin  = agent_bin,
 		project    = project,
 		cwd        = cwd,
+		pick       = native_pick_directory,
 	}
 	api_register_routes()
 	sse_hub_init(&app.hub)

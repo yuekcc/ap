@@ -5,6 +5,7 @@ import "../internal"
 import "base:runtime"
 import "core:fmt"
 import "core:net"
+import "core:sys/posix"
 
 setup_console :: proc() {
 	internal.setup_console()

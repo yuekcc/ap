@@ -137,7 +137,7 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 			agent_bin = app.agent_bin,
 			session_id = session_snapshot,
 			config_dir = app.config_dir,
-			cwd = app.project.root,
+			cwd = app_project(app).root,
 			model = clone_maybe_string(model),
 			agent = clone_maybe_string(agent),
 			max_steps = max_steps,

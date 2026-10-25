@@ -161,7 +161,7 @@ test_api_session_pointer_new_and_resume :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_api_cwd_and_pick_placeholder :: proc(t: ^testing.T) {
+test_api_cwd :: proc(t: ^testing.T) {
 	dir := test_temp_dir("api-cwd")
 	defer os.remove_all(dir)
 
@@ -173,16 +173,6 @@ test_api_cwd_and_pick_placeholder :: proc(t: ^testing.T) {
 	cwd := api_call(&app, .Get, "/api/cwd")
 	testing.expect_value(t, cwd.status, 200)
 	testing.expect(t, strings.contains(api_response_text(&cwd), `"cwd":`))
-
-	pick := api_call(&app, .Post, "/api/cwd/pick")
-	testing.expect_value(t, pick.status, 501)
-	testing.expect(t, strings.contains(api_response_text(&pick), `"code":"not_implemented"`))
-
-	testing.expect(t, picker_begin(&app))
-	busy := api_call(&app, .Post, "/api/cwd/pick")
-	testing.expect_value(t, busy.status, 409)
-	testing.expect(t, strings.contains(api_response_text(&busy), `"code":"picker_busy"`))
-	picker_end(&app)
 }
 
 @(test)

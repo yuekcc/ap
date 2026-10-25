@@ -4,6 +4,15 @@ set -eu
 version=$(odin version)
 echo "odin: $version"
 
+# 有 npx 就先刷新 ap-web/dist（esbuild）；没有则用仓库里已提交的 dist。
+# #load_directory("dist") 在编译期读取，前端构建必须先于 odin build。
+if command -v npx >/dev/null 2>&1; then
+  echo "npx found: rebuilding ap-web/dist"
+  npm --prefix ap-web run build
+else
+  echo "npx not found: using committed ap-web/dist"
+fi
+
 ext=""
 out="bin"
 case "$(uname -s)" in
