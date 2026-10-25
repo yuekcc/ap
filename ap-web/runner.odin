@@ -27,7 +27,7 @@ Runner_Start :: enum {
 	Failed, // 线程创建失败等内部错误
 }
 
-// 运行中 turn 的取消信号。token 常驻 runner，每轮开始清零；
+// 运行中 turn 的取消信号。token 常驻 runner，每轮开始与结束都在锁内清零；
 // DELETE /api/turn 在连接线程里置位，泵在轮询点检查。
 Runner :: struct {
 	mu:          sync.Mutex,
@@ -178,11 +178,12 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 }
 
 // DELETE /api/turn：置位取消 token，泵会终止整棵进程树。
+// 检查与置位在同一把锁内完成：否则检查到 running 后 turn 可能已经结束、
+// 下一轮已经清零 token，这次置位就会误杀新一轮。
 runner_cancel :: proc(app: ^App) -> bool {
 	sync.mutex_lock(&app.runner.mu)
-	running := app.runner.running
-	sync.mutex_unlock(&app.runner.mu)
-	if !running {
+	defer sync.mutex_unlock(&app.runner.mu)
+	if !app.runner.running {
 		return false
 	}
 	agent_cancel_token_cancel(&app.runner.cancel)
@@ -346,6 +347,8 @@ runner_thread :: proc(user: rawptr) {
 
 	sync.mutex_lock(&app.runner.mu)
 	app.runner.running = false
+	// 这一轮的取消信号到此为止；不清零会让「取消后立刻开新 turn」继承旧状态。
+	sync.atomic_store(&app.runner.cancel.value, 0)
 	sync.mutex_unlock(&app.runner.mu)
 	free_job(job)
 }

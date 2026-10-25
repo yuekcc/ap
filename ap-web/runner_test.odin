@@ -6,6 +6,7 @@ import "core:os"
 import "core:strings"
 import "core:testing"
 import "core:time"
+import "core:sync"
 import sync_chan "core:sync/chan"
 
 FAKE_AGENT_SOURCE :: #load("testdata/fake_agent/main.odin", string)
@@ -216,6 +217,48 @@ test_runner_cancel_terminates_turn :: proc(t: ^testing.T) {
 	// ap 被强制终止时（Windows Job Object）来不及写 turn_end/session_end，
 	// 信封仍应明确标出这是用户取消，而不是一次普通失败。
 	testing.expect(t, strings.contains(frames, `"stop_reason":"cancelled"`))
+}
+
+// 取消只对当时那一轮生效：turn 结束后 token 清零，紧接着的新 turn 不能被误杀。
+@(test)
+test_runner_cancel_does_not_leak_into_next_turn :: proc(t: ^testing.T) {
+	dir := test_temp_dir("runner-cancel-next")
+	defer os.remove_all(dir)
+
+	app: App
+	runner_test_setup(t, &app, dir)
+	if len(app.agent_bin) == 0 {
+		return
+	}
+	defer sse_hub_destroy(&app.hub)
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&app.hub, &sub, 512))
+	defer sse_hub_unsubscribe(&app.hub, &sub)
+	defer runner_shutdown(&app)
+
+	status, _ := runner_start_turn(&app, {prompt = "[scenario:cancel]"})
+	testing.expect_value(t, status, Runner_Start.Started)
+	testing.expect(t, test_wait_session(&app, "ses_cancel", 10 * time.Second), "agent did not start")
+	testing.expect(t, runner_cancel(&app))
+	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "cancel did not stop turn")
+
+	first := test_drain_frames(&sub)
+	defer delete(first)
+	testing.expect(t, strings.contains(first, `"stop_reason":"cancelled"`))
+
+	// 取消 token 属于刚结束的那一轮，必须已经复位。
+	testing.expect_value(t, sync.atomic_load(&app.runner.cancel.value), i32(0))
+
+	// 立刻开下一轮：不能继承上一轮的取消位。
+	status, _ = runner_start_turn(&app, {prompt = "hello"})
+	testing.expect_value(t, status, Runner_Start.Started)
+	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "second turn did not finish")
+
+	second := test_drain_frames(&sub)
+	defer delete(second)
+	testing.expect(t, strings.contains(second, `"exit_code":0`))
+	testing.expect(t, strings.contains(second, `"stop_reason":"stop"`))
+	testing.expect(t, !strings.contains(second, `"stop_reason":"cancelled"`))
 }
 
 @(test)
