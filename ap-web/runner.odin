@@ -161,6 +161,8 @@ runner_start_turn :: proc(app: ^App, request: Turn_Request) -> (status: Runner_S
 			max_steps = max_steps,
 			max_tokens = max_tokens,
 			cancel = &app.runner.cancel,
+			// 结果在 turn 线程分配、在 runner 线程释放：所有权交给 heap，不依赖线程 context。
+			allocator = runtime.heap_allocator(),
 		},
 		prompt = strings.clone(request.prompt, runtime.heap_allocator()),
 	}

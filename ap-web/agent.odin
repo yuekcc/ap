@@ -1,6 +1,7 @@
 package main
 
 import "../internal"
+import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -81,6 +82,16 @@ Turn_Options :: struct {
 	max_tokens: Maybe(int),
 	verbose:    bool,
 	cancel:     ^Agent_Cancel_Token, // 可为 nil；DELETE /api/turn 在另一线程置位
+	// 本轮回调与结果（session_id/stderr_preview）用的分配器；空 = context.allocator。
+	// runner 在 turn 线程里分配、在另一线程释放，所以显式传 heap_allocator()。
+	allocator:  runtime.Allocator,
+}
+
+turn_allocator :: proc(options: ^Turn_Options) -> runtime.Allocator {
+	if options.allocator.procedure == nil {
+		return context.allocator
+	}
+	return options.allocator
 }
 
 // 单飞 turn 的取消信号。泵在每个轮询点检查；置位后终止整棵进程树。
@@ -124,6 +135,14 @@ Turn_Result :: struct {
 Pump_State :: struct {
 	session_id: string,
 	stderr_log: [dynamic]u8,
+	allocator:  runtime.Allocator,
+}
+
+pump_allocator :: proc(state: ^Pump_State) -> runtime.Allocator {
+	if state.allocator.procedure == nil {
+		return context.allocator
+	}
+	return state.allocator
 }
 
 Pump_Context :: struct {
@@ -140,9 +159,10 @@ on_agent_stdout_line :: proc(user: rawptr, line: string) {
 		return
 	}
 	if ev.type == "session_start" && len(ev.session_id) > 0 {
-		cloned := strings.clone(ev.session_id, context.allocator)
+		alloc := pump_allocator(ctx.state)
+		cloned := strings.clone(ev.session_id, alloc)
 		if len(ctx.state.session_id) > 0 {
-			delete(ctx.state.session_id, context.allocator)
+			delete(ctx.state.session_id, alloc)
 		}
 		ctx.state.session_id = cloned
 	}
@@ -296,12 +316,14 @@ build_agent_command :: proc(options: ^Turn_Options) -> [dynamic]string {
 // 不等待后台后代释放写端（否则可能永远不返回）。
 pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callbacks) -> (result: Turn_Result) {
 	result.exit_code = -1
+	alloc := turn_allocator(options)
 	state: Pump_State
+	state.allocator = alloc
 	cb := callbacks
 	defer {
 		// 若在 return 前没有转交所有权，session_id 仍归本函数，需要释放。
 		if len(state.session_id) > 0 {
-			delete(state.session_id, context.allocator)
+			delete(state.session_id, alloc)
 		}
 		delete(state.stderr_log)
 	}
@@ -320,7 +342,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	stdin_r, stdin_w, e1 := os.pipe()
 	if e1 != nil {
 		result.exit_code = 1
-		result.stderr_preview = fmt.aprintf("cannot create stdin pipe: %v", e1)
+		result.stderr_preview = fmt.aprintf("cannot create stdin pipe: %v", e1, alloc)
 		return
 	}
 	stdout_r, stdout_w, e2 := os.pipe()
@@ -328,7 +350,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		os.close(stdin_r)
 		os.close(stdin_w)
 		result.exit_code = 1
-		result.stderr_preview = fmt.aprintf("cannot create stdout pipe: %v", e2)
+		result.stderr_preview = fmt.aprintf("cannot create stdout pipe: %v", e2, alloc)
 		return
 	}
 	stderr_r, stderr_w, e3 := os.pipe()
@@ -338,7 +360,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		os.close(stdout_r)
 		os.close(stdout_w)
 		result.exit_code = 1
-		result.stderr_preview = fmt.aprintf("cannot create stderr pipe: %v", e3)
+		result.stderr_preview = fmt.aprintf("cannot create stderr pipe: %v", e3, alloc)
 		return
 	}
 
@@ -362,7 +384,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		os.close(stderr_r)
 		os.close(stderr_w)
 		result.exit_code = 1
-		result.stderr_preview = fmt.aprintf("cannot start %s: %v", options.agent_bin, perr)
+		result.stderr_preview = fmt.aprintf("cannot start %s: %v", options.agent_bin, perr, alloc)
 		return
 	}
 
@@ -503,7 +525,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		state.session_id = ""
 	}
 	if len(state.stderr_log) > 0 && exit_code != 0 {
-		result.stderr_preview = strings.clone(string(state.stderr_log[:]), context.allocator)
+		result.stderr_preview = strings.clone(string(state.stderr_log[:]), alloc)
 	}
 	return
 }
