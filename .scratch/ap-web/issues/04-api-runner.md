@@ -6,4 +6,4 @@
 
 **Blocked by:** 01（需要 server.odin/http_util.odin 的请求/响应抽象与路由挂点）、02（事件泵与命令组装）、03（hub 广播）
 
-**Status:** ready-for-agent
+**Status:** done
