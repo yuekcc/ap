@@ -160,6 +160,32 @@ test_runner_full_turn_forwards_raw_and_ends :: proc(t: ^testing.T) {
 	}
 }
 
+// 线程句柄的所有权：turn 结束后仍归 runner（等待下一次机会回收），关停时销毁。
+@(test)
+test_runner_owns_and_releases_turn_thread :: proc(t: ^testing.T) {
+	dir := test_temp_dir("runner-reap")
+	defer os.remove_all(dir)
+
+	app: App
+	runner_test_setup(t, &app, dir)
+	if len(app.agent_bin) == 0 {
+		return
+	}
+	defer sse_hub_destroy(&app.hub)
+
+	status, _ := runner_start_turn(&app, {prompt = "hello"})
+	testing.expect_value(t, status, Runner_Start.Started)
+	testing.expect(t, test_wait_runner_idle(&app, 10 * time.Second), "turn did not finish")
+	testing.expect(
+		t,
+		app.runner.turn_thread != nil,
+		"finished turn thread must stay owned until the next turn or shutdown",
+	)
+
+	runner_shutdown(&app)
+	testing.expect_value(t, app.runner.turn_thread, nil)
+}
+
 @(test)
 test_runner_cancel_terminates_turn :: proc(t: ^testing.T) {
 	dir := test_temp_dir("runner-cancel")
