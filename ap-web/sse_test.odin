@@ -3,6 +3,7 @@ package main
 import "core:testing"
 import "core:strings"
 import sync_chan "core:sync/chan"
+import "core:thread"
 
 import "../internal"
 
@@ -188,4 +189,114 @@ test_hub_unsubscribe_removes_subscriber :: proc(t: ^testing.T) {
 	frame := sse_test_take(t, &alive)
 	defer delete(frame)
 	testing.expect_value(t, frame, "event: ap\ndata: {}\nid: 1\n\n")
+}
+
+// 缓冲满 = 连接线程不再消费：丢弃订阅者并关闭 channel，绝不阻塞 turn。
+@(test)
+test_hub_drops_subscriber_when_buffer_is_full :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &sub, 1))
+
+	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{"n":1}`), u64(1))
+	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{"n":2}`), u64(2))
+	testing.expect_value(t, sse_hub_subscriber_count(&hub), 0)
+
+	// 已投递的第一帧还在缓冲里，之后 channel 已关闭。
+	frame := sse_test_take(t, &sub)
+	defer delete(frame)
+	testing.expect_value(t, frame, "event: ap\ndata: {\"n\":1}\nid: 1\n\n")
+
+	_, open := sync_chan.recv(sub.frames)
+	testing.expect(t, !open, "dropped subscriber's channel must be closed")
+
+	sse_hub_unsubscribe(&hub, &sub)
+}
+
+// 心跳 = 注释行 + ping 事件，同样消耗一个 id，后续事件的 id 接着往下走。
+@(test)
+test_hub_heartbeat_sends_comment_and_ping :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &sub, 4))
+	defer sse_hub_unsubscribe(&hub, &sub)
+
+	testing.expect_value(t, sse_hub_heartbeat(&hub, 1700000000), u64(1))
+
+	frame := sse_test_take(t, &sub)
+	defer delete(frame)
+	testing.expect_value(t, frame,
+		": ping\n\n" +
+		"event: ping\n" +
+		"data: {\"ts\":1700000000}\n" +
+		"id: 1\n\n")
+
+	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{}`), u64(2))
+}
+
+// 关停时 hub 关闭仍注册的 channel，阻塞在 recv 的连接线程会立刻拿到 !ok 退出。
+@(test)
+test_hub_destroy_closes_subscriber_channels :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &sub, 4))
+
+	sse_hub_destroy(&hub)
+
+	_, open := sync_chan.recv(sub.frames)
+	testing.expect(t, !open, "destroyed hub must close subscriber channels")
+}
+
+// 事件泵线程和心跳线程会并发广播：id 必须无重复地覆盖 1..N。
+ID_STRESS_COUNT :: 200
+
+Id_Stress_Job :: struct {
+	hub: ^Sse_Hub,
+	ids: [ID_STRESS_COUNT]u64,
+}
+
+id_stress_worker :: proc(data: rawptr) {
+	job := (^Id_Stress_Job)(data)
+	for i in 0 ..< ID_STRESS_COUNT {
+		job.ids[i] = sse_hub_broadcast(job.hub, "ap", `{}`)
+	}
+}
+
+@(test)
+test_hub_allocates_ids_across_threads :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	first, second: Id_Stress_Job
+	first.hub = &hub
+	second.hub = &hub
+
+	t1 := thread.create_and_start_with_data(rawptr(&first), id_stress_worker, name = "sse-ids-1")
+	t2 := thread.create_and_start_with_data(rawptr(&second), id_stress_worker, name = "sse-ids-2")
+	thread.join(t1)
+	thread.join(t2)
+
+	total := 2 * ID_STRESS_COUNT
+	seen := make([]bool, total + 1)
+	defer delete(seen)
+
+	for job in ([]^Id_Stress_Job{&first, &second}) {
+		for id in job.ids {
+			testing.expectf(t, id >= 1 && id <= u64(total), "id %d out of range", id)
+			testing.expectf(t, !seen[id], "id %d assigned twice", id)
+			seen[id] = true
+		}
+	}
+	for id in 1 ..= total {
+		testing.expectf(t, seen[id], "id %d was never assigned", id)
+	}
 }
