@@ -140,6 +140,25 @@ test_router_prefix_match :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_router_exact_beats_prefix :: proc(t: ^testing.T) {
+	router := Http_Router{}
+	router_add(&router, .Get, "/api/", test_route_handler, true)
+	router_add(&router, .Get, "/api/turn", test_route_handler_exact)
+
+	request := Http_Request {
+		method = .Get,
+		path = "/api/turn",
+	}
+	response := Http_Response{}
+	testing.expect(t, router_dispatch(&router, nil, &request, &response))
+	testing.expect_value(t, string(response.body), "exact")
+}
+
+test_route_handler_exact :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
+	response_text(response, 200, "exact")
+}
+
+@(test)
 test_app_api_returns_404_this_ticket :: proc(t: ^testing.T) {
 	assets, _ := make_assets("")
 	app := App {

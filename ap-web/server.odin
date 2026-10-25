@@ -92,15 +92,15 @@ router_dispatch :: proc(
 	request: ^Http_Request,
 	response: ^Http_Response,
 ) -> bool {
+	// 精确路径优先，其次才是 prefix，避免先注册的 "/api/" 抢走精确路由。
 	for route in router.routes {
-		if route.method != request.method {
-			continue
+		if route.method == request.method && !route.prefix && request.path == route.path {
+			route.handler(user, request, response)
+			return true
 		}
-		matched := request.path == route.path
-		if route.prefix {
-			matched = strings.has_prefix(request.path, route.path)
-		}
-		if matched {
+	}
+	for route in router.routes {
+		if route.method == request.method && route.prefix && strings.has_prefix(request.path, route.path) {
 			route.handler(user, request, response)
 			return true
 		}
