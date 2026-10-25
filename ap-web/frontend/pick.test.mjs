@@ -36,8 +36,7 @@ test("切目录后重置 session 指针、消息与去重游标", () => {
 	assert.deepEqual(after.tools, {});
 	assert.equal(after.items.length, 1);
 	assert.equal(after.items[0].kind, "notice");
-	assert.match(after.items[0].text, /已切换工作目录/);
-	assert.match(after.items[0].text, /新 session/);
+	assert.match(after.items[0].text, /已切换工作目录，请新建会话/);
 
 	// 重置后第一条新事件从新 session 开始，不会与旧 transcript 的 seq 冲突。
 	const next = applyEvent(after, {

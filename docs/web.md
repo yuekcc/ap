@@ -170,7 +170,7 @@ ap-web（主进程）
 1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；accept 循环与其他连接不受影响（pick 请求自身会占用它的连接线程，见「实现细节与额外语义」）
 2. **Unix**：无统一的原生目录对话框 API，phase 1 直接 `501 not_implemented`，前端隐藏该入口（`GET /api/config` 返回 `platform` 字段区分）；phase 2 可考虑 `zenity`/`kdialog` 探测
 3. **取消语义**：用户关掉对话框 → `409 {error: {code: "cancelled"}}`，前端静默忽略
-4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；运行中调用 `POST /api/cwd/pick` 返回 409 `turn_running`
+4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显——输入区「选择目录」按钮旁与侧栏底部都显示当前 cwd；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；运行中调用 `POST /api/cwd/pick` 返回 409 `turn_running`
 5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加。服务器在 pick 成功后清空 session 指针；前端收到新的 cwd 后也清空当前 session/消息列表，并提示「已切换工作目录，请开始新 session」
 6. **并发**：同一时刻只允许一个 pick 请求；重复调用返回 409 `picker_busy`（一个模态对话框只能有一份）
 

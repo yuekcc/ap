@@ -770,6 +770,24 @@ body {
   gap: 6px;
 }
 
+.composer__actions {
+  min-width: 0;
+}
+
+/* 路径按尾部截断（左侧省略），保证选中目录的名字始终可见。 */
+.composer__cwd {
+  min-width: 0;
+  max-width: 20rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
 .composer__buttons {
   margin-left: auto;
 }
@@ -953,6 +971,10 @@ body {
 
   .composer {
     padding: 10px 16px 12px;
+  }
+
+  .composer__cwd {
+    max-width: 9rem;
   }
 
   .composer__hint {

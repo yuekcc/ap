@@ -29,6 +29,11 @@ test("目录选择入口位于输入区，与发送/取消同一行", async () =
 		composer.includes('x-show="$store.ap.isWindows"'),
 		"pick button stays Windows-only",
 	);
+	assert.ok(
+		composer.includes('class="composer__cwd"') &&
+			composer.includes('x-text="$store.ap.config?.cwd ?? \'\'"'),
+		"composer echoes the selected working directory next to the pick button",
+	);
 });
 
 test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", async () => {

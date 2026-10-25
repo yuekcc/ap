@@ -249,7 +249,7 @@ export function appendNotice(state, text, tone = "muted") {
 // 切工作目录：服务器已经清空 session 指针，前端也必须丢弃旧 transcript。
 // 旧消息属于旧 project，保留会让下一轮新 session 叠在旧画面上。
 export function stateAfterCwdChange() {
-	return addNotice(createState(), "已切换工作目录，请开始新 session", "muted");
+	return addNotice(createState(), "已切换工作目录，请新建会话", "muted");
 }
 
 // ---------------------------------------------------------------------------

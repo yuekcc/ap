@@ -146,6 +146,12 @@
             </svg>
             <span x-text="$store.ap.picking ? '选择中…' : '选择目录'"></span>
           </button>
+          <span
+            class="composer__cwd"
+            x-show="$store.ap.config?.cwd"
+            :title="$store.ap.config?.cwd ?? ''"
+            x-text="$store.ap.config?.cwd ?? ''"
+          ></span>
         </div>
 
         <div class="composer__buttons">
