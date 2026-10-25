@@ -2,6 +2,7 @@ package main
 
 import "core:testing"
 import "core:strings"
+import sync_chan "core:sync/chan"
 
 import "../internal"
 
@@ -93,4 +94,98 @@ test_sse_turn_done_json_nulls :: proc(t: ^testing.T) {
 		`"usage":{"input_tokens":null,"output_tokens":null,` +
 		`"cached_tokens":null,"reasoning_tokens":null,"total_tokens":null},` +
 		`"stderr_preview":null}`)
+}
+
+// 从订阅者 channel 取一帧；测试里总是期望有帧可读。
+sse_test_take :: proc(t: ^testing.T, sub: ^Sse_Subscriber) -> string {
+	frame, ok := sync_chan.recv(sub.frames)
+	testing.expect(t, ok, "expected one SSE frame")
+	return frame
+}
+
+// hub 是 seq 的唯一分配点：每次广播 +1，所有订阅者看到同一个 id。
+@(test)
+test_hub_broadcast_assigns_monotonic_ids :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	sub: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &sub, 4))
+	defer sse_hub_unsubscribe(&hub, &sub)
+	testing.expect_value(t, sse_hub_subscriber_count(&hub), 1)
+
+	first := sse_hub_broadcast(&hub, "ap", `{"type":"message_update"}`)
+	testing.expect_value(t, first, u64(1))
+
+	frame := sse_test_take(t, &sub)
+	defer delete(frame)
+	testing.expect_value(t, frame, "event: ap\ndata: {\"type\":\"message_update\"}\nid: 1\n\n")
+
+	second := sse_hub_broadcast(&hub, "ap", `{"type":"message_end"}`)
+	testing.expect_value(t, second, u64(2))
+
+	frame2 := sse_test_take(t, &sub)
+	defer delete(frame2)
+	testing.expect_value(t, frame2, "event: ap\ndata: {\"type\":\"message_end\"}\nid: 2\n\n")
+}
+
+// 多个订阅者各自拿到一份独立的字符串，但帧内容（含 id）完全一致。
+@(test)
+test_hub_broadcast_fans_out_to_every_subscriber :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	first, second: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &first, 4))
+	defer sse_hub_unsubscribe(&hub, &first)
+	testing.expect(t, sse_hub_subscribe(&hub, &second, 4))
+	defer sse_hub_unsubscribe(&hub, &second)
+	testing.expect_value(t, sse_hub_subscriber_count(&hub), 2)
+
+	id := sse_hub_broadcast(&hub, "ap", `{"type":"message_update","ts":1}`)
+	testing.expect_value(t, id, u64(1))
+
+	frame_a := sse_test_take(t, &first)
+	defer delete(frame_a)
+	frame_b := sse_test_take(t, &second)
+	defer delete(frame_b)
+	testing.expect_value(t, frame_a, frame_b)
+	testing.expect_value(t, frame_a,
+		"event: ap\ndata: {\"type\":\"message_update\",\"ts\":1}\nid: 1\n\n")
+}
+
+// 没有订阅者时广播照样推进 seq，不会悬挂也不会报错。
+@(test)
+test_hub_broadcast_without_subscribers :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{}`), u64(1))
+	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{}`), u64(2))
+	testing.expect_value(t, sse_hub_subscriber_count(&hub), 0)
+}
+
+// 退订即从订阅表移除：之后的广播不再投递给它。
+@(test)
+test_hub_unsubscribe_removes_subscriber :: proc(t: ^testing.T) {
+	hub: Sse_Hub
+	sse_hub_init(&hub)
+	defer sse_hub_destroy(&hub)
+
+	gone, alive: Sse_Subscriber
+	testing.expect(t, sse_hub_subscribe(&hub, &gone, 4))
+	testing.expect(t, sse_hub_subscribe(&hub, &alive, 4))
+	defer sse_hub_unsubscribe(&hub, &alive)
+
+	sse_hub_unsubscribe(&hub, &gone)
+	testing.expect_value(t, sse_hub_subscriber_count(&hub), 1)
+
+	testing.expect_value(t, sse_hub_broadcast(&hub, "ap", `{}`), u64(1))
+
+	frame := sse_test_take(t, &alive)
+	defer delete(frame)
+	testing.expect_value(t, frame, "event: ap\ndata: {}\nid: 1\n\n")
 }
