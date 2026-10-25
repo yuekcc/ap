@@ -52,6 +52,62 @@ Http_Response :: struct {
 	close:   bool, // handler 强制关连接（SSE、流式响应等）
 }
 
+// 路由表：精确路径在前台，prefix 路由兜底子路径。后续工单（api.odin）在
+// @(init) 里调用 register_route 注册即可，不需要改服务器主循环。
+Http_Route :: struct {
+	method:  Http_Method,
+	path:    string,
+	prefix:  bool,
+	handler: Http_Handler,
+}
+
+Http_Router :: struct {
+	routes: [dynamic]Http_Route,
+}
+
+ROUTES: Http_Router
+
+router_add :: proc(
+	router: ^Http_Router,
+	method: Http_Method,
+	path: string,
+	handler: Http_Handler,
+	prefix := false,
+) {
+	append(&router.routes, Http_Route{method, path, prefix, handler})
+}
+
+register_route :: proc(
+	method: Http_Method,
+	path: string,
+	handler: Http_Handler,
+	prefix := false,
+) {
+	router_add(&ROUTES, method, path, handler, prefix)
+}
+
+router_dispatch :: proc(
+	router: ^Http_Router,
+	user: rawptr,
+	request: ^Http_Request,
+	response: ^Http_Response,
+) -> bool {
+	for route in router.routes {
+		if route.method != request.method {
+			continue
+		}
+		matched := request.path == route.path
+		if route.prefix {
+			matched = strings.has_prefix(request.path, route.path)
+		}
+		if matched {
+			route.handler(user, request, response)
+			return true
+		}
+	}
+	return false
+}
+
 Http_Handler :: #type proc(
 	user: rawptr,
 	request: ^Http_Request,

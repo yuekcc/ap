@@ -131,8 +131,7 @@ within_root :: proc(root, target: string) -> bool {
 	return strings.has_prefix(target, prefix)
 }
 
-lookup_disk :: proc(root, name: string) -> Asset_Lookup {
-	joined, _ := os.join_path([]string{root, name}, context.temp_allocator)
+lookup_disk :: proc(root, name: string) -> Asset_Lookup {	joined, _ := os.join_path([]string{root, name}, context.temp_allocator)
 	info, err := os.stat(joined, context.temp_allocator)
 	if err != nil {
 		return {status = 404}
@@ -173,5 +172,34 @@ lookup_disk :: proc(root, name: string) -> Asset_Lookup {
 		data = data,
 		content_type = mime_type_for(name),
 		etag = asset_etag(data),
+	}
+}
+
+// 静态资源 handler：内置表与磁盘模式共用同一套查找、MIME、ETag、兜底逻辑。
+serve_static :: proc(assets: ^Assets, request: ^Http_Request, response: ^Http_Response) {
+	if request.method != .Get {
+		response_set_header(response, "Content-Type", "text/plain; charset=utf-8")
+		response_text(response, 405, status_text(405))
+		response.close = true
+		return
+	}
+
+	result := lookup_asset(assets, request.path)
+	switch result.status {
+	case 200:
+		response_set_header(response, "Content-Type", result.content_type)
+		response_set_header(response, "ETag", result.etag)
+		response_set_header(response, "Cache-Control", "no-cache")
+		if if_none_match, ok := header_value(request.headers, "If-None-Match");
+		   ok && etag_matches(if_none_match, result.etag) {
+			response.status = 304
+			response.body = nil
+			return
+		}
+		response.status = 200
+		response.body = result.data
+	case:
+		response_set_header(response, "Content-Type", "text/plain; charset=utf-8")
+		response_text(response, result.status, status_text(result.status))
 	}
 }

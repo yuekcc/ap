@@ -213,8 +213,26 @@ parse_args :: proc(args: []string) -> (Web_Options, Cli_Error) {
 	return opts, cli_ok()
 }
 
-print_usage :: proc() {
-	fmt.print(
+App :: struct {
+	options: Web_Options,
+	assets:  Assets,
+}
+
+// 所有请求的统一入口：先查 api 路由表，/api/* 本工单占位 404，其余走静态资源。
+app_handle_request :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
+	app := (^App)(user)
+	if router_dispatch(&ROUTES, user, request, response) {
+		return
+	}
+	if request.path == "/api" || strings.has_prefix(request.path, "/api/") {
+		response_set_header(response, "Content-Type", "text/plain; charset=utf-8")
+		response_text(response, 404, status_text(404))
+		return
+	}
+	serve_static(&app.assets, request, response)
+}
+
+print_usage :: proc() {	fmt.print(
 		`ap-web — ap 的浏览器客户端
 
 用法:
