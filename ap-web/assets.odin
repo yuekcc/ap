@@ -93,11 +93,8 @@ asset_name_from_path :: proc(path: string, allocator := context.temp_allocator) 
 }
 
 lookup_asset :: proc(assets: ^Assets, path: string) -> Asset_Lookup {
-	decoded, ok := percent_decode(path)
-	if !ok {
-		return {status = 403}
-	}
-	name, status := asset_name_from_path(decoded)
+	// path 已由 server.odin 解析时 percent-decode 过一次，这里不再解码。
+	name, status := asset_name_from_path(path)
 	if status != 0 {
 		return {status = status}
 	}

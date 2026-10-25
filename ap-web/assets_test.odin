@@ -125,7 +125,10 @@ test_assets_disk_traversal_forbidden :: proc(t: ^testing.T) {
 	backslash := lookup_asset(&assets, "/..\\secret.txt")
 	testing.expect_value(t, backslash.status, 403)
 
-	encoded := lookup_asset(&assets, "/%2e%2e/secret.txt")
+	// server 解析时先 percent-decode，assets 不再二次解码。
+	parsed := test_parse("GET /%2e%2e/secret.txt HTTP/1.1\r\n\r\n")
+	testing.expect_value(t, parsed.state, Parse_State.Complete)
+	encoded := lookup_asset(&assets, parsed.request.path)
 	testing.expect_value(t, encoded.status, 403)
 }
 
