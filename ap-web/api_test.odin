@@ -269,7 +269,9 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 
 	transcript := strings.concatenate(
 		{
-			`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_hist"}`,
+			`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_hist","content_ref":"`,
+			text_sha,
+			`"}`,
 			"\n",
 			`{"v":1,"seq":1,"ts":2,"type":"user_message","content":"hi"}`,
 			"\n",
@@ -277,7 +279,11 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 			text_sha,
 			`"},{"type":"text","text_ref":"`,
 			missing_sha,
-			`","text_preview":"fallback preview"}]}`,
+			`","text_preview":"fallback preview"},{"type":"tool_use","id":"call_2","name":"read_file","input_ref":"`,
+			args_sha,
+			`"},{"type":"tool_use","id":"call_3","name":"write_file","input_ref":"`,
+			missing_sha,
+			`","input_preview":"partial input"}]}`,
 			"\n",
 			`{"v":1,"seq":3,"ts":4,"type":"tool_execution_start","tool_call_id":"c1","name":"read_file","args_ref":"`,
 			args_sha,
@@ -300,11 +306,17 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	testing.expectf(t, err == nil, "cannot parse history: %v", err)
 	testing.expect_value(t, len(history.events), 5)
 
+	session_start, has_session_start := history_event(history.events, "session_start")
+	testing.expect(t, has_session_start)
+	session_content, session_content_ok := json_string_field(session_start, "content")
+	testing.expect(t, session_content_ok)
+	testing.expect_value(t, session_content, HISTORY_BLOB_TEXT)
+
 	message_end, has_message_end := history_event(history.events, "message_end")
 	testing.expect(t, has_message_end)
 	blocks, blocks_ok := message_end["content"].(json.Array)
 	testing.expect(t, blocks_ok)
-	if len(blocks) == 2 {
+	if len(blocks) == 4 {
 		first, _ := blocks[0].(json.Object)
 		text, text_ok := json_string_field(first, "text")
 		testing.expect(t, text_ok)
@@ -314,6 +326,23 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 		fallback, fallback_ok := json_string_field(second, "text")
 		testing.expect(t, fallback_ok)
 		testing.expect_value(t, fallback, "fallback preview")
+
+		// tool_use 的 input_ref 从 blobs 解析成 JSON，缺失时退化为 input_preview。
+		tool_use, tool_use_ok := blocks[2].(json.Object)
+		testing.expect(t, tool_use_ok)
+		input, input_ok := tool_use["input"].(json.Object)
+		testing.expect(t, input_ok)
+		file_path, path_ok := json_string_field(input, "file_path")
+		testing.expect(t, path_ok)
+		testing.expect_value(t, file_path, "x.txt")
+
+		missing_input, missing_input_ok := blocks[3].(json.Object)
+		testing.expect(t, missing_input_ok)
+		preview_input, preview_input_ok := json_string_field(missing_input, "input")
+		testing.expect(t, preview_input_ok)
+		testing.expect_value(t, preview_input, "partial input")
+	} else {
+		testing.expectf(t, false, "expected 4 message_end blocks, got %d", len(blocks))
 	}
 
 	tool_start, has_tool_start := history_event(history.events, "tool_execution_start")
