@@ -119,7 +119,7 @@ write_indented_dim :: proc(r: ^Renderer, text: string) {
 tool_start :: proc(r: ^Renderer, name, args: string) {
 	finish_assistant(r)
 	ensure_line_start(r)
-	paint(r, BOLD + YELLOW, "⚙ ")
+	paint(r, BOLD + YELLOW, "⚙\t")
 	write_text(r, name)
 	if len(args) > 0 {
 		write_text(r, " ")
