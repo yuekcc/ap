@@ -178,10 +178,11 @@ test_api_cwd_and_pick_placeholder :: proc(t: ^testing.T) {
 	testing.expect_value(t, pick.status, 501)
 	testing.expect(t, strings.contains(api_response_text(&pick), `"code":"not_implemented"`))
 
-	app.picker_busy = true
+	testing.expect(t, picker_begin(&app))
 	busy := api_call(&app, .Post, "/api/cwd/pick")
 	testing.expect_value(t, busy.status, 409)
 	testing.expect(t, strings.contains(api_response_text(&busy), `"code":"picker_busy"`))
+	picker_end(&app)
 }
 
 @(test)

@@ -232,11 +232,12 @@ App :: struct {
 	agent_bin:   string,
 	project:     Project,
 	cwd:         string,
-	picker_busy: bool,
+	picker_busy: i32, // 原子标志：同一时刻只允许一个目录对话框（工单 06）
 	heartbeat:   Heartbeat_State,
 }
 
-// 所有请求的统一入口：先查 api 路由表，/api/* 本工单占位 404，其余走静态资源。
+// 所有请求的统一入口：先查 api 路由表；未命中的 /api/* 返回 JSON 404/405，
+// 其余走静态资源。
 app_handle_request :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
 	if router_dispatch(&ROUTES, user, request, response) {

@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:encoding/json"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import "core:time"
 
 // HTTP API：路由表与全部 handler。约定见 docs/web.md「HTTP API」：
@@ -489,17 +490,30 @@ api_turn_cancel :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Re
 // cwd
 // ---------------------------------------------------------------------------
 
+// 目录选择对话框的并发占位：同一时刻只允许一个。工单 06 在弹窗前调
+// picker_begin，用户关闭后调 picker_end。
+picker_begin :: proc(app: ^App) -> bool {
+	_, acquired := sync.atomic_compare_exchange_strong(&app.picker_busy, i32(0), i32(1))
+	return acquired
+}
+
+picker_end :: proc(app: ^App) {
+	sync.atomic_store(&app.picker_busy, i32(0))
+}
+
 // 本工单只做并发语义占位：真实目录选择对话框见工单 06。
 api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	if app.picker_busy {
-		api_error(response, 409, "picker_busy", "a directory picker is already open")
-		return
-	}
 	if runner_running(app) {
 		api_error(response, 409, "turn_running", "cannot change directory while a turn is running")
 		return
 	}
+	if !picker_begin(app) {
+		api_error(response, 409, "picker_busy", "a directory picker is already open")
+		return
+	}
+	// 501 路径不弹窗，立刻释放，避免后续调用永远 busy。
+	picker_end(app)
 	api_error(response, 501, "not_implemented", "native directory picker is not available in this build")
 }
 
