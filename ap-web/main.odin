@@ -37,6 +37,7 @@ Web_Options :: struct {
 	session_id:       Maybe(string),
 	continue_session: bool,
 	model:            Maybe(string),
+	agent:            Maybe(string),
 	max_steps:        Maybe(int),
 	max_tokens:       Maybe(int),
 	config_dir:       Maybe(string),
@@ -168,6 +169,13 @@ parse_args :: proc(args: []string) -> (Web_Options, Cli_Error) {
 			}
 			opts.model = value
 			i = next
+		case "--agent":
+			value, next, err := option_value(args, i, inline, has_inline, name)
+			if !cli_is_ok(err) {
+				return opts, err
+			}
+			opts.agent = value
+			i = next
 		case "--max-steps":
 			value, next, err := option_value(args, i, inline, has_inline, name)
 			if !cli_is_ok(err) {
@@ -216,19 +224,32 @@ parse_args :: proc(args: []string) -> (Web_Options, Cli_Error) {
 }
 
 App :: struct {
-	options: Web_Options,
-	assets:  Assets,
+	options:     Web_Options,
+	assets:      Assets,
+	hub:         Sse_Hub,
+	runner:      Runner,
+	config_dir:  string,
+	agent_bin:   string,
+	project:     Project,
+	cwd:         string,
+	picker_busy: i32, // 原子标志：同一时刻只允许一个目录对话框（工单 06）
+	heartbeat:   Heartbeat_State,
 }
 
-// 所有请求的统一入口：先查 api 路由表，/api/* 本工单占位 404，其余走静态资源。
+// 所有请求的统一入口：先查 api 路由表；未命中的 /api/* 返回 JSON 404/405，
+// 其余走静态资源。
 app_handle_request :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
 	if router_dispatch(&ROUTES, user, request, response) {
 		return
 	}
 	if request.path == "/api" || strings.has_prefix(request.path, "/api/") {
-		response_set_header(response, "Content-Type", "text/plain; charset=utf-8")
-		response_text(response, 404, status_text(404))
+		// 路径存在但方法不对，语义上应是 405，而不是「不认识这个端点」。
+		if router_path_exists(&ROUTES, request.path) {
+			api_error(response, 405, "method_not_allowed", "method not allowed for this endpoint")
+		} else {
+			api_error(response, 404, "not_found", "no such API endpoint")
+		}
 		return
 	}
 	serve_static(&app.assets, request, response)
@@ -249,6 +270,7 @@ Agent:
   --agent-bin <path>        ap/ag 可执行文件（后续 turn 使用）
   --config-dir <dir>        传给 ap 的 $AP_CONFIG，默认 ~/.ap
   --model <id>              传给 ap 的 --model
+  --agent <name>            传给 ap 的 --agent（子代理/人格名）
   --max-steps <n>           传给 ap 的 --max-steps
   --max-tokens <n>          传给 ap 的 --max-tokens
   --cwd <dir>               初始工作目录，默认进程启动目录
@@ -285,6 +307,20 @@ print_security_warning :: proc(host: string) {
 	fmt.eprintln("================================================================")
 }
 
+// SIGINT/SIGTERM 的统一收尾：先停心跳、再终止运行中的 turn（等至多 5s），
+// 最后清掉可能残留的子进程树。重复调用安全。
+app_shutdown :: proc(app: ^App) {
+	heartbeat_stop(&app.heartbeat)
+	runner_shutdown(app)
+	cleanup_jobs()
+}
+
+on_shutdown_signal :: proc(user: rawptr) {
+	app := (^App)(user)
+	app_shutdown(app)
+	os.exit(0)
+}
+
 main :: proc() {
 	setup_console()
 	args := normalize_args(os.args)
@@ -312,10 +348,71 @@ main :: proc() {
 		fmt.eprintln("ap-web: ", asset_err)
 		os.exit(2)
 	}
-	app := App {
-		options = opts,
-		assets = assets,
+
+	// 进程级 cwd：--cwd 决定的目录同时是 ap 子进程的工作目录与项目身份来源。
+	cwd_input := "."
+	if value, ok := opts.cwd.?; ok {
+		cwd_input = value
 	}
+	cwd, cwd_err := canonicalize_path(cwd_input, true)
+	if !is_ok(cwd_err) {
+		fmt.eprintln("ap-web: ", cwd_err.message)
+		os.exit(2)
+	}
+	if _, has_cwd := opts.cwd.?; has_cwd {
+		if chdir_err := os.chdir(cwd); chdir_err != nil {
+			fmt.eprintf("ap-web: cannot change directory to %s: %v\n", cwd, chdir_err)
+			os.exit(2)
+		}
+	}
+
+	config_dir, config_err := default_config_dir(opts.config_dir)
+	if !is_ok(config_err) {
+		fmt.eprintln("ap-web: ", config_err.message)
+		os.exit(2)
+	}
+	project, project_err := open_project(config_dir, cwd)
+	if !is_ok(project_err) {
+		fmt.eprintln("ap-web: ", project_err.message)
+		os.exit(2)
+	}
+	agent_bin, agent_err := resolve_agent_bin(opts.agent_bin)
+	if !is_ok(agent_err) {
+		fmt.eprintln("ap-web: ", agent_err.message)
+		os.exit(2)
+	}
+
+	app := App {
+		options    = opts,
+		assets     = assets,
+		config_dir = config_dir,
+		agent_bin  = agent_bin,
+		project    = project,
+		cwd        = cwd,
+	}
+	api_register_routes()
+	sse_hub_init(&app.hub)
+	runner_init(&app)
+
+	if id, has_session := opts.session_id.?; has_session {
+		if !os.exists(session_file(project, id)) {
+			fmt.eprintf("ap-web: session %q not found in project %s\n", id, project.hash)
+			os.exit(2)
+		}
+		runner_set_session(&app, id)
+	} else if opts.continue_session {
+		latest, latest_err := find_latest_root_session(project)
+		if is_ok(latest_err) {
+			runner_set_session(&app, latest)
+			delete(latest, context.allocator)
+		} else {
+			fmt.println("ap-web: no previous session found, starting a new one")
+		}
+	}
+
+	heartbeat_start(&app.heartbeat, &app.hub)
+	install_shutdown_handler(on_shutdown_signal, &app)
+	defer app_shutdown(&app)
 
 	if opts.host_explicit && !is_loopback_host(opts.host) {
 		print_security_warning(opts.host)

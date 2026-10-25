@@ -9,7 +9,9 @@ import "core:strings"
 // 解析只接受内存 buffer，socket 读写通过 Transport 注入，测试可以完全不碰网络。
 MAX_HEADER_LINE :: 32 * 1024
 MAX_HEADERS :: 100
-MAX_REQUEST_BODY :: 1 * 1024 * 1024
+// 请求体上限要比 prompt 上限（1MB）略大，否则 JSON 包装会让「1MB prompt」
+// 在解析层就被 413 掉，API 的 prompt_too_large 错误体永远走不到。
+MAX_REQUEST_BODY :: 2 * 1024 * 1024
 READ_CHUNK :: 16 * 1024
 
 Http_Method :: enum {
@@ -50,6 +52,18 @@ Http_Response :: struct {
 	headers: [dynamic]Http_Header,
 	body:    []byte,
 	close:   bool, // handler 强制关连接（SSE、流式响应等）
+	stream:  Http_Stream,
+}
+
+// 流式响应（SSE）的写通道。头一旦写出去就无法再回到定长路径，所以
+// used 表示 handler 选择了流式，started 表示 chunked 头已经发出。
+// transport 由 serve_connection 在调用 handler 前填入，测试可以自己拼一个。
+Http_Stream :: struct {
+	transport: Transport,
+	used:      bool,
+	started:   bool,
+	ended:     bool,
+	chunk_buf: [dynamic]u8,
 }
 
 // 路由表：精确路径在前台，prefix 路由兜底子路径。后续工单（api.odin）在
@@ -102,6 +116,20 @@ router_dispatch :: proc(
 	for route in router.routes {
 		if route.method == request.method && route.prefix && strings.has_prefix(request.path, route.path) {
 			route.handler(user, request, response)
+			return true
+		}
+	}
+	return false
+}
+
+// 路径存在但方法不匹配时用来给出 405 而不是 404。
+router_path_exists :: proc(router: ^Http_Router, path: string) -> bool {
+	for route in router.routes {
+		if route.prefix {
+			if strings.has_prefix(path, route.path) {
+				return true
+			}
+		} else if path == route.path {
 			return true
 		}
 	}
@@ -366,6 +394,78 @@ write_response :: proc(transport: Transport, response: ^Http_Response, close: bo
 	return true
 }
 
+// 流式响应头固定用 chunked + close：SSE 是单向长连接，没有已知长度，
+// 也不复用连接（docs/web.md「SSE」）。
+build_stream_head :: proc(response: ^Http_Response, allocator := context.temp_allocator) -> string {
+	b := strings.builder_make(allocator)
+	fmt_append_status(&b, response.status)
+	for header in response.headers {
+		if strings.equal_fold(header.name, "content-length") ||
+		   strings.equal_fold(header.name, "connection") ||
+		   strings.equal_fold(header.name, "transfer-encoding") {
+			continue
+		}
+		strings.write_string(&b, header.name)
+		strings.write_string(&b, ": ")
+		strings.write_string(&b, header.value)
+		strings.write_string(&b, "\r\n")
+	}
+	strings.write_string(&b, "Transfer-Encoding: chunked\r\n")
+	strings.write_string(&b, "Connection: close\r\n")
+	strings.write_string(&b, "\r\n")
+	return strings.to_string(b)
+}
+
+// 开始流式响应：立刻写出 chunked 头。返回 false 表示连接已断，
+// handler 应直接返回（之后服务器不再写任何东西）。
+response_stream_start :: proc(response: ^Http_Response) -> bool {
+	if response.stream.started {
+		return true
+	}
+	response.stream.used = true
+	response.stream.started = true
+	head := build_stream_head(response)
+	return response.stream.transport.send(response.stream.transport.user, transmute([]byte)head)
+}
+
+// 写一个 chunk。空数据直接成功，避免发出 0 长度的数据 chunk。
+response_stream_write :: proc(response: ^Http_Response, data: []byte) -> bool {
+	if len(data) == 0 {
+		return true
+	}
+	if !response.stream.started {
+		if !response_stream_start(response) {
+			return false
+		}
+	}
+	clear(&response.stream.chunk_buf)
+	header: [24]u8
+	prefix := fmt.bprintf(header[:], "%x\r\n", len(data))
+	append(&response.stream.chunk_buf, ..transmute([]byte)prefix)
+	append(&response.stream.chunk_buf, ..data)
+	append(&response.stream.chunk_buf, ..transmute([]byte)string("\r\n"))
+	return response.stream.transport.send(
+		response.stream.transport.user,
+		response.stream.chunk_buf[:],
+	)
+}
+
+// 结束流：写终止 chunk。头还没发出去时也要先发头，保证响应是完整的。
+// 重复调用安全（handler 显式结束 + 服务器兜底）。
+response_stream_end :: proc(response: ^Http_Response) {
+	response.stream.used = true
+	if response.stream.ended {
+		return
+	}
+	response.stream.ended = true
+	if !response.stream.started {
+		if !response_stream_start(response) {
+			return
+		}
+	}
+	_ = response.stream.transport.send(response.stream.transport.user, transmute([]byte)string("0\r\n\r\n"))
+}
+
 write_error_response :: proc(transport: Transport, status: int, message: string) {
 	response := Http_Response {
 		status  = status,
@@ -414,7 +514,17 @@ serve_connection :: proc(
 				status  = 200,
 				headers = make([dynamic]Http_Header, 0, 8, context.temp_allocator),
 			}
+			// 流式响应的 handler 需要直接写 socket（SSE 会持续到连接断开），
+			// 定长路径完全不受影响。
+			response.stream.transport = transport
 			handler(handler_user, &request, &response)
+			if response.stream.used {
+				if response.stream.started && !response.stream.ended {
+					response_stream_end(&response)
+				}
+				delete(response.stream.chunk_buf)
+				return
+			}
 			close := !request.keep_alive || response.close || response.status >= 400
 			if !write_response(transport, &response, close) {
 				return
@@ -484,6 +594,8 @@ serve_client :: proc(user: rawptr) {
 	socket := ctx.socket
 	defer net.close(socket)
 	defer free(ctx)
+	// SSE 需要低延迟：禁 Nagle，避免事件被攒包（docs/web.md「SSE」）。
+	_ = net.set_option(socket, .TCP_Nodelay, true)
 	serve_connection(socket_transport(&ctx.socket), app_handle_request, ctx.app)
 	free_all(context.temp_allocator)
 }

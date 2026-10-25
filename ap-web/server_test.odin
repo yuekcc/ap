@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:strings"
 import "core:testing"
 
@@ -109,9 +110,9 @@ test_parse_post_body_waits_for_full_length :: proc(t: ^testing.T) {
 @(test)
 test_parse_body_too_large :: proc(t: ^testing.T) {
 	request := strings.concatenate(
-		{"POST /x HTTP/1.1\r\nContent-Length: ", "1048577", "\r\n\r\n"},
+		{"POST /x HTTP/1.1\r\nContent-Length: ", fmt.tprintf("%d", MAX_REQUEST_BODY + 1), "\r\n\r\n"},
 		context.temp_allocator,
-	) // MAX_REQUEST_BODY = 1MB
+	)
 	parsed := test_parse(request)
 	testing.expect_value(t, parsed.state, Parse_State.Error)
 	testing.expect_value(t, parsed.status, 413)
@@ -187,10 +188,11 @@ test_build_response_304_has_no_body_length :: proc(t: ^testing.T) {
 }
 
 Test_Transport :: struct {
-	input:   []byte,
-	pos:     int,
-	output:  [dynamic]u8,
-	max_read: int,
+	input:     []byte,
+	pos:       int,
+	output:    [dynamic]u8,
+	max_read:  int,
+	fail_send: bool,
 }
 
 test_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) {
@@ -213,6 +215,9 @@ test_transport_recv :: proc(user: rawptr, buffer: []byte) -> (n: int, ok: bool) 
 
 test_transport_send :: proc(user: rawptr, data: []byte) -> bool {
 	transport := (^Test_Transport)(user)
+	if transport.fail_send {
+		return false
+	}
 	append(&transport.output, ..data)
 	return true
 }
