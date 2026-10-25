@@ -13,7 +13,7 @@ v1 已实现：
 - 独立进程子代理、agent 定义文件、工具白名单
 - 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
 - 独立的交互式 `ap-tui`：每轮启动一次 ap 子进程，滚动渲染 stream-json，管理单个活动 session
-- 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，支持 history 恢复、取消与 Windows 目录选择
+- 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，支持 history 恢复、取消、多标签页并发与 Windows 目录选择
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
 
 ## 环境
@@ -143,7 +143,7 @@ Windows 下产物在 `bin\`，直接使用 `.\bin\ap-tui.exe` 即可。
 ./bin/ap-web -s ses_...
 ```
 
-默认只监听 `127.0.0.1`；显式监听其他地址会打印安全警告。页面支持单轮取消、刷新后从 transcript 恢复画面、切换/新建 session；Windows 下可弹出系统目录选择框切换工作目录。需要改前端时先 `npm --prefix ap-web install && npm --prefix ap-web run build`。API、SSE、取消语义、目录选择与安全默认见 [docs/web.md](docs/web.md)。
+默认只监听 `127.0.0.1`；显式监听其他地址会打印安全警告。页面支持单轮取消、刷新后从 transcript 恢复画面、切换/新建 session；不同标签页可各自跑一个 session，同一 session 仍单飞。Windows 下可弹出系统目录选择框切换工作目录。需要改前端时先 `npm --prefix ap-web install && npm --prefix ap-web run build`。API、SSE、并发语义、目录选择与安全默认见 [docs/web.md](docs/web.md)。
 
 ### 技能
 
@@ -180,7 +180,7 @@ odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 npm --prefix ap-web test
 ```
 
-当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入；`ap-web` 覆盖 HTTP 解析/路由、SSE hub 与帧编码、agent 事件泵、turn 单飞与取消、内置/磁盘静态资源、目录选择与前端事件归约。
+当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入；`ap-web` 覆盖 HTTP 解析/路由、SSE hub 与按 session 过滤、agent 事件泵、同 session 单飞与多 session 并发、内置/磁盘静态资源、目录选择与前端事件归约。
 
 真实 LLM 端到端验证（使用本地 OpenAI 兼容端点，注意用量与超时）：
 
