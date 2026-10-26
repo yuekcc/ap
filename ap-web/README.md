@@ -81,7 +81,7 @@ ap-web [options]
   --web-root <dir>          开发模式：静态资源从磁盘读取，默认用内置 dist/
 
 Agent:
-  --agent-bin <path>        每轮 turn 使用的 ap/ag 可执行文件
+  --agent-bin <path>        每轮 turn 使用的 ap 可执行文件
   --config-dir <dir>        传给 ap 的配置目录，默认 ~/.ap
   --model <id>              传给 ap 的 --model
   --agent <name>            传给 ap 的 --agent

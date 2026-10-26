@@ -132,7 +132,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error) {
 
 	exe := resolve_self_exe()
 	dir, _ := os.split_path(exe)
-	names := [2]string{"ap.exe", "ag.exe"} when ODIN_OS == .Windows else [2]string{"ap", "ag"}
+	names := []string{"ap.exe"} when ODIN_OS == .Windows else []string{"ap"}
 	for name in names {
 		joined, _ := os.join_path([]string{dir, name}, context.allocator)
 		if is_regular_file(joined) {
@@ -144,7 +144,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error) {
 			return found, ok_error()
 		}
 	}
-	return "", errorf("cannot find ap.exe/ag.exe next to ap-tui or in PATH; use --agent-bin")
+	return "", errorf("cannot find ap.exe next to ap-tui or in PATH; use --agent-bin")
 }
 
 build_agent_command :: proc(app: ^App) -> [dynamic]string {

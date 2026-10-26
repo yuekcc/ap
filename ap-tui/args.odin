@@ -162,7 +162,7 @@ Session:
   （都不给则新建 session；一次只维护一个活动 session）
 
 Agent:
-  --agent-bin <path>        ap/ag 可执行文件（默认找同目录 ap.exe 或 ag.exe）
+  --agent-bin <path>        ap 可执行文件（默认找同目录 ap.exe）
   --config-dir <dir>        传给 ap 的 $AP_CONFIG，默认 ~/.ap
   --model <id>              传给 ap 的 --model
   --agent <name>            传给 ap 的 --agent

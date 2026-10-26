@@ -117,6 +117,7 @@ ap、ap-tui 与 ap-web 共用 `internal/` 的路径、project、session、blob �
 | [skills.md](skills.md) | 技能发现、SKILL.md 格式、提示词注入、`--list-skills` | 定稿 v1 |
 | [tui.md](tui.md) | `ap-tui` 的进程模型、session 管理、历史重放、渲染与 phase 1 限制 | 第一阶段 |
 | [web.md](web.md) | `ap-web`（单 exe：HTTP+SSE 服务器 + 内置 Alpine.js 前端）的方案 | 第一阶段 |
+| [integration.md](integration.md) | 新前端接入 ap.exe 的集成指南：进程契约、turn 生命周期、事件解析、session/历史、取消与并发 | 定稿 v1 |
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 | 定稿 v1 |
 
 ## 参考 Claude Code 的取舍

@@ -258,7 +258,7 @@ print_usage :: proc() {
   --web-root <dir>          开发模式：静态资源从磁盘读取，默认用编译进 exe 的 dist/
 
 Agent:
-  --agent-bin <path>        ap/ag 可执行文件（每轮 turn 使用）
+  --agent-bin <path>        ap 可执行文件（每轮 turn 使用）
   --config-dir <dir>        传给 ap 的 $AP_CONFIG，默认 ~/.ap
   --model <id>              传给 ap 的 --model
   --agent <name>            传给 ap 的 --agent（子代理/人格名）

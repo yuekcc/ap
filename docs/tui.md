@@ -44,8 +44,8 @@ Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉 
 
 1. `--agent-bin <path>`
 2. `AP_AGENT_BIN`，其次 `AP_BIN`
-3. `ap-tui` 同目录的 `ap.exe` / `ag.exe`（非 Windows 为 `ap` / `ag`）
-4. PATH 中的 `ap` / `ag`
+3. `ap-tui` 同目录的 `ap.exe`（非 Windows 为 `ap`）
+4. PATH 中的 `ap`
 
 找不到时退出码 2。
 
