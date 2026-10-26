@@ -98,6 +98,14 @@ export function sessionTitle(session) {
 	return `${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
 }
 
+// 侧栏 project 标题：只显示工作目录的最后一段，完整路径放在 title 上。
+export function projectName(cwd) {
+	const value = String(cwd ?? "").replace(/[\\/]+$/, "");
+	if (!value) return "工作目录";
+	const parts = value.split(/[\\/]/);
+	return parts[parts.length - 1] || value;
+}
+
 export function sessionMeta(session) {
 	const id = String(session?.session_id ?? "");
 	const match = SESSION_ID_RE.exec(id);
@@ -245,12 +253,6 @@ export function appendUserMessage(state, text) {
 
 export function appendNotice(state, text, tone = "muted") {
 	return addNotice(state, text, tone);
-}
-
-// 切工作目录：服务器已经清空 session 指针，前端也必须丢弃旧 transcript。
-// 旧消息属于旧 project，保留会让下一轮新 session 叠在旧画面上。
-export function stateAfterCwdChange() {
-	return addNotice(createState(), "已切换工作目录，请新建会话", "muted");
 }
 
 // ---------------------------------------------------------------------------

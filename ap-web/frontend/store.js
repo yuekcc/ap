@@ -11,7 +11,6 @@ import {
 	createState,
 	ingestHistory,
 	sessionTitle,
-	stateAfterCwdChange,
 } from "./render.js";
 
 function asArray(value) {
@@ -38,7 +37,8 @@ export function createStore() {
 		connected: "connecting",
 		error: "",
 		config: null,
-		sessions: [],
+		projects: [],
+		projectCwd: null,
 		draft: "",
 
 		get platform() {
@@ -51,6 +51,22 @@ export function createStore() {
 
 		get currentTitle() {
 			return this.sessionId ? sessionTitle({ session_id: this.sessionId }) : "新会话";
+		},
+
+		// 侧栏分组：服务端的 project 列表 + 当前正在使用的目录。
+		// 新选中的目录在第一次 turn 落地前还没有 session 文件，先本地合成一个空组，
+		// 否则用户看不到自己刚打开的工作目录。
+		get sidebarProjects() {
+			const groups = this.projects.slice();
+			if (!this.projectCwd) return groups;
+			if (!groups.some((project) => project.cwd === this.projectCwd)) {
+				groups.unshift({ cwd: this.projectCwd, sessions: [] });
+			}
+			return groups;
+		},
+
+		get activeProject() {
+			return this.sidebarProjects.find((project) => project.cwd === this.projectCwd) ?? null;
 		},
 
 		get statusKind() {
@@ -84,12 +100,6 @@ export function createStore() {
 
 		reset(sessionId = null) {
 			view = createState({ sessionId });
-			publish();
-		},
-
-		// 目录切换成功后服务器已清空 session 指针；前端丢弃旧 transcript 并提示。
-		resetAfterCwdChange() {
-			view = stateAfterCwdChange();
 			publish();
 		},
 
@@ -150,6 +160,7 @@ export function createStore() {
 		// 只同步运行态；key 由客户端持有，服务端的“最近活跃”指针不能覆盖它。
 		syncCurrent(current = {}) {
 			if (current.session_id) view = { ...view, sessionId: current.session_id };
+			if (typeof current.cwd === "string" && current.cwd) this.setProjectCwd(current.cwd);
 			if (typeof current.running === "boolean") view = { ...view, running: current.running };
 			if (typeof current.turn === "number") view = { ...view, turn: current.turn };
 			publish();
@@ -188,8 +199,15 @@ export function createStore() {
 			this.config = { ...(this.config ?? {}), cwd };
 		},
 
-		setSessions(sessions) {
-			this.sessions = asArray(sessions);
+		setProjects(projects) {
+			this.projects = asArray(projects).map((project) => ({
+				...(project && typeof project === "object" ? project : {}),
+				sessions: asArray(project?.sessions),
+			}));
+		},
+
+		setProjectCwd(cwd) {
+			this.projectCwd = cwd || null;
 		},
 
 		setDraft(text) {

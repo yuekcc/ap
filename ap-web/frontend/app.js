@@ -2,11 +2,11 @@
 // 切换或新建 session，Windows 下选择工作目录。所有异步错误都落成 notice，
 // 不让页面因为一个接口 404/501 就白屏。
 //
-// 多标签页：每个标签页持有自己的 session_key，SSE 只订阅该 session；
-// sessionStorage 记住本标签页的 {key, id}，刷新后优先按真实 id 恢复。
+// 多标签页 / 多 project：每个标签页持有自己的 session_key，SSE 只订阅该 session；
+// sessionStorage 记住本标签页的 {key, id, cwd}，刷新后优先按真实 id + cwd 恢复。
 import { api, eventsUrl } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
-import { sessionMeta, sessionTitle } from "./render.js";
+import { projectName as projectDisplayName, sessionMeta, sessionTitle } from "./render.js";
 import { createEventStream } from "./sse.js";
 
 const SESSION_STORAGE_KEY = "ap-web:session";
@@ -26,6 +26,7 @@ export function registerApp(Alpine) {
 			this.$watch("$store.ap.sessionId", () => this.$nextTick(() => this.autoScroll()));
 			this.$watch("$store.ap.sessionKey", () => this.persistSession());
 			this.$watch("$store.ap.sessionId", () => this.persistSession());
+			this.$watch("$store.ap.projectCwd", () => this.persistSession());
 
 			const store = this.$store.ap;
 			store.reset(null);
@@ -34,7 +35,7 @@ export function registerApp(Alpine) {
 
 		// 本标签页的 session 只影响自己；不同标签页各自独立。
 		persistSession() {
-			const { sessionKey, sessionId } = this.$store.ap;
+			const { sessionKey, sessionId, projectCwd } = this.$store.ap;
 			try {
 				if (!sessionKey && !sessionId) {
 					sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -42,7 +43,11 @@ export function registerApp(Alpine) {
 				}
 				sessionStorage.setItem(
 					SESSION_STORAGE_KEY,
-					JSON.stringify({ key: sessionKey ?? "", id: sessionId ?? "" }),
+					JSON.stringify({
+						key: sessionKey ?? "",
+						id: sessionId ?? "",
+						cwd: projectCwd ?? "",
+					}),
 				);
 			} catch {
 				// 隐私模式/禁用存储不影响当前会话。
@@ -57,7 +62,8 @@ export function registerApp(Alpine) {
 				if (!saved || typeof saved !== "object") return null;
 				const key = typeof saved.key === "string" ? saved.key : "";
 				const id = typeof saved.id === "string" ? saved.id : "";
-				return key || id ? { key, id } : null;
+				const cwd = typeof saved.cwd === "string" ? saved.cwd : "";
+				return key || id ? { key, id, cwd } : null;
 			} catch {
 				return null;
 			}
@@ -67,17 +73,9 @@ export function registerApp(Alpine) {
 			const store = this.$store.ap;
 			store.setLoading(true);
 			try {
-				await Promise.all([this.loadConfig(), this.loadSessions()]);
+				await Promise.all([this.loadConfig(), this.loadProjects()]);
 				await this.loadCwd();
-				const key = await this.resolveBootSession();
-				if (key) {
-					try {
-						await this.loadHistory(store.sessionId);
-					} catch (error) {
-						this.fail("读取历史失败", error);
-					}
-					this.connect();
-				}
+				await this.resolveBootSession();
 			} finally {
 				store.setLoading(false);
 				await this.$nextTick();
@@ -86,20 +84,35 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		// 恢复顺序：sessionStorage 的真实 id → sessionStorage 的 slot key →
-		// 服务端「最近活跃」session → 新建 slot。slot key 在进程重启后已无意义，
-		// 所以存了 id 时优先用 id，让服务端重新给出该 session 的规范 key。
+		defaultCwd() {
+			return this.$store.ap.config?.cwd ?? "";
+		},
+
+		// 服务端列表里没有记录时（slot、刚 pick 的新目录），回落到给定的 cwd。
+		projectCwdFor(sessionId, fallback = "") {
+			for (const project of this.$store.ap.projects) {
+				if (project.sessions?.some((item) => item.session_id === sessionId)) {
+					return project.cwd;
+				}
+			}
+			return fallback || this.defaultCwd();
+		},
+
+		// 恢复顺序：sessionStorage 的真实 id → slot key → 最近 project 的最新
+		// session → 默认目录新建 slot。cwd 随记录一起保存，因为同一个 session id
+		// 只有在它自己的 project 里才能读到 transcript。
 		async resolveBootSession() {
 			const store = this.$store.ap;
 			const saved = this.restoreSession();
 
 			if (saved?.id) {
 				try {
-					const resumed = await api.resumeSession(saved.id);
-					const key = resumed?.session_key || saved.id;
-					this.activateSession(key, saved.id);
-					await this.syncSession(key);
-					return key;
+					await this.openSession(
+						saved.id,
+						saved.cwd || this.projectCwdFor(saved.id),
+						{ reloadProjects: false },
+					);
+					return;
 				} catch (error) {
 					this.fail("恢复上次会话失败", error);
 				}
@@ -107,40 +120,40 @@ export function registerApp(Alpine) {
 				try {
 					const current = await api.currentSession(saved.key);
 					if (current?.session_key === saved.key) {
-						this.activateSession(saved.key, current.session_id || null);
+						const cwd = current.cwd || saved.cwd || this.defaultCwd();
+						this.activateSession(saved.key, current.session_id || null, cwd);
 						store.syncCurrent(current ?? {});
-						return saved.key;
+						if (current.session_id) {
+							await this.loadHistory(current.session_id, cwd);
+						}
+						this.connect();
+						return;
 					}
 				} catch (error) {
 					this.fail("读取上次会话失败", error);
 				}
 			}
 
-			try {
-				const current = await api.currentSession();
-				if (current?.session_key) {
-					this.activateSession(current.session_key, current.session_id || null);
-					store.syncCurrent(current ?? {});
-					return current.session_key;
+			for (const project of store.projects) {
+				const session = project.sessions?.[0];
+				if (!session) continue;
+				try {
+					await this.openSession(session.session_id, project.cwd, {
+						reloadProjects: false,
+					});
+					return;
+				} catch (error) {
+					this.fail("恢复最近会话失败", error);
+					break;
 				}
-			} catch (error) {
-				this.fail("读取会话状态失败", error);
 			}
 
-			try {
-				const created = await api.newSession();
-				const key = created?.session_key;
-				if (!key) throw new Error("服务端没有返回 session_key");
-				this.activateSession(key, null);
-				return key;
-			} catch (error) {
-				this.fail("新建会话失败", error);
-				return null;
-			}
+			await this.newSession(this.defaultCwd());
 		},
 
-		activateSession(key, sessionId) {
+		activateSession(key, sessionId, cwd) {
 			const store = this.$store.ap;
+			store.setProjectCwd(cwd);
 			store.setSessionKey(key);
 			store.setSession(sessionId ?? null);
 		},
@@ -157,6 +170,30 @@ export function registerApp(Alpine) {
 			}
 		},
 
+		// 打开一个已有 session：恢复指针 → 载入该 project 的 history → 订阅 SSE。
+		// 不做 loading 守卫，boot 与公开入口都复用它。
+		async openSession(sessionId, cwd, { reloadProjects = true } = {}) {
+			const store = this.$store.ap;
+			const resumed = await api.resumeSession(sessionId, cwd);
+			const key = resumed?.session_key || sessionId;
+			const projectCwd = resumed?.cwd || cwd || this.projectCwdFor(sessionId);
+			this.activateSession(key, sessionId, projectCwd);
+			store.reset(sessionId);
+			try {
+				await this.loadHistory(sessionId, projectCwd);
+			} catch (error) {
+				// history 失败也要连上 SSE；运行中的 session 仍能继续显示增量。
+				this.fail("读取历史失败", error);
+			}
+			// history 只还原 transcript；运行态与 turn 号以 current 为准。
+			await this.syncSession(key);
+			if (store.sessionKey === key) this.connect();
+			store.setError("");
+			if (reloadProjects) await this.loadProjects();
+			await this.$nextTick();
+			this.autoScroll(true);
+		},
+
 		async loadConfig() {
 			try {
 				this.$store.ap.setConfig(await api.config());
@@ -165,15 +202,14 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		async loadSessions() {
+		async loadProjects() {
 			try {
-				this.$store.ap.setSessions(await api.sessions());
+				this.$store.ap.setProjects(await api.projects());
 			} catch (error) {
-				this.fail("读取会话列表失败", error);
+				this.fail("读取工作目录失败", error);
 			}
 		},
 
-		// /api/config 给的是启动参数里的 cwd；运行期切换过目录后以 /api/cwd 为准。
 		async loadCwd() {
 			try {
 				const data = await api.cwd();
@@ -184,13 +220,13 @@ export function registerApp(Alpine) {
 		},
 
 		// 先渲染 history 再订阅 SSE；重叠的 transcript 事件由 seq 在 sse/store 里跳过。
-		async loadHistory(sessionId) {
+		async loadHistory(sessionId, cwd) {
 			const store = this.$store.ap;
 			if (!sessionId) {
 				store.reset(null);
 				return;
 			}
-			const data = await api.history(sessionId);
+			const data = await api.history(sessionId, cwd);
 			store.ingest(data?.events ?? [], sessionId);
 		},
 
@@ -242,9 +278,10 @@ export function registerApp(Alpine) {
 			const store = this.$store.ap;
 			const key = store.sessionKey;
 			const sessionId = store.sessionId;
-			if (!key || !sessionId) return;
+			const cwd = store.projectCwd;
+			if (!key || !sessionId || !cwd) return;
 			try {
-				const data = await api.history(sessionId);
+				const data = await api.history(sessionId, cwd);
 				if (store.sessionKey !== key || store.sessionId !== sessionId) return;
 				store.mergeHistory(data?.events ?? []);
 				await this.$nextTick();
@@ -265,12 +302,13 @@ export function registerApp(Alpine) {
 				if (store.sessionKey !== key) return;
 				store.syncCurrent(current ?? {});
 				const sessionId = store.sessionId;
-				if (sessionId) {
-					const data = await api.history(sessionId);
+				const cwd = store.projectCwd;
+				if (sessionId && cwd) {
+					const data = await api.history(sessionId, cwd);
 					if (store.sessionKey !== key) return;
 					store.mergeHistory(data?.events ?? []);
 				}
-				await this.loadSessions();
+				await this.loadProjects();
 				await this.$nextTick();
 				this.autoScroll();
 			} catch (error) {
@@ -298,7 +336,11 @@ export function registerApp(Alpine) {
 			this.autoScroll(true);
 
 			try {
-				await api.startTurn({ prompt, session_key: key });
+				await api.startTurn({
+					prompt,
+					session_key: key,
+					cwd: store.projectCwd ?? "",
+				});
 			} catch (error) {
 				if (store.sessionKey !== key) return;
 				if (error?.status === 409 && error?.code === "turn_running") {
@@ -334,7 +376,7 @@ export function registerApp(Alpine) {
 		async afterTurnDone() {
 			const store = this.$store.ap;
 			store.setCancelling(false);
-			this.loadSessions();
+			this.loadProjects();
 			const key = store.sessionKey;
 			if (!key) return;
 			try {
@@ -348,22 +390,27 @@ export function registerApp(Alpine) {
 			this.autoScroll();
 		},
 
-		async newSession() {
+		// 在指定工作目录新建 slot；不传时沿用当前 project，再退到默认目录。
+		async newSession(cwd, { focus = true } = {}) {
 			const store = this.$store.ap;
-			if (store.loading) return false;
+			// @click="newSession" 会把 MouseEvent 当参数传进来；只接受路径字符串。
+			const requested = typeof cwd === "string" ? cwd.trim() : "";
+			const target = requested || store.projectCwd || this.defaultCwd();
 			store.setLoading(true);
 			try {
-				const created = await api.newSession();
+				const created = await api.newSession(target);
 				const key = created?.session_key;
 				if (!key) throw new Error("服务端没有返回 session_key");
-				// 先设 key 再 reset：reset 保留当前 key，只清空 transcript。
+				// 先设 key/cwd 再 reset：reset 只清空 transcript。
+				store.setProjectCwd(created?.cwd || target);
 				store.setSessionKey(key);
 				store.reset(null);
 				store.setError("");
 				this.connect();
+				await this.loadProjects();
 				await this.$nextTick();
 				this.autoScroll(true);
-				this.$refs.input?.focus();
+				if (focus) this.$refs.input?.focus();
 				return true;
 			} catch (error) {
 				this.fail("新建会话失败", error);
@@ -373,89 +420,53 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		async resumeSession(sessionId, selectElement = null) {
+		newSessionIn(cwd) {
+			return this.newSession(cwd);
+		},
+
+		async resumeSession(sessionId, cwd) {
 			const store = this.$store.ap;
 			if (!sessionId) return;
-			if (sessionId === store.sessionId && store.sessionKey) return;
+			if (
+				sessionId === store.sessionId &&
+				store.sessionKey &&
+				cwd === store.projectCwd
+			) {
+				return;
+			}
 			if (store.loading) return;
 			store.setLoading(true);
 			try {
-				const resumed = await api.resumeSession(sessionId);
-				const key = resumed?.session_key || sessionId;
-				store.setSessionKey(key);
-				store.setSession(sessionId);
-				store.reset(sessionId);
-				try {
-					await this.loadHistory(sessionId);
-				} catch (error) {
-					// history 失败也要连上 SSE；运行中的 session 仍能继续显示增量。
-					this.fail("读取历史失败", error);
-				}
-				// history 只还原 transcript；运行态与 turn 号以 current 为准。
-				await this.syncSession(key);
-				if (store.sessionKey === key) this.connect();
-				store.setError("");
-				await this.loadSessions();
-				await this.$nextTick();
-				this.autoScroll(true);
+				await this.openSession(sessionId, cwd);
 			} catch (error) {
 				this.fail("恢复会话失败", error);
-				if (selectElement) selectElement.value = store.sessionId ?? "";
 			} finally {
 				store.setLoading(false);
 			}
 		},
 
-		async onSessionSelect(sessionId) {
-			const store = this.$store.ap;
-			if (!sessionId || sessionId === (store.sessionId ?? "")) return;
-			await this.resumeSession(sessionId);
-		},
-
-		selectSession(sessionId) {
-			return this.onSessionSelect(sessionId);
+		selectSession(project, session) {
+			if (!project?.cwd || !session?.session_id) return;
+			return this.resumeSession(session.session_id, project.cwd);
 		},
 
 		async pickDirectory() {
 			const store = this.$store.ap;
-			if (store.running) {
-				store.notice("运行中不能切换工作目录", "warning");
-				return;
-			}
 			if (store.picking) return;
 
 			store.setPicking(true);
 			try {
 				const result = await api.pickCwd();
 				if (result?.cwd) {
-					store.setCwd(result.cwd);
-					// 服务器已清空所有 session 运行态；前端同步丢弃旧 project 的 transcript，
-					// 并为这个标签页分配新的 slot。
-					this.disconnect();
-					store.setSessionKey(null);
-					store.resetAfterCwdChange();
-					await this.loadSessions();
-					try {
-						const created = await api.newSession();
-						const key = created?.session_key;
-						if (!key) throw new Error("服务端没有返回 session_key");
-						store.setSessionKey(key);
-						this.connect();
-						await this.$nextTick();
-						this.autoScroll(true);
-					} catch (error) {
-						this.fail("新建会话失败", error);
-					}
+					// 目录只是「打开一个 project」，不再替换全局 cwd、也不再清空
+					// 其他 project 的 session；直接在该目录开一个新 slot。
+					await this.newSession(result.cwd);
 				}
 			} catch (error) {
 				// 用户主动关掉对话框不是错误。
 				if (error?.code === "cancelled") return;
 				if (error?.code === "picker_busy") {
 					store.notice("目录选择框已经打开", "warning");
-					return;
-				}
-				if (error?.code === "turn_running") {
-					store.notice("有会话正在运行，不能切换工作目录", "warning");
 					return;
 				}
 				if (error?.status === 501) {
@@ -468,10 +479,24 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		sessionLabel(session) {
-			const id = session?.session_id ?? "";
-			const turns = Number.isFinite(session?.turns) ? session.turns : 0;
-			return `${id} · ${turns} 轮`;
+		projectName(project) {
+			return projectDisplayName(project?.cwd);
+		},
+
+		isActiveProject(project) {
+			return project?.cwd === this.$store.ap.projectCwd;
+		},
+
+		// 当前活动 session 还没出现在项目列表里（新 slot 尚未落盘）时，
+		// 在所属 project 下显示一条占位会话。
+		showsDraftSession(project) {
+			if (!this.isActiveProject(project)) return false;
+			const sessionId = this.$store.ap.sessionId;
+			return !(project.sessions ?? []).some((item) => item.session_id === sessionId);
+		},
+
+		showsEmptyProject(project) {
+			return !this.isActiveProject(project) && (project.sessions ?? []).length === 0;
 		},
 
 		sessionTitle(session) {

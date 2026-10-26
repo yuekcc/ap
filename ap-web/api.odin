@@ -2,6 +2,7 @@ package main
 
 import "base:runtime"
 import "core:encoding/json"
+import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:time"
@@ -19,6 +20,7 @@ API_ROUTES :: []Http_Route {
 	{.Get, "/api/session/current", false, api_session_current},
 	{.Post, "/api/session/new", false, api_session_new},
 	{.Get, "/api/sessions", false, api_sessions},
+	{.Get, "/api/projects", false, api_projects},
 	{.Post, "/api/session/resume", false, api_session_resume},
 	{.Get, "/api/history", false, api_history},
 	{.Get, "/api/cwd", false, api_cwd},
@@ -73,6 +75,7 @@ Api_Config :: struct {
 Api_Session_Current :: struct {
 	session_key: Maybe(string) `json:"session_key"`,
 	session_id:  Maybe(string) `json:"session_id"`,
+	cwd:         Maybe(string) `json:"cwd"`,
 	running:     bool          `json:"running"`,
 	turn:        Maybe(int)    `json:"turn"`,
 }
@@ -80,6 +83,7 @@ Api_Session_Current :: struct {
 Api_Session_Id :: struct {
 	session_id:  Maybe(string) `json:"session_id"`,
 	session_key: string        `json:"session_key"`,
+	cwd:         string        `json:"cwd"`,
 }
 
 Api_Session_Entry :: struct {
@@ -87,6 +91,15 @@ Api_Session_Entry :: struct {
 	ts:         i64    `json:"ts"`,
 	turns:      int    `json:"turns"`,
 	running:    bool   `json:"running"`,
+}
+
+// 侧栏的 project 分组：一个 working directory 下的全部 session。
+// latest_ts 用于把最近有活动的目录排在前面。
+Api_Project_Entry :: struct {
+	cwd:       string               `json:"cwd"`,
+	hash:      string               `json:"hash"`,
+	latest_ts: i64                  `json:"latest_ts"`,
+	sessions:  []Api_Session_Entry  `json:"sessions"`,
 }
 
 Api_Cwd :: struct {
@@ -230,6 +243,9 @@ api_session_current :: proc(user: rawptr, request: ^Http_Request, response: ^Htt
 	if len(state.session_id) > 0 {
 		current.session_id = state.session_id
 	}
+	if len(state.cwd) > 0 {
+		current.cwd = state.cwd
+	}
 	api_json(response, 200, current)
 }
 
@@ -242,16 +258,32 @@ api_cwd :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) 
 // session 指针
 // ---------------------------------------------------------------------------
 
+Api_New_Body :: struct {
+	cwd: string `json:"cwd"`,
+}
+
 // 新建会话只分配一个 slot：下一条提示词让 ap 创建真实 session，不落盘任何东西。
-// 其他 session 的运行态完全不受影响（多标签页各开各的新会话）。
+// cwd 属于这个 slot；不传时使用 ap-web 的默认 project。其他 session 的运行态
+// 完全不受影响（多标签页各开各的新会话）。
 api_session_new :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	key := runner_session_new(app, context.temp_allocator)
-	api_json(response, 200, Api_Session_Id{session_key = key})
+	body: Api_New_Body
+	if len(request.body) > 0 && !api_parse_json(request.body, &body) {
+		api_error(response, 400, "invalid_json", "request body must be a JSON object")
+		return
+	}
+	project, message := resolve_cwd_project(app, body.cwd)
+	if len(message) > 0 {
+		api_error(response, 400, "invalid_cwd", message)
+		return
+	}
+	key := runner_session_new(app, project.root, context.temp_allocator)
+	api_json(response, 200, Api_Session_Id{session_key = key, cwd = project.root})
 }
 
 Api_Resume_Body :: struct {
 	session_id: string `json:"session_id"`,
+	cwd:        string `json:"cwd"`,
 }
 
 api_session_resume :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
@@ -265,24 +297,119 @@ api_session_resume :: proc(user: rawptr, request: ^Http_Request, response: ^Http
 		api_error(response, 400, "invalid_request", "session_id is required")
 		return
 	}
+	project, message := resolve_cwd_project(app, body.cwd)
+	if len(message) > 0 {
+		api_error(response, 400, "invalid_cwd", message)
+		return
+	}
 	// 切换视图不影响其他 session 的运行中 turn；同一 session 的分飞由
 	// POST /api/turn 自己保证。
-	key := runner_session_resume(app, body.session_id, context.temp_allocator)
+	key := runner_session_resume(
+		app,
+		body.session_id,
+		project.root,
+		context.temp_allocator,
+	)
 	api_json(response, 200, Api_Session_Id{
 		session_id = body.session_id,
 		session_key = key,
+		cwd = project.root,
 	})
+}
+
+// cwd 为空时回落到 ap-web 的默认 project（启动目录/--cwd）。
+resolve_cwd_project :: proc(app: ^App, cwd: string) -> (Project, string) {
+	text := strings.trim_space(cwd)
+	if len(text) == 0 {
+		return app_project(app), ""
+	}
+	project, err := open_project(app.config_dir, text)
+	if !is_ok(err) {
+		return {}, err.message
+	}
+	if !os.is_dir(project.root) {
+		return {}, fmt.tprintf("working directory does not exist: %s", project.root)
+	}
+	return project, ""
 }
 
 // 会话列表：id 来自 internal/sessions，ts 取文件 mtime（毫秒），
 // turns 数 turn_start 行（读不到文件时尽力而为，返回 0）。
+// cwd 可选；不带时返回默认 project。
 api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	project := app_project(app)
+	cwd, _ := query_param(request.query, "cwd")
+	project, message := resolve_cwd_project(app, cwd)
+	if len(message) > 0 {
+		api_error(response, 400, "invalid_cwd", message)
+		return
+	}
+	entries := session_entries(app, project, context.temp_allocator)
+	api_json(response, 200, entries[:])
+}
+
+// 侧栏按工作目录分组：返回所有有 session 的 project + 各自会话列表。
+// 默认 project 即使不在 config_dir/projects 下（测试 fixture、手工构造）也要
+// 出现在结果里，所以单独补一次。
+api_projects :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
+	app := (^App)(user)
+	discovered, err := list_projects(app.config_dir)
+	if !is_ok(err) {
+		api_error(response, 500, "internal_error", err.message)
+		return
+	}
+
+	default_project := app_project(app)
+	default_seen := false
+	groups := make([dynamic]Api_Project_Entry, 0, len(discovered) + 1, context.temp_allocator)
+	for project in discovered {
+		if project.hash == default_project.hash {
+			default_seen = true
+		}
+		sessions := session_entries(app, project, context.temp_allocator)
+		if len(sessions) == 0 {
+			continue
+		}
+		append(&groups, Api_Project_Entry{
+			cwd = project.root,
+			hash = project.hash,
+			latest_ts = latest_session_ts(sessions),
+			sessions = sessions,
+		})
+	}
+	if !default_seen {
+		sessions := session_entries(app, default_project, context.temp_allocator)
+		if len(sessions) > 0 {
+			append(&groups, Api_Project_Entry{
+				cwd = default_project.root,
+				hash = default_project.hash,
+				latest_ts = latest_session_ts(sessions),
+				sessions = sessions,
+			})
+		}
+	}
+
+	// 最近有活动的 project 在前；空列表（理论上不会出现）沉底。
+	for i in 1 ..< len(groups) {
+		j := i
+		for j > 0 && groups[j].latest_ts > groups[j - 1].latest_ts {
+			groups[j], groups[j - 1] = groups[j - 1], groups[j]
+			j -= 1
+		}
+	}
+	api_json(response, 200, groups[:])
+}
+
+// 返回 project 下的 session 条目，按最近修改倒序。id 字符串由 project
+// 目录读取得到，使用调用方 allocator，函数内负责释放临时列表。
+session_entries :: proc(
+	app: ^App,
+	project: Project,
+	allocator := context.allocator,
+) -> []Api_Session_Entry {
 	ids, ids_err := session_ids(project)
 	if !is_ok(ids_err) {
-		api_error(response, 500, "internal_error", ids_err.message)
-		return
+		return nil
 	}
 	defer {
 		for id in ids {
@@ -291,20 +418,21 @@ api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 		delete(ids, context.allocator)
 	}
 
-	entries := make([dynamic]Api_Session_Entry, 0, len(ids), context.temp_allocator)
+	entries := make([dynamic]Api_Session_Entry, 0, len(ids), allocator)
 	for id in ids {
 		ts: i64 = 0
 		if info, stat_err := os.stat(session_file(project, id), context.temp_allocator); stat_err == nil {
 			ts = time.time_to_unix_nano(info.modification_time) / 1_000_000
 		}
 		append(&entries, Api_Session_Entry{
-			session_id = id,
+			// id 来自 session_ids 的临时列表，helper 返回前会释放；必须克隆到
+			// 调用方 allocator，否则响应序列化时读到的是悬空字符串。
+			session_id = strings.clone(id, allocator),
 			ts         = ts,
 			turns      = session_turn_count(project, id),
 			running    = runner_session_running(app, id),
 		})
 	}
-	// 最近修改的在前，前端下拉框直接可用。
 	for i in 1 ..< len(entries) {
 		j := i
 		for j > 0 && entries[j].ts > entries[j - 1].ts {
@@ -312,7 +440,17 @@ api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 			j -= 1
 		}
 	}
-	api_json(response, 200, entries[:])
+	return entries[:]
+}
+
+latest_session_ts :: proc(entries: []Api_Session_Entry) -> i64 {
+	latest: i64 = 0
+	for entry in entries {
+		if entry.ts > latest {
+			latest = entry.ts
+		}
+	}
+	return latest
 }
 
 Type_Probe :: struct {
@@ -360,7 +498,12 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 		api_error(response, 400, "invalid_request", "session_id query parameter is required")
 		return
 	}
-	project := app_project(app)
+	cwd, _ := query_param(request.query, "cwd")
+	project, message := resolve_cwd_project(app, cwd)
+	if len(message) > 0 {
+		api_error(response, 400, "invalid_cwd", message)
+		return
+	}
 	data, read_err := read_transcript(project, session_id)
 	if !is_ok(read_err) {
 		api_error(response, 404, "session_not_found", read_err.message)
@@ -495,6 +638,7 @@ history_resolve_tool_input :: proc(block: ^json.Object, project: Project) {
 Api_Turn_Body :: struct {
 	prompt:      string        `json:"prompt"`,
 	session_key: string        `json:"session_key"`,
+	cwd:         string        `json:"cwd"`,
 	model:       Maybe(string) `json:"model"`,
 	agent:       Maybe(string) `json:"agent"`,
 	max_steps:   Maybe(int)    `json:"max_steps"`,
@@ -525,9 +669,23 @@ api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Res
 		return
 	}
 
+	// 新客户端会带 cwd；老客户端/直接调用不带时，按 session_key 找回
+	// 该 session 已登记的目录，最后才回落到默认 project。
+	cwd := strings.trim_space(body.cwd)
+	if len(cwd) == 0 {
+		state := runner_state(app, strings.trim_space(body.session_key), context.temp_allocator)
+		cwd = state.cwd
+	}
+	project, cwd_message := resolve_cwd_project(app, cwd)
+	if len(cwd_message) > 0 {
+		api_error(response, 400, "invalid_cwd", cwd_message)
+		return
+	}
+
 	request_options := Turn_Request {
 		prompt      = body.prompt,
 		session_key = strings.trim_space(body.session_key),
+		cwd         = project.root,
 		model       = non_empty_maybe(body.model),
 		agent       = non_empty_maybe(body.agent),
 		max_steps   = body.max_steps,

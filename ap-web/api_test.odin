@@ -156,16 +156,17 @@ test_api_session_pointer_new_and_resume :: proc(t: ^testing.T) {
 	testing.expect_value(
 		t,
 		api_response_text(&current),
-		`{"session_key":null,"session_id":null,"running":false,"turn":null}`,
+		`{"session_key":null,"session_id":null,"cwd":null,"running":false,"turn":null}`,
 	)
 
 	resume := api_call(&app, .Post, "/api/session/resume", "", `{"session_id":"ses_abc"}`)
 	testing.expect_value(t, resume.status, 200)
-	testing.expect_value(
-		t,
-		api_response_text(&resume),
-		`{"session_id":"ses_abc","session_key":"ses_abc"}`,
-	)
+	resume_body := api_response_text(&resume)
+	testing.expect(t, strings.contains(resume_body, `"session_id":"ses_abc"`))
+	testing.expect(t, strings.contains(resume_body, `"session_key":"ses_abc"`))
+	resume_cwd, has_resume_cwd := api_json_field(t, resume_body, "cwd")
+	testing.expect(t, has_resume_cwd)
+	testing.expect_value(t, resume_cwd.(json.String), json.String(dir))
 
 	current2 := api_call(&app, .Get, "/api/session/current")
 	testing.expect(t, strings.contains(api_response_text(&current2), `"session_id":"ses_abc"`))
@@ -251,6 +252,120 @@ test_api_sessions_list :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, turns_by_id["ses_old"], 1)
 	testing.expect_value(t, turns_by_id["ses_new"], 2)
+}
+
+// 造一个 ap project：真实 root + config_dir/projects/<hash>/path.txt + project 目录。
+test_make_project :: proc(t: ^testing.T, config_dir, root: string) -> Project {
+	os.make_directory_all(root)
+	canonical, canonical_err := canonicalize_path(root, true)
+	testing.expect_value(t, canonical_err.message, "")
+	project, project_err := open_project(config_dir, canonical)
+	testing.expect_value(t, project_err.message, "")
+	os.make_directory_all(project.dir)
+	test_write_file(fmt.tprintf("%s/path.txt", project.dir), canonical)
+	return project
+}
+
+// 多工作目录：/api/projects 按 cwd 分组，history/sessions/new 用 cwd 定位
+// project，而不是进程级全局目录。
+@(test)
+test_api_projects_and_cwd_scoped_endpoints :: proc(t: ^testing.T) {
+	base := test_temp_dir("api-projects")
+	defer os.remove_all(base)
+
+	config_dir := fmt.aprintf("%s/config", base)
+	project_a := test_make_project(t, config_dir, fmt.aprintf("%s/a", base))
+	project_b := test_make_project(t, config_dir, fmt.aprintf("%s/b", base))
+
+	test_write_file(
+		session_file(project_a, "ses_a"),
+		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_a"}` + "\n" +
+		`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}` + "\n",
+	)
+	test_write_file(
+		session_file(project_b, "ses_b"),
+		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_b"}` + "\n" +
+		`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}` + "\n" +
+		`{"v":1,"seq":2,"ts":3,"type":"turn_end","turn":1,"stop_reason":"stop"}` + "\n" +
+		`{"v":1,"seq":3,"ts":4,"type":"turn_start","turn":2}` + "\n",
+	)
+
+	app: App
+	api_fixture_setup(t, &app, project_a.root)
+	defer sse_hub_destroy(&app.hub)
+	defer runner_shutdown(&app)
+	app.config_dir = config_dir
+	app.project = project_a
+	app.cwd = project_a.root
+
+	response := api_call(&app, .Get, "/api/projects")
+	testing.expect_value(t, response.status, 200)
+	groups: []Api_Project_Entry
+	err := json.unmarshal(response.body, &groups, json.DEFAULT_SPECIFICATION, context.temp_allocator)
+	testing.expectf(t, err == nil, "cannot parse projects response: %v", err)
+	testing.expect_value(t, len(groups), 2)
+
+	sessions_by_cwd := make(map[string][]Api_Session_Entry, context.temp_allocator)
+	for group in groups {
+		sessions_by_cwd[group.cwd] = group.sessions
+	}
+	testing.expect_value(t, len(sessions_by_cwd[project_a.root]), 1)
+	testing.expect_value(t, sessions_by_cwd[project_a.root][0].session_id, "ses_a")
+	testing.expect_value(t, len(sessions_by_cwd[project_b.root]), 1)
+	testing.expect_value(t, sessions_by_cwd[project_b.root][0].session_id, "ses_b")
+	testing.expect_value(t, sessions_by_cwd[project_b.root][0].turns, 2)
+
+	// /api/sessions?cwd= 只返回该目录的会话。
+	list_query := fmt.aprintf("cwd=%s", project_b.root, allocator = context.temp_allocator)
+	list := api_call(&app, .Get, "/api/sessions", list_query)
+	testing.expect_value(t, list.status, 200)
+	entries: []Api_Session_Entry
+	list_err := json.unmarshal(list.body, &entries, json.DEFAULT_SPECIFICATION, context.temp_allocator)
+	testing.expectf(t, list_err == nil, "cannot parse sessions response: %v", list_err)
+	testing.expect_value(t, len(entries), 1)
+	testing.expect_value(t, entries[0].session_id, "ses_b")
+
+	// history 用 cwd 定位 project；不带 cwd 时默认 project 里没有 ses_b。
+	history_query := fmt.aprintf(
+		"session_id=ses_b&cwd=%s",
+		project_b.root,
+		allocator = context.temp_allocator,
+	)
+	history := api_call(&app, .Get, "/api/history", history_query)
+	testing.expect_value(t, history.status, 200)
+	missing := api_call(&app, .Get, "/api/history", "session_id=ses_b")
+	testing.expect_value(t, missing.status, 404)
+
+	// 新 slot 记住自己的 cwd；current 回读同一个目录。
+	new_body, marshal_err := json.marshal(
+		Api_New_Body{cwd = project_b.root},
+		{},
+		context.temp_allocator,
+	)
+	testing.expect(t, marshal_err == nil)
+	created := api_call(&app, .Post, "/api/session/new", "", string(new_body))
+	testing.expect_value(t, created.status, 200)
+	key_value, has_key := api_json_field(t, api_response_text(&created), "session_key")
+	testing.expect(t, has_key)
+	slot_key := string(key_value.(json.String))
+	state := runner_state(&app, slot_key, context.temp_allocator)
+	testing.expect_value(t, state.cwd, project_b.root)
+
+	current_query := fmt.aprintf(
+		"session_key=%s",
+		slot_key,
+		allocator = context.temp_allocator,
+	)
+	current := api_call(&app, .Get, "/api/session/current", current_query)
+	testing.expect_value(t, current.status, 200)
+	current_cwd, has_current_cwd := api_json_field(t, api_response_text(&current), "cwd")
+	testing.expect(t, has_current_cwd)
+	testing.expect_value(t, current_cwd.(json.String), json.String(project_b.root))
+
+	// 不存在的 catalog 路径返回 400 invalid_cwd，而不是静默落到默认 project。
+	bad := api_call(&app, .Get, "/api/sessions", "cwd=Z:/definitely/not/here")
+	testing.expect_value(t, bad.status, 400)
+	testing.expect(t, strings.contains(api_response_text(&bad), `"code":"invalid_cwd"`))
 }
 
 HISTORY_BLOB_TEXT :: "resolved text\n"
@@ -465,10 +580,6 @@ test_api_turn_validation_and_single_flight :: proc(t: ^testing.T) {
 	// 不同 session 可以并发跑：第二个 turn 直接启动。
 	second := api_call(&app, .Post, "/api/turn", "", `{"prompt":"[scenario:cancel]","session_key":"ses_other"}`)
 	testing.expect_value(t, second.status, 202)
-
-	pick := api_call(&app, .Post, "/api/cwd/pick")
-	testing.expect_value(t, pick.status, 409)
-	testing.expect(t, strings.contains(api_response_text(&pick), `"code":"turn_running"`))
 
 	first_cancel := api_call(&app, .Delete, "/api/turn", fmt.aprintf("session_key=%s", slot_key, allocator = context.temp_allocator))
 	testing.expect_value(t, first_cancel.status, 202)

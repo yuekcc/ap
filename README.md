@@ -13,7 +13,7 @@ v1 已实现：
 - 独立进程子代理、agent 定义文件、工具白名单
 - 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
 - 独立的交互式 `ap-tui`：每轮启动一次 ap 子进程，滚动渲染 stream-json，管理单个活动 session
-- 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，支持 history 恢复、取消、多标签页并发与 Windows 目录选择
+- 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，侧栏按工作目录分组并支持跨目录切换会话、history 恢复、取消、多标签页/多 project 并发与 Windows 目录选择
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
 
 ## 环境

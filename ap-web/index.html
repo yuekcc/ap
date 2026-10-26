@@ -23,7 +23,7 @@
   <button
     class="new-session"
     type="button"
-    @click="newSession"
+    @click="newSession()"
     :disabled="$store.ap.loading"
   >
     <svg class="new-session__icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -32,29 +32,68 @@
     新会话
   </button>
 
-  <p class="sidebar__label">最近会话</p>
+  <p class="sidebar__label">工作目录</p>
 
-  <nav class="sessions" aria-label="会话列表">
-    <template x-for="session in $store.ap.sessions" :key="session.session_id">
-      <button
-        class="session"
-        type="button"
-        :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
-        :disabled="$store.ap.loading"
-        :title="session.session_id"
-        @click="selectSession(session.session_id)"
-      >
-        <span class="session__title" x-text="sessionTitle(session)"></span>
-        <span class="session__meta" x-text="sessionMeta(session)"></span>
-      </button>
+  <nav class="projects" aria-label="按工作目录分组的会话">
+    <template x-for="project in $store.ap.sidebarProjects" :key="project.cwd">
+      <section class="project" :class="{ 'is-active': isActiveProject(project) }">
+        <header class="project__head">
+          <svg class="project__icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M1.8 4.2c0-.6.5-1 1-1h3l1.3 1.6h6.1c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H2.8c-.5 0-1-.4-1-1V4.2Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+          </svg>
+          <span class="project__name" :title="project.cwd" x-text="projectName(project)"></span>
+          <button
+            class="project__new"
+            type="button"
+            :disabled="$store.ap.loading"
+            :title="'在 ' + project.cwd + ' 新建会话'"
+            aria-label="在该目录新建会话"
+            @click="newSessionIn(project.cwd)"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </header>
+
+        <div class="project__sessions">
+          <template x-for="session in project.sessions" :key="project.cwd + ':' + session.session_id">
+            <button
+              class="session"
+              type="button"
+              :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
+              :disabled="$store.ap.loading"
+              :title="session.session_id"
+              @click="selectSession(project, session)"
+            >
+              <span class="session__title" x-text="sessionTitle(session)"></span>
+              <span class="session__meta" x-text="sessionMeta(session)"></span>
+            </button>
+          </template>
+
+          <button
+            class="session session--draft"
+            type="button"
+            x-show="showsDraftSession(project)"
+            :disabled="$store.ap.loading"
+            title="新会话"
+            @click="newSessionIn(project.cwd)"
+          >
+            <span class="session__title" x-text="$store.ap.sessionId ? sessionTitle({ session_id: $store.ap.sessionId }) : '新会话'"></span>
+            <span class="session__meta" x-text="$store.ap.running ? '运行中' : '尚未开始'"></span>
+          </button>
+
+          <p class="sessions__empty" x-show="showsEmptyProject(project)">暂无会话</p>
+        </div>
+      </section>
     </template>
-    <p class="sessions__empty" x-show="$store.ap.sessions.length === 0">还没有会话</p>
+    <p class="sessions__empty" x-show="$store.ap.sidebarProjects.length === 0">还没有会话</p>
   </nav>
 
   <div class="sidebar__foot">
-    <div class="sidebar__cwd" :title="$store.ap.config?.cwd ?? ''">
+    <div class="sidebar__cwd" :title="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''">
       <span class="sidebar__cwd-label">cwd</span>
-      <span class="sidebar__cwd-path" x-text="$store.ap.config?.cwd ?? ''"></span>
+      <span class="sidebar__cwd-path" x-text="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"></span>
     </div>
   </div>
 </aside>
@@ -148,9 +187,9 @@
           </button>
           <span
             class="composer__cwd"
-            x-show="$store.ap.config?.cwd"
-            :title="$store.ap.config?.cwd ?? ''"
-            x-text="$store.ap.config?.cwd ?? ''"
+            x-show="$store.ap.projectCwd ?? $store.ap.config?.cwd"
+            :title="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
+            x-text="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
           ></span>
         </div>
 

@@ -11,6 +11,29 @@ setup_console :: proc() {
 	internal.setup_console()
 }
 
+Dpi_Awareness_Context_Proc :: #type proc "system" (
+	value: win32.DPI_AWARENESS_CONTEXT,
+) -> win32.BOOL
+
+// 原生目录选择框由本进程渲染；进程不是 DPI aware 时，Windows 会把整个对话框
+// 位图拉伸，在 125%/150% 缩放下看起来发糊。优先按显示器 DPI（V2），
+// 老系统/策略禁用时退回 system DPI aware。
+// SetProcessDpiAwarenessContext 只有 Win10 1703+ 才有，所以用 GetProcAddress
+// 动态取，避免在旧系统上因静态导入解析失败而启动不了。
+setup_dpi_awareness :: proc() {
+	user32_dll := win32.utf8_to_wstring("user32.dll", context.temp_allocator)
+	module := win32.GetModuleHandleW(user32_dll)
+	if module != nil {
+		if address := win32.GetProcAddress(module, "SetProcessDpiAwarenessContext"); address != nil {
+			set_context := cast(Dpi_Awareness_Context_Proc)address
+			if set_context(win32.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) {
+				return
+			}
+		}
+	}
+	_ = win32.SetProcessDPIAware()
+}
+
 normalize_args :: proc(args: []string) -> []string {
 	return internal.normalize_args(args)
 }

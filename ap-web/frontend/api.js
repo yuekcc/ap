@@ -21,10 +21,19 @@ function sessionPath(path, sessionKey) {
 	return `${path}?session_key=${encodeURIComponent(key)}`;
 }
 
-// 导出的纯函数便于单元测试；session_key 只在非空时进入请求体。
+// cwd 是 project 身份（不是 session key），history/sessions 用它定位目录。
+export function cwdPath(path, cwd) {
+	const value = String(cwd ?? "").trim();
+	if (!value) return path;
+	const separator = path.includes("?") ? "&" : "?";
+	return `${path}${separator}cwd=${encodeURIComponent(value)}`;
+}
+
+// 导出的纯函数便于单元测试；session_key/cwd 只在非空时进入请求体。
 export function turnBody(payload) {
 	const body = { prompt: payload.prompt };
 	if (payload.session_key) body.session_key = payload.session_key;
+	if (payload.cwd) body.cwd = payload.cwd;
 	for (const key of TURN_OPTION_KEYS) {
 		if (payload[key] !== undefined && payload[key] !== null && payload[key] !== "") {
 			body[key] = payload[key];
@@ -78,12 +87,22 @@ export const api = {
 	health: () => request("/api/health"),
 	config: () => request("/api/config"),
 	currentSession: (sessionKey) => request(sessionPath("/api/session/current", sessionKey)),
-	newSession: () => request("/api/session/new", { method: "POST" }),
-	resumeSession: (sessionId) =>
-		request("/api/session/resume", { method: "POST", body: { session_id: sessionId } }),
-	sessions: () => request("/api/sessions"),
-	history: (sessionId) =>
-		request(`/api/history?session_id=${encodeURIComponent(sessionId)}`),
+	newSession: (cwd) =>
+		request("/api/session/new", {
+			method: "POST",
+			body: cwd ? { cwd } : undefined,
+		}),
+	resumeSession: (sessionId, cwd) =>
+		request("/api/session/resume", {
+			method: "POST",
+			body: cwd ? { session_id: sessionId, cwd } : { session_id: sessionId },
+		}),
+	projects: () => request("/api/projects"),
+	sessions: (cwd) => request(cwdPath("/api/sessions", cwd)),
+	history: (sessionId, cwd) =>
+		request(
+			cwdPath(`/api/history?session_id=${encodeURIComponent(sessionId)}`, cwd),
+		),
 	cwd: () => request("/api/cwd"),
 	pickCwd: () => request("/api/cwd/pick", { method: "POST" }),
 	startTurn: (payload) => request("/api/turn", { method: "POST", body: turnBody(payload) }),

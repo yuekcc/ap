@@ -88,8 +88,8 @@ ap-web（主进程）
 
 与 ap-tui 一轮完全一致：
 
-1. `POST /api/turn` 校验参数，用 `session_key` 定位该 session 的运行态；同一 session 已有 turn 返回 409，不同 session 可以并发启动
-2. spawn `ap --print0 --output-format stream-json [-s <id>] <透传>`，提示词写 stdin 后关写端（Windows 上清理管道句柄继承标志，见 [tui.md](tui.md) 的坑）
+1. `POST /api/turn` 校验参数，用 `session_key` 定位该 session 的运行态；同一 session 已有 turn 返回 409，不同 session 可以并发启动。每个 session 的运行态记录自己的 `cwd`（project 根目录），请求里的 `cwd` 优先，否则沿用该 session 已登记的目录
+2. spawn `ap --print0 --output-format stream-json [-s <id>] <透传>`，工作目录设为该 session 的 `cwd`；提示词写 stdin 后关写端（Windows 上清理管道句柄继承标志，见 [tui.md](tui.md) 的坑）
 3. 逐行读 stdout：`parse_event_line`（复用 ap-tui 的事件结构）→ 逐事件推给 hub → 按该 session 的 key 广播 SSE
 4. stderr 缓存；turn 异常退出时随 `turn_done` 的 `stderr_preview` 带给前端
 5. 进程退出：把 slot key 别名到 `session_start` 里的真实 session id（新会话第一轮），广播 `turn_done`（含退出码与 stop_reason）
@@ -101,7 +101,8 @@ ap-web（主进程）
 - **按 session 并发**：不同 `session_key` 可以同时跑 turn（多标签页各跑各的）。resume 其他 session 不再因为某个 session 在跑而 409
 - **session key**：新会话先由 `POST /api/session/new` 分配 slot key（形如 `web_new_1`），`session_start` 后 registry 把它别名到真实 id；订阅 slot key 或真实 id 都能收到该 session 的事件。恢复已有 session 时 key 通常等于 session id
 - **取消只作用于一个 session**：`DELETE /api/turn?session_key=<key>`；不带 key 时退化为当前 session，若当前没跑且只有一个在跑则取消那一个（兼容旧客户端）
-- **cwd 是进程级状态**：任意 session 在跑时 `POST /api/cwd/pick` 都返回 409；切换成功后 `runner_reset_sessions` 清空所有 session 运行态
+- **cwd 属于 session**：`Session_Runtime` 记录该 session 的 project 根目录，turn 子进程按它启动。`POST /api/cwd/pick` 只返回用户选择的路径，不修改进程 cwd、不清空其它运行态；前端随后用 `POST /api/session/new {cwd}` 在新目录开 slot。不同 project 的 turn 可以同时运行
+- **session 唯一性**：runner 仍按 `session_key` / 真实 session id 线性查找；同 id 不会跨 project 复用（ap 生成 id 带随机后缀）
 - turn runner 在独立线程执行，SSE 连接挂掉**不**取消 turn（浏览器刷新后通过 `GET /api/history` + 重新订阅恢复画面）
 - Windows 上取消是整树强制终止，transcript 可能停在 `tool_execution_start` 等中间事件，没有 `turn_end` / `session_end`；刷新页面仍能重放已经落盘的部分。Unix 上走 SIGTERM 优雅中断，收尾事件齐全
 - ap-web 进程退出时终止所有运行中的 ap，并等待至多 5s
@@ -142,14 +143,15 @@ ap-web（主进程）
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | – | `{"ok": true, "version": ...}` | 探活 |
 | GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 从 ap-web 启动参数/env 组装，前端展示；`platform` 决定是否显示目录选择入口 |
-| GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, running, turn}` | 指定 key 时返回该 session 的运行态；不带参数返回「最近活跃」session（仅作新标签页兜底） |
-| POST | `/api/session/new` | – | `{session_id: null, session_key}` | 只分配一个 slot，不落盘；下一条提示词让 ap 新建 session（同 ap-tui `/new`） |
-| GET | `/api/sessions` | – | `[{session_id, ts, turns, running}]` | 复用 `internal/sessions.odin` 列表；`running` 表示该 transcript 对应的 session 是否在跑 |
-| POST | `/api/session/resume` | `{session_id}` | `{session_id, session_key}` | 切换/注册该 session 的运行态；不因其他 session 在跑而 409，也不校验合法性（交给下一轮 ap 报错） |
-| GET | `/api/history?session_id=<id>` | – | `{events: [...]}` | transcript 重放：逐行读 JSONL，`text_ref` / `input_ref` / `args_ref` / `content_ref` 从 blobs 解析（缺失则退化为对应 `*_preview`），超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
-| GET | `/api/cwd` | – | `{cwd}` | 当前工作目录（启动目录；切换后为最后设置的值） |
-| POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；用户确认后返回所选路径、更新 cwd 并清空所有 session 运行态。见「工作目录选择」 |
-| POST | `/api/turn` | `{prompt, session_key?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409 `turn_running`，不同 session 可并发；`prompt` 为空 400 |
+| GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, cwd, running, turn}` | 指定 key 时返回该 session 的运行态；不带参数返回「最近活跃」session（仅作新标签页兜底） |
+| POST | `/api/session/new` | `{cwd?}` | `{session_id: null, session_key, cwd}` | 只分配一个 slot，不落盘；`cwd` 决定 slot 属于哪个 project，缺省用默认目录。下一条提示词让 ap 新建 session（同 ap-tui `/new`） |
+| GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running}]` | 复用 `internal/sessions.odin` 列表；`cwd` 定位 project，缺省用默认目录；`running` 表示该 transcript 对应的 session 是否在跑 |
+| GET | `/api/projects` | – | `[{cwd, hash, latest_ts, sessions}]` | 侧栏分组：枚举 `$AP_CONFIG/projects/*/path.txt`，返回所有有 session 的 project 及其会话，按最近活动倒序 |
+| POST | `/api/session/resume` | `{session_id, cwd?}` | `{session_id, session_key, cwd}` | 切换/注册该 session 的运行态；`cwd` 定位 project；不因其他 session 在跑而 409，也不校验 transcript 合法性（交给 history/下一轮 ap 报错） |
+| GET | `/api/history?session_id=<id>&cwd=<dir>` | – | `{events: [...]}` | 从该 project 的 transcript 重放：逐行读 JSONL，`text_ref` / `input_ref` / `args_ref` / `content_ref` 从 blobs 解析（缺失则退化为对应 `*_preview`），超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
+| GET | `/api/cwd` | – | `{cwd}` | 默认工作目录（启动目录 / `--cwd`）；不再随会话切换变化 |
+| POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；只做路径选择与规范化，不修改进程 cwd、不清空 session。见「工作目录选择」 |
+| POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409 `turn_running`，不同 session/project 可并发；`prompt` 为空 400，`cwd` 不存在 400 `invalid_cwd` |
 | DELETE | `/api/turn?session_key=<key>` | – | `202 {"cancelled": bool}` | 取消该 session 的 turn（终止进程树）；不带 key 时退化为当前 session |
 | GET | `/api/events?session_key=<key>` | – | SSE 流 | 只订阅该 session 的事件；不带参数订阅全部（兼容/测试）。见下节 |
 
@@ -157,12 +159,15 @@ ap-web（主进程）
 
 ## 工作目录选择
 
-输入框旁有一个「选择目录」入口，点击后：
+侧栏按工作目录分组；输入框旁有一个「选择目录」入口，点击后：
 
 ```
 前端 ──POST /api/cwd/pick──► ap-web ──COM──► Windows 目录选择对话框（IFileDialog）
      ◄──── 200 {cwd} ────────  （用户确认）
+前端 ──POST /api/session/new {cwd}──► 在该 project 分配新 slot
 ```
+
+选择目录只负责拿到绝对路径，之后由前端把该目录作为一个新 project 打开。服务器**不**再修改进程级 cwd，也不清空其它 session：`cwd` 是每个 `Session_Runtime` 的字段，`POST /api/turn` 用该 session 的目录启动 `ap`。
 
 为什么由服务器弹原生对话框，而不是浏览器自己的 `<input type="file" webkitdirectory>`：
 
@@ -171,11 +176,11 @@ ap-web（主进程）
 
 实现要点：
 
-1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；accept 循环与其他连接不受影响（pick 请求自身会占用它的连接线程，见「实现细节与额外语义」）
+1. **Windows**：`IFileDialog`（CLSID `FileOpenDialog`，`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`）取 `GetResult → GetPath`。COM 在专用的 STA 线程上初始化（`CoInitializeEx(COINIT_APARTMENTTHREADED)` + `IFileDialog::Show(NULL)` 阻塞到用户关闭）；accept 循环与其他连接不受影响（pick 请求自身会占用它的连接线程，见「实现细节与额外语义」）。进程启动时设置 per-monitor DPI awareness（V2，旧系统退回 system-aware），让原生对话框在高分屏上按实际 DPI 渲染，而不是被位图拉伸
 2. **Unix**：无统一的原生目录对话框 API，phase 1 直接 `501 not_implemented`，前端隐藏该入口（`GET /api/config` 返回 `platform` 字段区分）；phase 2 可考虑 `zenity`/`kdialog` 探测
 3. **取消语义**：用户关掉对话框 → `409 {error: {code: "cancelled"}}`，前端静默忽略
-4. **生效范围**：确认后 ap-web 更新自己的 cwd（`os.set_cwd`）并返回给前端回显——输入区「选择目录」按钮旁与侧栏底部都显示当前 cwd；**下一次 turn 的 ap 子进程就在新目录里启动**。运行中的 turn 不受影响（其 cwd 已定）；任意 session 在跑时调用 `POST /api/cwd/pick` 都返回 409 `turn_running`
-5. **持久化不做**：cwd 是进程级状态，重启 ap-web 回到启动目录。理由：会话 transcript 本身按 project 隔离（`-s <id>` 跨项目会明确报错），切目录后旧 session 不该再被追加。服务器在 pick 成功后清空所有 session 运行态；前端收到新的 cwd 后也清空当前 session/消息列表，并重新分配一个 slot 提示「已切换工作目录，请开始新 session」
+4. **生效范围**：确认后只返回规范化后的绝对路径。前端把它作为新 project 打开，并调用 `POST /api/session/new {cwd}` 分配 slot；该标签页随后切换到新目录的空白会话。输入区与侧栏底部回显的是**当前活动 project** 的 cwd。其它 project 的运行中 turn 不受影响，pick 本身也不再因为存在运行中 turn 而 409
+5. **持久化**：每个 session 的 cwd 随运行态登记（真实 session id 在 `path.txt` 里有持久 project 身份）；ap-web 重启后默认 project 回到启动目录，但侧栏可以通过 `/api/projects` 继续打开其它目录的历史 session。前端把本标签页的 `{key, id, cwd}` 存在 `sessionStorage`，刷新时优先按 id + cwd 恢复
 6. **并发**：同一时刻只允许一个 pick 请求；重复调用返回 409 `picker_busy`（一个模态对话框只能有一份）
 
 ## SSE 事件流
@@ -206,8 +211,8 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 
 前端两条路径到同一份事实（transcript）：
 
-- 打开/切 session：`GET /api/session/current?session_key=<key>` 校正运行态，`GET /api/history` 渲染存量，然后 `GET /api/events?session_key=<key>` 订阅该 session 的增量
-- 刷新页面：每个标签页从 `sessionStorage` 恢复自己的 `{session_key, session_id}`（优先真实 id，slot key 在 ap-web 重启后无意义）；没有记录时用 `/api/session/current` 兜底，仍为空则 `POST /api/session/new`
+- 打开/切 session：`GET /api/session/current?session_key=<key>` 校正运行态，`GET /api/history?session_id=<id>&cwd=<dir>` 渲染存量（`cwd` 定位 project），然后 `GET /api/events?session_key=<key>` 订阅该 session 的增量
+- 刷新页面：每个标签页从 `sessionStorage` 恢复自己的 `{session_key, session_id, cwd}`（优先真实 id + cwd，slot key 在 ap-web 重启后无意义）；没有记录时按 `/api/projects` 最近活动的 session 恢复，仍为空则 `POST /api/session/new {cwd}`
 - 竞态：订阅成功后若发现 `session_start` 或按 `seq` 比对与已有末尾重复，初始化状态时直接跳过（transcript 事件的 `seq` 单调，前端以此为去重键）
 - 刷新页面重连：重新走 history + subscribe；不做断点续传（phase 2 可用 `Last-Event-ID` + transcript seq 补差）
 
@@ -231,7 +236,8 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 - store 状态机与 ap-tui 渲染一一对应：`idle` / `running`；`message_update` 按 delta 累积，`message_end` 只补缺（避免重复，同 ap-tui 规则）
 - 工具卡片：`tool_execution_start` 建卡片（名称 + 参数），`tool_execution_update` 增量追加（bash 流式），`tool_execution_end` 标记 ✓/✗、耗时、退出码；结果超限截断提示（完整内容在 transcript）
 - 转义：用户输入与工具输出经 `textContent` 写入；仅 assistant 文本走 Markdown（`markdown-exit`，`html:false` 转义原始 HTML，危险协议链接不渲染，外链 `target="_blank" rel="noopener noreferrer"`，图片 `loading="lazy"` + 不发送 referrer），经 `x-html` 注入且只注入渲染器产物
-- 多标签页：每个标签页持有自己的 `session_key`，SSE 按该 key 过滤；`sessionStorage` 保存本标签页的 `{key, id}`，刷新后优先按真实 id 恢复。会话列表/新建入口只按 `loading` 禁用，不按 `running`，所以一个标签页在跑时仍可切换或新开其他 session
+- 侧栏：按 `/api/projects` 的 `cwd` 分组渲染；当前 project 即使还没有落盘 session（刚新建 slot / 刚 pick 目录）也本地合成一个空组。组内 `+` 在该目录新开 session，点击 session 同时切换 cwd 与 transcript
+- 多标签页 / 多 project：每个标签页持有自己的 `session_key`，SSE 按该 key 过滤；`sessionStorage` 保存本标签页的 `{key, id, cwd}`，刷新后优先按真实 id + cwd 恢复。会话列表/新建入口只按 `loading` 禁用，不按 `running`，所以一个标签页在跑时仍可切换或新开其他 session
 - 单页应用，无路由库；同一 session 仍在客户端按 `running` 阻止重复发送，服务端再以 409 兜底
 
 ## 构建与运行
@@ -279,7 +285,7 @@ ap-web [--port 8417] [--host 127.0.0.1] [--web-root <dir>]
 
 - `--agent-bin` / `AP_AGENT_BIN` / 同目录 / PATH：可执行文件查找顺序与 ap-tui 相同
 - `-s` / `-c`：启动时定位初始 session（复用 internal/sessions）
-- `--cwd <dir>`：初始工作目录，默认进程启动目录；运行期可通过 Web UI 的目录选择修改（进程级，不持久化）
+- `--cwd <dir>`：默认工作目录，默认进程启动目录；每个 session 创建/恢复时记录自己的 cwd，运行期可通过 Web UI 打开其它目录（不修改进程 cwd，也不持久化为全局默认）
 - `--port` 默认 8417；`--host` 默认 `127.0.0.1`，写死本机回环为默认值是刻意的安全默认
 
 ## 依赖方向与代码复用

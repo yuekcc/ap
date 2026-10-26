@@ -113,46 +113,15 @@ app_project :: proc(app: ^App) -> Project {
 	return app.project
 }
 
-// 选择成功后：规范化路径 → 重建 project（新目录的身份）→ chdir。
-// chdir 放最后：失败时 app 状态保持原样，不会出现「进程目录变了但 project 没变」。
-// 返回空字符串表示成功，否则是给 API 的 500 消息。
-app_change_cwd :: proc(app: ^App, path: string) -> string {
-	canonical, canonical_err := canonicalize_path(path, true)
-	if !is_ok(canonical_err) {
-		return canonical_err.message
-	}
-	project, project_err := open_project(app.config_dir, canonical)
-	if !is_ok(project_err) {
-		return project_err.message
-	}
-	if chdir_err := os.chdir(canonical); chdir_err != nil {
-		return fmt.tprintf("cannot change directory to %s: %v", canonical, chdir_err)
-	}
-
-	sync.mutex_lock(&app.cwd_mu)
-	app.cwd = canonical
-	app.project = project
-	sync.mutex_unlock(&app.cwd_mu)
-
-	// 旧 session 属于旧 project，切目录后不应再被追加（docs/web.md 第 5 条）。
-	// 所有 session 的运行态一起作废：不同标签页的旧 key 都不再指向有效 transcript。
-	runner_reset_sessions(app)
-	return ""
-}
-
 // ---------------------------------------------------------------------------
 // POST /api/cwd/pick
 // ---------------------------------------------------------------------------
 
-// 并发顺序：运行中 turn 优先报 turn_running，其次 picker_busy。
-// 占位在弹窗前拿、结果返回后释放，保证同一时刻只有一个模态对话框。
+// 只负责返回用户选择的目录，不改变进程状态：目录现在属于单个 session，
+// 前端选完后会切到该 project / 新建 slot。因此其它 project 的 turn 在跑时
+// 也可以继续浏览新目录，不再有全局 cwd 的互斥。
 api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	// cwd 是进程级状态：任意 session 在跑都不能切，否则跨标签页的 project 身份会漂移。
-	if runner_any_running(app) {
-		api_error(response, 409, "turn_running", "cannot change directory while a turn is running")
-		return
-	}
 	if !picker_begin(app) {
 		api_error(response, 409, "picker_busy", "a directory picker is already open")
 		return
@@ -168,11 +137,21 @@ api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 
 	switch result.status {
 	case .Ok:
-		if message := app_change_cwd(app, result.path); len(message) > 0 {
-			api_error(response, 500, "cwd_failed", message)
+		canonical, canonical_err := canonicalize_path(result.path, true)
+		if !is_ok(canonical_err) {
+			api_error(response, 500, "cwd_failed", canonical_err.message)
 			return
 		}
-		api_json(response, 200, Api_Cwd{cwd = app_cwd(app)})
+		if !os.is_dir(canonical) {
+			api_error(
+				response,
+				500,
+				"cwd_failed",
+				fmt.tprintf("selected path is not a directory: %s", canonical),
+			)
+			return
+		}
+		api_json(response, 200, Api_Cwd{cwd = canonical})
 	case .Cancelled:
 		// 前端静默忽略：用户主动关掉对话框不是错误。
 		api_error(response, 409, "cancelled", "directory selection was cancelled")

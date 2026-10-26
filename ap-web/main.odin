@@ -366,6 +366,8 @@ shutdown_watcher_start :: proc() {
 }
 
 main :: proc() {
+	// 必须在任何窗口/COM 对话框出现前设置：原生目录选择框按显示器 DPI 渲染。
+	setup_dpi_awareness()
 	setup_console()
 	args := normalize_args(os.args)
 	opts, oerr := parse_args(args)
@@ -444,11 +446,11 @@ main :: proc() {
 			fmt.eprintf("ap-web: session %q not found in project %s\n", id, project.hash)
 			os.exit(2)
 		}
-		_ = runner_session_resume(&app, id)
+		_ = runner_session_resume(&app, id, cwd)
 	} else if opts.continue_session {
 		latest, latest_err := find_latest_root_session(project)
 		if is_ok(latest_err) {
-			_ = runner_session_resume(&app, latest)
+			_ = runner_session_resume(&app, latest, cwd)
 			delete(latest, context.allocator)
 		} else {
 			fmt.println("ap-web: no previous session found, starting a new one")

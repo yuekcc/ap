@@ -221,15 +221,93 @@ body {
   color: var(--fg-3);
 }
 
-.sessions {
+.projects {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 10px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line-2) transparent;
+}
+
+.project {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.project__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 2px;
+}
+
+.project__icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-3);
+}
+
+.project__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.project.is-active .project__name {
+  color: var(--fg);
+}
+
+.project__new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.project:hover .project__new,
+.project.is-active .project__new,
+.project__new:focus-visible {
+  opacity: 1;
+}
+
+.project__new:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.project__new:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.project__new svg {
+  width: 12px;
+  height: 12px;
+}
+
+.project__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .session {
@@ -281,6 +359,10 @@ body {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-3);
+}
+
+.session--draft .session__title {
+  color: var(--fg-2);
 }
 
 .sessions__empty {
@@ -943,12 +1025,29 @@ body {
     display: none;
   }
 
-  .sessions {
+  .projects {
     flex-direction: row;
     flex: 1 1 auto;
-    gap: 4px;
+    gap: 12px;
     overflow-x: auto;
     overflow-y: hidden;
+  }
+
+  .project {
+    flex: none;
+  }
+
+  .project__head {
+    padding: 0;
+  }
+
+  .project__new {
+    opacity: 1;
+  }
+
+  .project__sessions {
+    flex-direction: row;
+    gap: 4px;
   }
 
   .session {

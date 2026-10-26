@@ -31,8 +31,8 @@ test("目录选择入口位于输入区，与发送/取消同一行", async () =
 	);
 	assert.ok(
 		composer.includes('class="composer__cwd"') &&
-			composer.includes('x-text="$store.ap.config?.cwd ?? \'\'"'),
-		"composer echoes the selected working directory next to the pick button",
+			composer.includes("$store.ap.projectCwd"),
+		"composer echoes the active project working directory",
 	);
 });
 
@@ -50,7 +50,7 @@ test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", asy
 	assert.ok(!html.includes("x-html=\"item.streamed"), "tool output must not be rendered as html");
 });
 
-test("左侧会话栏承载新会话入口与历史会话", async () => {
+test("左侧会话栏按工作目录分组，并承载新会话入口", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const asideStart = html.indexOf('<aside class="sidebar">');
 	const asideEnd = html.indexOf("</aside>");
@@ -58,10 +58,25 @@ test("左侧会话栏承载新会话入口与历史会话", async () => {
 
 	const sidebar = html.slice(asideStart, asideEnd);
 	assert.ok(sidebar.includes('class="new-session"'), "new session lives in the sidebar");
-	assert.ok(sidebar.includes("selectSession("), "sidebar sessions switch the active session");
+	assert.ok(
+		sidebar.includes('@click="newSession()"'),
+		"new session must not receive the click event as its cwd argument",
+	);
+	assert.ok(
+		sidebar.includes('x-for="project in $store.ap.sidebarProjects"'),
+		"sidebar groups sessions by working directory",
+	);
+	assert.ok(
+		sidebar.includes("newSessionIn(project.cwd)"),
+		"each project can start its own session",
+	);
+	assert.ok(
+		sidebar.includes("selectSession(project, session)"),
+		"sidebar sessions switch the active session within their project",
+	);
 	assert.ok(sidebar.includes("sessionTitle(session)"), "sidebar shows formatted session titles");
 	assert.ok(
-		!sidebar.includes("$store.ap.running"),
+		!sidebar.includes(':disabled="$store.ap.running"'),
 		"session actions must stay usable while another session is running",
 	);
 	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the sidebar");

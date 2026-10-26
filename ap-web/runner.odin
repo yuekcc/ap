@@ -17,6 +17,7 @@ import "core:time"
 Turn_Request :: struct {
 	prompt:      string,
 	session_key: string, // 空 = 使用当前 session（没有则新建 slot）
+	cwd:         string, // 该 session 所属 working directory（空 = 当前/默认 project）
 	model:       Maybe(string),
 	agent:       Maybe(string),
 	max_steps:   Maybe(int),
@@ -39,6 +40,7 @@ WEB_SLOT_PREFIX :: "web_new_"
 Session_Runtime :: struct {
 	key:        string, // 客户端订阅/调用使用的稳定 key（新会话是 slot）
 	session_id: string, // ap 的真实 session id；新会话首轮之前为空
+	cwd:        string, // 该 session 所属 project 的根目录（工作目录）
 	running:    bool,
 	turn:       Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
 	cancel:     Agent_Cancel_Token,
@@ -72,6 +74,7 @@ Turn_Job :: struct {
 Runner_State :: struct {
 	key:        string,
 	session_id: string,
+	cwd:        string,
 	running:    bool,
 	turn:       Maybe(int),
 }
@@ -126,11 +129,13 @@ runner_set_current_locked :: proc(app: ^App, key: string) {
 }
 
 // 调用方持有 registry.mu：分配一个新的 pending slot 并设为当前。
-runner_create_slot_locked :: proc(app: ^App) -> ^Session_Runtime {
+// cwd 决定这个 slot 属于哪个 project；ap-web 不再有全局「当前目录」。
+runner_create_slot_locked :: proc(app: ^App, cwd: string) -> ^Session_Runtime {
 	app.runner.slots += 1
 	rt := new(Session_Runtime, runtime.heap_allocator())
 	rt^ = {
 		key = fmt.aprintf("%s%d", WEB_SLOT_PREFIX, app.runner.slots, allocator = runtime.heap_allocator()),
+		cwd = strings.clone(cwd, runtime.heap_allocator()),
 	}
 	append(&app.runner.sessions, rt)
 	runner_set_current_locked(app, rt.key)
@@ -140,18 +145,27 @@ runner_create_slot_locked :: proc(app: ^App) -> ^Session_Runtime {
 // 调用方持有 registry.mu。空 key 表示「当前 session」（没有就新建 slot）；
 // 带 WEB_SLOT_PREFIX 但未知的 key（例如 ap-web 重启后的旧 slot）也按
 // 「尚未落盘的新会话」处理，避免把内部 key 当成 session id 传给 ap。
-// 其他 key 视为真实 session id。
-runner_ensure_locked :: proc(app: ^App, key: string) -> ^Session_Runtime {
+// 其他 key 视为真实 session id。显式 cwd 会覆盖已有运行态的目录。
+runner_ensure_locked :: proc(app: ^App, key, cwd: string) -> ^Session_Runtime {
 	effective := key if len(key) > 0 else app.runner.current
 	if rt := runner_find_locked(app, effective); rt != nil {
+		// 运行中的 session 目录已由当前 job 固定，不能在 turn 中途改写。
+		if !rt.running && len(cwd) > 0 && rt.cwd != cwd {
+			if len(rt.cwd) > 0 {
+				delete(rt.cwd, runtime.heap_allocator())
+			}
+			rt.cwd = strings.clone(cwd, runtime.heap_allocator())
+		}
+		runner_set_current_locked(app, rt.key)
 		return rt
 	}
 	if len(key) == 0 {
-		return runner_create_slot_locked(app)
+		return runner_create_slot_locked(app, cwd)
 	}
 	rt := new(Session_Runtime, runtime.heap_allocator())
 	rt^ = {
 		key = strings.clone(key, runtime.heap_allocator()),
+		cwd = strings.clone(cwd, runtime.heap_allocator()),
 	}
 	if !strings.has_prefix(key, WEB_SLOT_PREFIX) {
 		rt.session_id = strings.clone(key, runtime.heap_allocator())
@@ -166,24 +180,28 @@ runner_initialized :: proc(app: ^App) -> bool {
 }
 
 // 新建一个尚未落盘的 session slot，返回客户端要用的 key（调用方 allocator）。
-runner_session_new :: proc(app: ^App, allocator := context.allocator) -> string {
+runner_session_new :: proc(app: ^App, cwd: string, allocator := context.allocator) -> string {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
 	if !runner_initialized(app) {
 		return ""
 	}
-	rt := runner_create_slot_locked(app)
+	rt := runner_create_slot_locked(app, cwd)
 	return strings.clone(rt.key, allocator)
 }
 
 // 恢复/切换 session 指针：只保证运行态条目存在，不校验 transcript 合法性。
-runner_session_resume :: proc(app: ^App, session_id: string, allocator := context.allocator) -> string {
+runner_session_resume :: proc(
+	app: ^App,
+	session_id, cwd: string,
+	allocator := context.allocator,
+) -> string {
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
 	if !runner_initialized(app) {
 		return ""
 	}
-	rt := runner_ensure_locked(app, session_id)
+	rt := runner_ensure_locked(app, session_id, cwd)
 	return strings.clone(rt.key, allocator)
 }
 
@@ -245,6 +263,7 @@ runner_state :: proc(app: ^App, key: string, allocator := context.allocator) -> 
 	return {
 		key = strings.clone(rt.key, allocator),
 		session_id = strings.clone(rt.session_id, allocator),
+		cwd = strings.clone(rt.cwd, allocator),
 		running = rt.running,
 		turn = rt.turn,
 	}
@@ -291,13 +310,21 @@ runner_start_turn :: proc(
 	request: Turn_Request,
 	allocator := context.allocator,
 ) -> (status: Runner_Start, key: string, message: string) {
+	// 没有显式 cwd 时用进程默认目录；每个 session 的目录都独立保存，
+	// 因此不同 project 的 turn 可以同时运行。
+	default_cwd := app_cwd(app)
+
 	sync.mutex_lock(&app.runner.mu)
 	defer sync.mutex_unlock(&app.runner.mu)
 
 	if app.runner.exiting || !runner_initialized(app) {
 		return .Shutting_Down, "", "server is shutting down"
 	}
-	rt := runner_ensure_locked(app, request.session_key)
+	rt := runner_ensure_locked(
+		app,
+		request.session_key,
+		request.cwd if len(request.cwd) > 0 else default_cwd,
+	)
 	if rt.running {
 		return .Busy, "", "a turn is already running in this session"
 	}
@@ -325,7 +352,7 @@ runner_start_turn :: proc(
 			agent_bin = app.agent_bin,
 			session_id = session_snapshot,
 			config_dir = app.config_dir,
-			cwd = app_project(app).root,
+			cwd = strings.clone(rt.cwd if len(rt.cwd) > 0 else default_cwd, runtime.heap_allocator()),
 			model = clone_maybe_string(model),
 			agent = clone_maybe_string(agent),
 			max_steps = max_steps,
@@ -384,28 +411,6 @@ runner_cancel :: proc(app: ^App, key := "") -> bool {
 	return true
 }
 
-// 切工作目录后旧 project 的 session 全部作废。只应在没有 turn 运行时调用。
-runner_reset_sessions :: proc(app: ^App) {
-	sync.mutex_lock(&app.runner.mu)
-	defer sync.mutex_unlock(&app.runner.mu)
-	for rt in app.runner.sessions {
-		if rt.running {
-			continue
-		}
-		runner_reap_thread_locked(rt)
-		delete(rt.key, runtime.heap_allocator())
-		if len(rt.session_id) > 0 {
-			delete(rt.session_id, runtime.heap_allocator())
-		}
-		free(rt, runtime.heap_allocator())
-	}
-	clear(&app.runner.sessions)
-	if len(app.runner.current) > 0 {
-		delete(app.runner.current, runtime.heap_allocator())
-	}
-	app.runner.current = ""
-}
-
 // 进程退出时收尾：拒绝新 turn、终止所有运行中的 turn，并最多等 5s。
 runner_shutdown :: proc(app: ^App) {
 	sync.mutex_lock(&app.runner.mu)
@@ -433,6 +438,9 @@ runner_shutdown :: proc(app: ^App) {
 		delete(rt.key, runtime.heap_allocator())
 		if len(rt.session_id) > 0 {
 			delete(rt.session_id, runtime.heap_allocator())
+		}
+		if len(rt.cwd) > 0 {
+			delete(rt.cwd, runtime.heap_allocator())
 		}
 		free(rt, runtime.heap_allocator())
 	}
@@ -467,6 +475,9 @@ free_job :: proc(job: ^Turn_Job) {
 	}
 	if len(job.options.session_id) > 0 {
 		delete(job.options.session_id, runtime.heap_allocator())
+	}
+	if len(job.options.cwd) > 0 {
+		delete(job.options.cwd, runtime.heap_allocator())
 	}
 	free_maybe_string(job.options.model)
 	free_maybe_string(job.options.agent)

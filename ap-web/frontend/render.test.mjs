@@ -10,6 +10,7 @@ import {
 	formatArgs,
 	ingestHistory,
 	previewContent,
+	projectName,
 	sessionMeta,
 	sessionTitle,
 	truncateUtf8,
@@ -26,6 +27,13 @@ test("会话列表标题取 id 里的日期时间，元信息带短 id 与轮数
 	assert.equal(sessionTitle({ session_id: "custom" }), "custom");
 	assert.equal(sessionMeta({ session_id: "custom" }), "custom · 0 轮");
 	assert.equal(sessionTitle({}), "会话");
+});
+
+test("侧栏 project 名称取工作目录最后一段，兼容 Windows 分隔符", () => {
+	assert.equal(projectName("/home/me/projects/ap"), "ap");
+	assert.equal(projectName("z:/projects/ap/"), "ap");
+	assert.equal(projectName("C:\\Users\\me\\code\\ap"), "ap");
+	assert.equal(projectName(""), "工作目录");
 });
 
 test("formatArgs 对齐 ap-tui：键排序、字符串不加引号、整体限 240 字节", () => {

@@ -18,10 +18,11 @@
 
 - 浏览器聊天界面：用户消息、assistant Markdown、工具卡片（参数、流式输出、耗时、退出码）
 - SSE 实时转发 ap 事件；15s 心跳，断线自动重连并按 transcript `seq` 补齐
-- session 列表 / 新建 / 恢复；每个标签页独立持有自己的 session，刷新页面后从 transcript 重放历史
-- 多 session 并发：不同标签页可以同时跑 turn；同一 session 仍单飞，重复提交返回 409 `turn_running`
+- 侧栏按工作目录分组：每个 project 下列出自己的 session；切换对话时同时切换 cwd 与 transcript
+- session 新建 / 恢复；每个标签页独立持有自己的 session，刷新页面后从 transcript 重放历史
+- 多 session 并发：不同 project、不同标签页可以同时跑 turn；同一 session 仍单飞，重复提交返回 409 `turn_running`
 - 单轮取消按 session 生效；SSE 按 `session_key` 过滤，只收到本标签页的事件
-- 工作目录选择：Windows 调用原生 `IFileDialog`，确认后下一轮在新目录启动
+- 工作目录选择：Windows 调用原生 `IFileDialog`，确认后在该目录打开一个新 session；不再中断其他目录的运行中 turn
 - 默认只监听 `127.0.0.1`；非回环监听会打印安全警告
 - 前端 `dist/` 已提交，只改 Odin 代码时无需安装 Node
 
@@ -111,18 +112,19 @@ Session:
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | – | `{ok, version}` | 探活 |
 | GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 前端展示用 |
-| GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, running, turn}` | 指定 session 的运行态；不带参数时返回最近活跃 session |
-| POST | `/api/session/new` | – | `{session_id: null, session_key}` | 只分配 slot，下一条提示新建 session |
-| GET | `/api/sessions` | – | `[{session_id, ts, turns, running}]` | 当前项目的 session 列表；`running` 表示该 session 是否在跑 |
-| POST | `/api/session/resume` | `{session_id}` | `{session_id, session_key}` | 注册/切换该 session；不因其他 session 在跑而 409 |
-| GET | `/api/history?session_id=<id>` | – | `{events: [...]}` | 从 transcript 重放历史，解析 blob 引用 |
-| GET | `/api/cwd` | – | `{cwd}` | 当前工作目录 |
-| POST | `/api/cwd/pick` | – | `{cwd}` | 弹出目录选择框；取消 409，Unix 501，任意 session 运行中 409 |
-| POST | `/api/turn` | `{prompt, session_key?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409，不同 session 可并发 |
+| GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, cwd, running, turn}` | 指定 session 的运行态；不带参数时返回最近活跃 session |
+| POST | `/api/session/new` | `{cwd?}` | `{session_id: null, session_key, cwd}` | 只分配 slot；`cwd` 决定 slot 所属 project（缺省用默认目录） |
+| GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running}]` | 指定工作目录的 session 列表；不带 `cwd` 时用默认 project |
+| GET | `/api/projects` | – | `[{cwd, hash, latest_ts, sessions}]` | 侧栏分组：所有有 session 的 project 及其会话，按最近活动排序 |
+| POST | `/api/session/resume` | `{session_id, cwd?}` | `{session_id, session_key, cwd}` | 注册/切换该 session；不因其他 session 在跑而 409 |
+| GET | `/api/history?session_id=<id>&cwd=<dir>` | – | `{events: [...]}` | 从该 project 的 transcript 重放历史，解析 blob 引用 |
+| GET | `/api/cwd` | – | `{cwd}` | 默认工作目录（启动目录 / `--cwd`），不随会话切换变化 |
+| POST | `/api/cwd/pick` | – | `{cwd}` | 弹出目录选择框；取消 409，Unix 501；只返回路径，不改变任何运行态 |
+| POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409，不同 session/project 可并发 |
 | DELETE | `/api/turn?session_key=<key>` | – | `202 {cancelled}` | 取消该 session 的 turn（终止进程树） |
 | GET | `/api/events?session_key=<key>` | – | SSE 流 | 只订阅该 session；不带参数订阅全部 |
 
-其他常见状态码：prompt 为空 400、prompt 超过 1MB 413、同一 session 已有 turn 409、任意 session 在跑时切 cwd 409、关停中启动 turn 503、方法不匹配 405、未知端点 404。
+其他常见状态码：prompt 为空 400、prompt 超过 1MB 413、同一 session 已有 turn 409、`cwd` 不存在 400 `invalid_cwd`、关停中启动 turn 503、方法不匹配 405、未知端点 404。
 
 ### SSE
 
@@ -138,7 +140,13 @@ Session:
 
 ## 工作目录
 
-启动目录或 `--cwd` 决定初始工作目录，也决定 ap 的 project 身份。Windows 上页面里的「选择目录」会调用服务器端原生对话框；确认后 ap-web 更新进程级 cwd 并清空所有 session 运行态，下一轮 `ap` 在新目录启动。Unix 没有统一的目录对话框，该接口返回 501，前端隐藏入口。
+启动目录或 `--cwd` 只是**默认**工作目录。每个 session 在创建/恢复时记录自己的 `cwd`，turn 的 `ap` 子进程就在该目录启动；因此不同工作目录的 session 可以同时运行，互不打断。
+
+- 侧栏按 `cwd` 分组；点击组内 session 会切换当前 project，并载入对应 transcript。
+- 组标题右侧的 `+` 在该目录新建 session，顶部「新会话」在当前 project 新建。
+- Windows 上页面里的「选择目录」调用服务器端原生对话框；确认后前端把该路径作为新 project 打开，并在其中分配一个新 slot。服务器不再修改进程级 cwd，也不会清空其他 session。
+- Unix 没有统一的目录对话框，`POST /api/cwd/pick` 返回 501，前端隐藏入口。
+- ap-web 重启后回到启动目录；各 project 的 transcript 仍留在 `$AP_CONFIG/projects/<hash>` 下，可通过侧栏继续打开。
 
 ## 前端开发
 

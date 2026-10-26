@@ -1,6 +1,7 @@
 package main
 
 import "base:runtime"
+import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -69,7 +70,7 @@ test_pick_cancelled_returns_409_without_touching_cwd :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_pick_success_updates_cwd_and_project :: proc(t: ^testing.T) {
+test_pick_success_returns_canonical_cwd_without_switching_project :: proc(t: ^testing.T) {
 	base := test_temp_dir("pick-ok")
 	defer os.remove_all(base)
 
@@ -87,27 +88,29 @@ test_pick_success_updates_cwd_and_project :: proc(t: ^testing.T) {
 	pick_test_fixture(t, &app, base, &picker)
 	defer sse_hub_destroy(&app.hub)
 	defer runner_shutdown(&app)
-	_ = runner_session_resume(&app, "ses_old")
+	_ = runner_session_resume(&app, "ses_old", app_cwd(&app))
 
 	response := api_call(&app, .Post, "/api/cwd/pick")
 	testing.expect_value(t, response.status, 200)
 	testing.expect(t, strings.contains(api_response_text(&response), expected))
 
-	// cwd、project 身份与进程目录必须一起切换。
-	testing.expect_value(t, app_cwd(&app), expected)
+	// 选择目录只返回路径；进程 cwd / 默认 project / 已有 session 全部保持不变。
+	// project 身份属于单个 session，由前端接着 POST /api/session/new {cwd}。
+	testing.expect_value(t, app_cwd(&app), base)
 	project := app_project(&app)
-	testing.expect_value(t, project.root, expected)
-	testing.expect_value(t, project.hash, fnv32a_hex(transmute([]byte)expected))
+	testing.expect_value(t, project.root, base)
 	current, current_err := canonicalize_path(".", true)
 	testing.expect_value(t, current_err.message, "")
-	testing.expect_value(t, current, expected)
-
-	// 旧 session 属于旧 project，切换后指针清空（下一条提示开新 session）。
-	testing.expect_value(t, runner_session(&app), "")
+	testing.expect_value(t, current, original)
+	session := runner_session(&app)
+	defer delete(session)
+	testing.expect_value(t, session, "ses_old")
 
 	cwd_response := api_call(&app, .Get, "/api/cwd")
 	testing.expect_value(t, cwd_response.status, 200)
-	testing.expect(t, strings.contains(api_response_text(&cwd_response), expected))
+	stored_cwd, has_stored_cwd := api_json_field(t, api_response_text(&cwd_response), "cwd")
+	testing.expect(t, has_stored_cwd)
+	testing.expect_value(t, stored_cwd.(json.String), json.String(base))
 	testing.expect_value(t, sync.atomic_load(&app.picker_busy), i32(0))
 }
 
@@ -194,8 +197,6 @@ test_pick_concurrent_duplicate_returns_busy :: proc(t: ^testing.T) {
 
 	selected := fmt.aprintf("%s/selected", base)
 	os.make_directory_all(selected)
-	expected, expected_err := canonicalize_path(selected, true)
-	testing.expect_value(t, expected_err.message, "")
 
 	original, original_err := canonicalize_path(".", true)
 	testing.expect_value(t, original_err.message, "")
@@ -235,6 +236,6 @@ test_pick_concurrent_duplicate_returns_busy :: proc(t: ^testing.T) {
 	thread.join(handle)
 
 	testing.expect_value(t, call.response.status, 200)
-	testing.expect_value(t, app_cwd(&app), expected)
+	testing.expect_value(t, app_cwd(&app), base)
 	testing.expect_value(t, sync.atomic_load(&app.picker_busy), i32(0))
 }
