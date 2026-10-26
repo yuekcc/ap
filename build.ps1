@@ -21,7 +21,7 @@ $out = "bin"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 Set-Location $out
 
-& odin build ../ap -out:ap.exe -vet
+& odin build ../cmd/ap -out:ap.exe -vet
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
