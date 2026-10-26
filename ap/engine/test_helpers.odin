@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -63,5 +65,5 @@ json_concat :: proc(parts: ..string) -> string {
 }
 
 json_expect :: proc(t: ^testing.T, actual, expected: json.Value, loc := #caller_location) {
-	testing.expect_value(t, json_canonical_string(actual), json_canonical_string(expected), loc = loc)
+	testing.expect_value(t, platform.json_canonical_string(actual), platform.json_canonical_string(expected), loc = loc)
 }

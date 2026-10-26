@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:fmt"
 import "core:os"
@@ -7,7 +9,7 @@ import "core:time"
 
 Child_Process :: struct {
 	process:    os.Process,
-	job:        Job_Handle,
+	job:        platform.Job_Handle,
 	stdout:     ^os.File,
 	stderr:     ^os.File,
 	stdin_temp: string,
@@ -20,7 +22,7 @@ Run_Options :: struct {
 	stdin_data:        []byte,
 	timeout_ms:        int,
 	max_capture_bytes: int,
-	cancel:            ^Cancel_Token,
+	cancel:            ^platform.Cancel_Token,
 	on_stdout:         proc(user: rawptr, chunk: string),
 	on_stderr:         proc(user: rawptr, chunk: string),
 	user:              rawptr,
@@ -131,7 +133,7 @@ spawn_child :: proc(
 
 	child = {
 		process = process,
-		job     = attach_process_job(process),
+		job     = platform.attach_job(process),
 		stdout  = stdout_r,
 		stderr  = stderr_r,
 		stdin_temp = stdin_temp,
@@ -222,7 +224,7 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 			kill_reason = 3
 			break
 		}
-		if cancel_token_cancelled(opts.cancel) {
+		if platform.cancel_token_cancelled(opts.cancel) {
 			result.cancelled = true
 			kill_reason = 2
 			break
@@ -268,7 +270,7 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 	}
 
 	if kill_reason != 0 {
-		kill_process_tree(child.job, child.process)
+		platform.kill_process_tree(child.job, child.process)
 		state, werr := os.process_wait(child.process, 3000 * time.Millisecond)
 		if werr == os.General_Error.Timeout {
 			_ = os.process_kill(child.process)
@@ -279,7 +281,7 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 
 	close_child_pipes(&child)
 	if child.job != 0 {
-		register_job(child.job)
+		platform.register_job(child.job)
 	}
 	result.stdout = stdout_buf[:]
 	result.stderr = stderr_buf[:]

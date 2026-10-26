@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -128,8 +130,8 @@ project_memory_files :: proc(cwd: string) -> []string {
 		}
 		path, _ := os.join_path([]string{memory_dir, "AGENTS.md"}, context.allocator)
 		if os.exists(path) && os.is_file(path) {
-			canonical, cerr := canonicalize_path(path, true)
-			if cerr.code != .OK {
+			canonical, cerr := platform.canonicalize_path(path, true)
+			if !platform.is_ok(cerr) {
 				canonical = path
 			}
 			append(&files, canonical)
@@ -284,7 +286,7 @@ project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, 
 							type = "function",
 							function = Chat_Tool_Function {
 								name = name,
-								arguments = json_arguments_string(input),
+								arguments = platform.json_arguments_string(input),
 							},
 						},
 					)
@@ -372,7 +374,7 @@ append_chat_message :: proc(messages: ^[dynamic]Chat_Message, msg: Chat_Message)
 }
 
 messages_bytes :: proc(messages: []Chat_Message) -> []byte {
-	data, err := json_marshal_utf8(messages)
+	data, err := platform.json_marshal_utf8(messages)
 	if err != nil {
 		return nil
 	}

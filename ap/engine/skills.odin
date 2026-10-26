@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:fmt"
 import "core:os"
@@ -56,11 +58,11 @@ discover_skills_from :: proc(home, cwd: string) -> []Skill {
 	defer delete(dirs)
 
 	if len(home) > 0 {
-		home_norm := trim_trailing_slashes(normalize_slashes(home, context.allocator))
+		home_norm := platform.trim_trailing_slashes(platform.normalize_slashes(home, context.allocator))
 		collect_skill_dirs(&dirs, fmt.tprintf("%s/%s/%s", home_norm, SKILLS_ASSETS_DIR, SKILLS_SUBDIR))
 	}
 	if len(cwd) > 0 {
-		cwd_norm := trim_trailing_slashes(normalize_slashes(cwd, context.allocator))
+		cwd_norm := platform.trim_trailing_slashes(platform.normalize_slashes(cwd, context.allocator))
 		collect_skill_dirs(&dirs, fmt.tprintf("%s/%s/%s", cwd_norm, SKILLS_ASSETS_DIR, SKILLS_SUBDIR))
 	}
 
@@ -112,7 +114,7 @@ skills_prompt_block :: proc(skills: []Skill) -> string {
 		strings.write_string(&b, "  <skill>\n")
 		fmt.sbprintf(&b, "    <name>%s</name>\n", escape_xml(skill.name))
 		fmt.sbprintf(&b, "    <description>%s</description>\n", escape_xml(skill.description))
-		fmt.sbprintf(&b, "    <location>%s</location>\n", escape_xml(normalize_slashes(skill.location)))
+		fmt.sbprintf(&b, "    <location>%s</location>\n", escape_xml(platform.normalize_slashes(skill.location)))
 		strings.write_string(&b, "  </skill>\n")
 	}
 	if !wrote_any {
@@ -165,7 +167,7 @@ load_skill :: proc(dir: string) -> (skill: Skill, ok: bool) {
 		return {}, false
 	}
 	data, derr := os.read_entire_file_from_path(path, context.allocator)
-	if derr != nil || !valid_utf8(data) {
+	if derr != nil || !platform.valid_utf8(data) {
 		return {}, false
 	}
 
@@ -173,7 +175,7 @@ load_skill :: proc(dir: string) -> (skill: Skill, ok: bool) {
 	if strings.has_prefix(text, "\xEF\xBB\xBF") {
 		text = text[3:]
 	}
-	lines := split_lines(text)
+	lines := platform.split_lines(text)
 	if len(lines) == 0 || strings.trim_space(lines[0]) != "---" {
 		return {}, false
 	}

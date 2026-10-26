@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -28,7 +30,7 @@ fake_provider_call :: proc(
 	p: ^Provider,
 	req: ^Chat_Message_Request,
 	sink: Stream_Sink,
-	cancel: ^Cancel_Token,
+	cancel: ^platform.Cancel_Token,
 ) -> Provider_Error {
 	state := fake_provider_state
 	if state == nil || state.index >= len(state.responses) {
@@ -66,14 +68,14 @@ fake_provider_call :: proc(
 
 loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, Tool_Context, string) {
 	dir := test_temp_dir(name)
-	project, perr := open_project(fmt.tprintf("%s/config", dir), dir)
-	testing.expect_value(t, perr.code, Exit_Code.OK)
+	project, perr := platform.open_project(fmt.tprintf("%s/config", dir), dir)
+	testing.expect(t, platform.is_ok(perr))
 	settings := new(Settings)
 	settings^ = settings_defaults()
 	store := new(Transcript_Store)
 	store_value, serr := new_transcript_store(project, fmt.tprintf("sess-%s", name), settings)
 	store^ = store_value
-	testing.expect_value(t, serr.code, Exit_Code.OK)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
 	h := make_header(store, "session_start")
 	start := Session_Start_Event {
 		header = h,
@@ -86,13 +88,13 @@ loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, Tool_Context, str
 		agent_name = "general",
 		agent_depth = 0,
 	}
-	testing.expect_value(t, transcript_append(store, start).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(store, start).kind, Error_Kind.None)
 	events, rerr := transcript_read_all(project, store.session_id)
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 
-	bash, _ := find_bash()
+	bash, _ := platform.find_bash()
 	agent := agent_default_general()
-	cancel := new(Cancel_Token)
+	cancel := new(platform.Cancel_Token)
 	tool_ctx := Tool_Context {
 		cwd = dir,
 		project = project,
@@ -148,7 +150,7 @@ test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "run big output")
-	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
 	found_ref := false
 	found_size := 0
@@ -161,7 +163,7 @@ test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
 		if ref, ok := end.content_ref.?; ok {
 			found_ref = true
 			data, berr := blob_read(loop.project, ref)
-			testing.expect_value(t, berr.code, Exit_Code.OK)
+			testing.expect_value(t, berr.kind, Error_Kind.None)
 			found_size = len(data)
 		}
 	}
@@ -186,7 +188,7 @@ test_loop_blobs_large_tool_input :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "write big")
-	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect(t, os.exists(target))
 	info, serr := os.stat(target, context.allocator)
 	testing.expect_value(t, serr, nil)
@@ -226,7 +228,7 @@ test_loop_text_stop :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "hi")
-	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "stop")
 	testing.expect_value(t, result.result_text, "hello")
 	testing.expect_value(t, result.num_steps, 1)
@@ -268,7 +270,7 @@ test_loop_tool_use_then_stop :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "write a file")
-	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "stop")
 	testing.expect_value(t, result.result_text, "done")
 	testing.expect_value(t, result.num_steps, 2)
@@ -286,7 +288,7 @@ test_loop_tool_use_then_stop :: proc(t: ^testing.T) {
 	testing.expect(t, has_end)
 
 	messages, merr := project_messages(loop.project, events)
-	testing.expect_value(t, merr.code, Exit_Code.OK)
+	testing.expect_value(t, merr.kind, Error_Kind.None)
 	testing.expect_value(t, len(messages), 4)
 	testing.expect_value(t, messages[1].tool_calls[0].id, "call_1")
 	testing.expect_value(t, messages[2].role, "tool")
@@ -310,7 +312,7 @@ test_loop_max_steps :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "loop")
-	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "max_steps")
 	testing.expect_value(t, result.num_steps, 2)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
@@ -330,7 +332,7 @@ test_loop_retry_then_success :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "retry")
-	testing.expect_value(t, result.exit_code, Exit_Code.OK)
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.result_text, "recovered")
 	events, _ := transcript_read_all(loop.project, loop.session_id)
 	error_count := 0
@@ -354,7 +356,7 @@ test_loop_context_too_long :: proc(t: ^testing.T) {
 	}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "big")
-	testing.expect_value(t, result.exit_code, Exit_Code.Provider)
+	testing.expect_value(t, result.error_kind, Error_Kind.Provider)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
 	last := events[len(events) - 1]
 	testing.expect_value(t, last.type, "turn_end")
@@ -367,7 +369,7 @@ test_loop_context_too_long :: proc(t: ^testing.T) {
 @(test)
 test_loop_cancel_mid_stream :: proc(t: ^testing.T) {
 	loop, _, dir := loop_test_setup(t, "loop-cancel")
-	cancel_token_cancel(loop.cancel)
+	platform.cancel_token_cancel(loop.cancel)
 	state := Fake_Provider{responses = []Fake_Response{{text = "partial", stop = .Stop}}}
 	fake_provider_state = &state
 	result := loop_run_turn(&loop, "cancel")

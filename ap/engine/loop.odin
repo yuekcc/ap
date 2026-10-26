@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -8,7 +10,7 @@ import uuid "core:encoding/uuid"
 
 MAX_LLM_RETRIES :: 5
 
-Loop_Emitter :: struct {
+Emitter :: struct {
 	user:              rawptr,
 	on_transcript:     proc(user: rawptr, event: Event),
 	on_text_delta:     proc(user: rawptr, message_id, text: string),
@@ -25,7 +27,7 @@ Loop_Result :: struct {
 	usage:        Usage,
 	session_usage: Usage,
 	cancelled:    bool,
-	exit_code:    Exit_Code,
+	error_kind:   Error_Kind,
 	fatal_error:  string,
 }
 
@@ -33,7 +35,7 @@ Provider_Call :: #type proc(
 	p: ^Provider,
 	req: ^Chat_Message_Request,
 	sink: Stream_Sink,
-	cancel: ^Cancel_Token,
+	cancel: ^platform.Cancel_Token,
 ) -> Provider_Error
 
 Loop_Sleep_Fn :: #type proc(ms: int)
@@ -55,8 +57,8 @@ Loop :: struct {
 	max_agent_depth: int,
 	max_steps:      int,
 	max_tokens:     int,
-	cancel:         ^Cancel_Token,
-	emitter:        Loop_Emitter,
+	cancel:         ^platform.Cancel_Token,
+	emitter:        Emitter,
 	events:         [dynamic]Event,
 	historical_usage: Usage,
 	turn_usage:     Usage,
@@ -113,9 +115,9 @@ loop_init :: proc(
 	model: string,
 	config_dir, self_exe, bash_path, session_id: string,
 	agent_depth, max_agent_depth, max_steps, max_tokens: int,
-	cancel: ^Cancel_Token,
+	cancel: ^platform.Cancel_Token,
 	events: []Event,
-	emitter: Loop_Emitter,
+	emitter: Emitter,
 ) -> Loop {
 	loop := Loop {
 		project = project,
@@ -234,7 +236,7 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 	}
 	for call in end.tool_calls {
 		block := Content_Block{type = "tool_use", id = call.id, name = call.name}
-		args_text := json_arguments_string(call.input)
+		args_text := platform.json_arguments_string(call.input)
 		if len(args_text) > l.settings.blob_threshold_bytes {
 			fields, berr := maybe_blob(l.store, transmute([]byte)args_text)
 			if !is_ok(berr) {
@@ -404,16 +406,16 @@ loop_tool_update :: proc(user: rawptr, chunk: string) {
 	}
 }
 
-loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, exit_code: Exit_Code) {
+loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind: Error_Kind) {
 	for call in l.pending_calls {
-		if cancel_token_cancelled(l.cancel) {
+		if platform.cancel_token_cancelled(l.cancel) {
 			_ = loop_write_cancel(l, "step", l.current_tool_call_id)
 			_ = loop_write_turn_end(l, "cancelled")
-			return true, ok_error(), .OK
+			return true, ok_error(), .None
 		}
 
 		l.current_tool_call_id = call.id
-		args_text := json_arguments_string(call.input)
+		args_text := platform.json_arguments_string(call.input)
 		start_ev := Tool_Execution_Start_Event {
 			tool_call_id = call.id,
 			name = call.name,
@@ -428,7 +430,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, exit_code:
 			start_ev.args = nil
 			start_ev.args_ref = sha
 			start_ev.args_bytes = len(args_bytes)
-			start_ev.args_preview = utf8_prefix(args_bytes, PREVIEW_BYTES)
+			start_ev.args_preview = platform.utf8_prefix(args_bytes, PREVIEW_BYTES)
 		} else {
 			start_ev.args = call.input
 		}
@@ -455,10 +457,12 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, exit_code:
 			max_steps = l.max_steps,
 			on_update = loop_tool_update,
 			update_user = l,
+			on_progress = l.emitter.on_progress,
+			progress_user = l.emitter.user,
 		}
 		res := tool_execute(call.name, call.input, &tool_ctx)
 
-		was_cancelled := cancel_token_cancelled(l.cancel) || (!res.ok && res.error == "cancelled")
+		was_cancelled := platform.cancel_token_cancelled(l.cancel) || (!res.ok && res.error == "cancelled")
 		if was_cancelled {
 			_ = loop_write_cancel(l, "step", call.id)
 			res.ok = false
@@ -485,7 +489,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, exit_code:
 					end_ev.content = nil
 					end_ev.content_ref = sha
 					end_ev.content_bytes = len(content_bytes)
-					end_ev.content_preview = utf8_prefix(content_bytes, PREVIEW_BYTES)
+					end_ev.content_preview = platform.utf8_prefix(content_bytes, PREVIEW_BYTES)
 				}
 			} else {
 				end_ev.content = res.content
@@ -502,14 +506,14 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, exit_code:
 		progress(l, "[tool] %s %s (%dms)", call.name, "ok" if end_ev.ok else "failed", res.duration_ms)
 		if was_cancelled {
 			_ = loop_write_turn_end(l, "cancelled")
-			return true, ok_error(), .OK
+			return true, ok_error(), .None
 		}
 		if res.fatal {
 			_ = loop_write_error(l, "tool", .None, res.error, false, 1)
 			return false, make_error(.Tool, "%s", res.error), .Tool
 		}
 	}
-	return false, ok_error(), .OK
+	return false, ok_error(), .None
 }
 
 loop_reset_attempt :: proc(l: ^Loop) {
@@ -525,13 +529,13 @@ loop_reset_attempt :: proc(l: ^Loop) {
 }
 
 loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
-	result.exit_code = .OK
+	result.error_kind = .None
 	l.turn_usage = Usage{}
 	l.last_text = ""
 
 	h_user := make_header(l.store, "user_message")
 	if err := loop_append(l, User_Message_Event{header = h_user, content = prompt}, h_user); !is_ok(err) {
-		result.exit_code = .Internal
+		result.error_kind = .Internal
 		result.fatal_error = err.message
 		return result
 	}
@@ -539,14 +543,14 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	l.turn += 1
 	h_turn := make_header(l.store, "turn_start")
 	if err := loop_append(l, Turn_Start_Event{header = h_turn, turn = turn}, h_turn); !is_ok(err) {
-		result.exit_code = .Internal
+		result.error_kind = .Internal
 		result.fatal_error = err.message
 		return result
 	}
 
 	step := 0
 	for {
-		if cancel_token_cancelled(l.cancel) {
+		if platform.cancel_token_cancelled(l.cancel) {
 			_ = loop_write_cancel(l, "turn", "")
 			loop_write_cancelled_message(l)
 			_ = loop_write_turn_end(l, "cancelled")
@@ -568,7 +572,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		step += 1
 		h_step := make_header(l.store, "step_start")
 		if err := loop_append(l, Step_Start_Event{header = h_step, step = step}, h_step); !is_ok(err) {
-			result.exit_code = .Internal
+			result.error_kind = .Internal
 			result.fatal_error = err.message
 			result.num_steps = step
 			return result
@@ -578,7 +582,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		system_prompt, messages, cerr := context_build(l.project, l.events[:])
 		if !is_ok(cerr) {
 			_ = loop_write_error(l, "session", .None, cerr.message, false, 1)
-			result.exit_code = .Usage
+			result.error_kind = .Usage
 			result.fatal_error = cerr.message
 			result.num_steps = step
 			return result
@@ -586,7 +590,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		tools, terr := tool_definitions(l.agent, l.agent_depth, l.max_agent_depth)
 		if !is_ok(terr) {
 			_ = loop_write_error(l, "session", .None, terr.message, false, 1)
-			result.exit_code = .Internal
+			result.error_kind = .Internal
 			result.fatal_error = terr.message
 			result.num_steps = step
 			return result
@@ -614,7 +618,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			if !is_ok(l.callback_error) {
 				err := l.callback_error
 				_ = loop_write_error(l, "session", .None, err.message, false, attempt)
-				result.exit_code = .Tool if err.code == .Tool else .Internal
+				result.error_kind = .Tool if err.kind == .Tool else .Internal
 				result.fatal_error = err.message
 				result.num_steps = step
 				return result
@@ -627,7 +631,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 					break
 				}
 			}
-			if perr.kind == .Cancelled || cancel_token_cancelled(l.cancel) {
+			if perr.kind == .Cancelled || platform.cancel_token_cancelled(l.cancel) {
 				cancelled = true
 				break
 			}
@@ -673,7 +677,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if context_too_long {
 			_ = loop_write_error(l, "llm", .Context_Too_Long, "context too long; start a new session or reduce input", false, attempt)
 			_ = loop_write_turn_end(l, "context_too_long")
-			result.exit_code = .Provider
+			result.error_kind = .Provider
 			result.fatal_error = "context_too_long"
 			result.stop_reason = "context_too_long"
 			result.result_text = l.last_text
@@ -682,7 +686,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			return result
 		}
 		if !success {
-			result.exit_code = .Provider
+			result.error_kind = .Provider
 			result.fatal_error = var_final_error.message
 			result.num_steps = step
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
@@ -692,7 +696,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		l.current_message_id = ""
 		l.current_tool_call_id = ""
 		if l.pending_stop == .Tool_Use {
-			cancelled_tools, terr2, exit_code := loop_execute_tools(l)
+			cancelled_tools, terr2, tool_error_kind := loop_execute_tools(l)
 			if cancelled_tools {
 				result.cancelled = true
 				result.stop_reason = "cancelled"
@@ -701,7 +705,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				return result
 			}
 			if !is_ok(terr2) {
-				result.exit_code = exit_code
+				result.error_kind = tool_error_kind
 				result.fatal_error = terr2.message
 				result.num_steps = step
 				result.session_usage = usage_add(l.historical_usage, l.turn_usage)

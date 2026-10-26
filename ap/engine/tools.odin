@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -18,7 +20,7 @@ Tool_Context :: struct {
 	cwd:               string,
 	project:           Project,
 	settings:          ^Settings,
-	cancel:            ^Cancel_Token,
+	cancel:            ^platform.Cancel_Token,
 	session_id:        string,
 	parent_tool_call_id: string,
 	agent_name:        string,
@@ -30,6 +32,8 @@ Tool_Context :: struct {
 	max_steps:         int,
 	on_update:         proc(user: rawptr, chunk: string),
 	update_user:       rawptr,
+	on_progress:       proc(user: rawptr, line: string),
+	progress_user:     rawptr,
 }
 
 tool_ok :: proc(content: string) -> Tool_Result {

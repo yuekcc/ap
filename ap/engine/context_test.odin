@@ -1,6 +1,7 @@
-package ap
+package engine
 
-import "core:encoding/json"
+import "../platform"
+
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -31,7 +32,7 @@ test_project_messages_basic :: proc(t: ^testing.T) {
 		),
 	}
 	messages, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(messages), 4)
 	testing.expect_value(t, messages[0].role, "user")
 	testing.expect_value(t, messages[0].content.?, "hi")
@@ -68,7 +69,7 @@ test_project_messages_preserves_reasoning_and_tool_order :: proc(t: ^testing.T) 
 		),
 	}
 	messages, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(messages), 4)
 	testing.expect_value(t, messages[1].role, "assistant")
 	testing.expect_value(t, messages[1].reasoning_content.?, "think step")
@@ -99,7 +100,7 @@ test_project_messages_drops_unpaired_tool_use :: proc(t: ^testing.T) {
 		),
 	}
 	messages, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(messages), 2)
 	testing.expect_value(t, messages[1].role, "assistant")
 	testing.expect_value(t, messages[1].content.?, "keep")
@@ -123,7 +124,7 @@ test_project_messages_drops_cancelled_and_empty :: proc(t: ^testing.T) {
 		test_event("message_start", `{"type":"message_start","message_id":"m3","role":"assistant"}`),
 	}
 	messages, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(messages), 1)
 	testing.expect_value(t, messages[0].role, "user")
 }
@@ -176,7 +177,7 @@ test_project_messages_resolves_blobs :: proc(t: ^testing.T) {
 		),
 	}
 	messages, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(messages), 3)
 	testing.expect_value(t, messages[1].tool_calls[0].function.arguments, `{"file_path":"blob.txt"}`)
 	testing.expect_value(t, messages[2].content.?, "full output from blob")
@@ -203,7 +204,7 @@ test_project_messages_missing_blob_fails :: proc(t: ^testing.T) {
 		),
 	}
 	_, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.Usage)
+	testing.expect_value(t, err.kind, Error_Kind.Usage)
 }
 
 @(test)
@@ -222,7 +223,7 @@ test_project_messages_replay_is_byte_identical :: proc(t: ^testing.T) {
 		),
 	}
 	a, err := project_messages(project, events)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	b, _ := project_messages(project, events)
 	testing.expect_value(t, string(messages_bytes(a)), string(messages_bytes(b)))
 	testing.expect_value(t, a[1].tool_calls[0].function.arguments, `{"a":{"b":2},"z":1}`)
@@ -244,7 +245,7 @@ test_system_prompt_layers_and_git_boundary :: proc(t: ^testing.T) {
 
 	agent := agent_default_general()
 	agent.body = "AGENT_BODY"
-	cwd, _ := canonicalize_path(sub)
+	cwd, _ := platform.canonicalize_path(sub)
 	prompt := build_system_prompt(
 		{
 			cwd = cwd,
@@ -298,7 +299,7 @@ test_context_build_uses_frozen_system_prompt_blob :: proc(t: ^testing.T) {
 	if !is_ok(err) {
 		fmt.println("context_build error:", err.message)
 	}
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, system_prompt, prompt_text)
 	testing.expect_value(t, len(messages), 1)
 	testing.expect_value(t, messages[0].content.?, "hi")
@@ -324,7 +325,7 @@ test_context_build_missing_system_blob_fails :: proc(t: ^testing.T) {
 		),
 	}
 	_, _, err := context_build(project, events)
-	testing.expect_value(t, err.code, Exit_Code.Usage)
+	testing.expect_value(t, err.kind, Error_Kind.Usage)
 }
 
 @(test)
@@ -344,9 +345,3 @@ test_available_tools_removes_task_at_max_depth :: proc(t: ^testing.T) {
 	testing.expect(t, found)
 }
 
-@(test)
-test_json_canonical_string_sorts_keys :: proc(t: ^testing.T) {
-	value, perr := json.parse_string(`{"z":1,"a":[3,{"y":true,"b":null}],"m":"x"}`, .JSON, true)
-	testing.expect_value(t, perr, nil)
-	testing.expect_value(t, json_canonical_string(value), `{"a":[3,{"b":null,"y":true}],"m":"x","z":1}`)
-}

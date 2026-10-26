@@ -1,7 +1,8 @@
-package ap
+package engine
 
-import "platform"
-import "protocol"
+import "../platform"
+import "../protocol"
+
 import "core:encoding/json"
 import "core:os"
 import "core:strings"
@@ -108,7 +109,7 @@ transcript_store :: proc(project: Project, session_id: string, settings: ^Settin
 	return {
 		project    = project,
 		session_id = session_id,
-		path       = session_file(project, session_id),
+		path       = platform.session_file(project, session_id),
 		settings   = settings,
 	}
 }
@@ -181,9 +182,9 @@ resume_transcript_store :: proc(project: Project, session_id: string, settings: 
 }
 
 transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string, Error) {
-	// 用 json_marshal_utf8 而不是 json.marshal：后者遇到非法 UTF-8 会输出 \xNN，
+	// 用 platform.json_marshal_utf8 而不是 json.marshal：后者遇到非法 UTF-8 会输出 \xNN，
 	// 下面的 parse_string 无法识别这种转义，会把字符串字段解析成空。
-	data, jerr := json_marshal_utf8(event)
+	data, jerr := platform.json_marshal_utf8(event)
 	if jerr != nil {
 		return "", make_error(.Internal, "cannot serialize transcript event: %v", jerr)
 	}
@@ -204,7 +205,7 @@ transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string,
 			delete_key(&obj, "header")
 		}
 	}
-	normalized, merr := json_marshal_utf8(obj)
+	normalized, merr := platform.json_marshal_utf8(obj)
 	if merr != nil {
 		return "", make_error(.Internal, "cannot serialize transcript event: %v", merr)
 	}
@@ -237,7 +238,7 @@ transcript_close :: proc(store: ^Transcript_Store) {
 
 // 读取并校验 transcript；最后一行损坏时丢弃，其他位置的损坏视为错误。
 transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, Error) {
-	path := session_file(project, session_id)
+	path := platform.session_file(project, session_id)
 	data, derr := os.read_entire_file_from_path(path, context.allocator)
 	if derr != nil {
 		return nil, make_error(.Usage, "cannot read transcript %s: %v", path, derr)
@@ -320,6 +321,21 @@ write_all_file :: proc(file: ^os.File, data: []byte) -> bool {
 	return platform.write_all(file, data)
 }
 
+blob_read :: proc(project: Project, sha: string, allocator := context.allocator) -> ([]byte, Error) {
+	data, err := platform.blob_read(project, sha, allocator)
+	return data, from_platform(err, .Usage)
+}
+
+blob_write :: proc(project: Project, data: []byte) -> (string, Error) {
+	sha, err := platform.blob_write(project, data)
+	return sha, from_platform(err, .Tool)
+}
+
+blob_write_text :: proc(project: Project, data: []byte) -> (string, Error) {
+	path, err := platform.blob_write_text(project, data)
+	return path, from_platform(err, .Tool)
+}
+
 Blob_Fields :: struct {
 	ref:     Maybe(string),
 	bytes:   Maybe(int),
@@ -338,7 +354,7 @@ maybe_blob :: proc(store: ^Transcript_Store, data: []byte) -> (Blob_Fields, Erro
 	return Blob_Fields {
 		ref = sha,
 		bytes = len(data),
-		preview = utf8_prefix(data, PREVIEW_BYTES),
+		preview = platform.utf8_prefix(data, PREVIEW_BYTES),
 	}, ok_error()
 }
 
@@ -347,7 +363,7 @@ fork_transcript :: proc(
 	source_id, new_id: string,
 	settings: ^Settings,
 ) -> (Transcript_Store, Error) {
-	source_path := session_file(project, source_id)
+	source_path := platform.session_file(project, source_id)
 	source, serr := os.read_entire_file_from_path(source_path, context.allocator)
 	if serr != nil {
 		return {}, make_error(.Usage, "cannot read source transcript %s: %v", source_path, serr)
@@ -425,5 +441,5 @@ session_system_prompt :: proc(project: Project, events: []Event) -> (Session_Sta
 
 find_latest_root_session :: proc(project: Project) -> (string, Error) {
 	id, err := platform.find_latest_root_session(project)
-	return id, internal_error_to_ap(err)
+	return id, from_platform(err, .Usage)
 }

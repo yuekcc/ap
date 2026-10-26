@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -15,7 +17,10 @@ Task_State :: struct {
 	saw_session_start:   bool,
 	saw_session_end:     bool,
 	project:             Project,
-	at_subagent_line_start: bool,
+	pending_stdout:      [dynamic]byte,
+	pending_stderr:      [dynamic]byte,
+	on_progress:         proc(user: rawptr, line: string),
+	progress_user:       rawptr,
 }
 
 task_sanitize_tail :: proc(data: []byte, max_bytes: int) -> string {
@@ -27,10 +32,10 @@ task_sanitize_tail :: proc(data: []byte, max_bytes: int) -> string {
 		tail = tail[len(tail) - max_bytes:]
 	}
 	// 从合法 UTF-8 边界开始。
-	for len(tail) > 0 && !valid_utf8(tail) {
+	for len(tail) > 0 && !platform.valid_utf8(tail) {
 		tail = tail[1:]
 	}
-	return sanitize_utf8(tail)
+	return platform.sanitize_utf8(tail)
 }
 
 task_buffer_stderr :: proc(state: ^Task_State, chunk: string) {
@@ -42,15 +47,54 @@ task_buffer_stderr :: proc(state: ^Task_State, chunk: string) {
 	}
 }
 
+// 把子代理的流式文本按行转发给 emitter；保留 [subagent] 前缀。
+// 行缓冲让前缀落在真正的行首，而不是每个 token 前。
 task_forward_text :: proc(state: ^Task_State, text: string) {
 	if len(text) == 0 {
 		return
 	}
-	if state.at_subagent_line_start {
-		stderr_write_string("[subagent] ")
+	append(&state.pending_stdout, ..transmute([]byte)text)
+	task_flush_lines(state, &state.pending_stdout, "[subagent] ")
+}
+
+task_forward_stderr :: proc(state: ^Task_State, chunk: string) {
+	if len(chunk) == 0 {
+		return
 	}
-	stderr_write_string(text)
-	state.at_subagent_line_start = text[len(text) - 1] == '\n'
+	append(&state.pending_stderr, ..transmute([]byte)chunk)
+	task_flush_lines(state, &state.pending_stderr, "")
+}
+
+task_flush_lines :: proc(state: ^Task_State, buf: ^[dynamic]byte, prefix: string) {
+	if state.on_progress == nil {
+		return
+	}
+	for {
+		idx := strings.index_byte(string(buf[:]), '\n')
+		if idx < 0 {
+			return
+		}
+		line := strings.trim_right(string(buf[:idx]), "\r")
+		state.on_progress(state.progress_user, fmt.tprintf("%s%s", prefix, line))
+		remaining := len(buf) - (idx + 1)
+		copy(buf[:], buf[idx + 1:])
+		resize(buf, remaining)
+	}
+}
+
+task_flush_pending :: proc(state: ^Task_State) {
+	if state.on_progress == nil {
+		return
+	}
+	if len(state.pending_stdout) > 0 {
+		line := strings.trim_right(string(state.pending_stdout[:]), "\r")
+		state.on_progress(state.progress_user, fmt.tprintf("[subagent] %s", line))
+		clear(&state.pending_stdout)
+	}
+	if len(state.pending_stderr) > 0 {
+		state.on_progress(state.progress_user, strings.trim_right(string(state.pending_stderr[:]), "\r"))
+		clear(&state.pending_stderr)
+	}
 }
 
 task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
@@ -147,7 +191,7 @@ task_stdout_chunk :: proc(user: rawptr, chunk: string) {
 task_stderr_chunk :: proc(user: rawptr, chunk: string) {
 	state := (^Task_State)(user)
 	task_buffer_stderr(state, chunk)
-	stderr_write_string(chunk)
+	task_forward_stderr(state, chunk)
 }
 
 tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
@@ -187,10 +231,13 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	state: Task_State
 	state.line_buf = make([dynamic]byte, 0, 8192)
 	state.stderr_ring = make([dynamic]byte, 0, 8192)
-	state.at_subagent_line_start = true
 	state.project = ctx.project
+	state.on_progress = ctx.on_progress
+	state.progress_user = ctx.progress_user
 	defer delete(state.line_buf)
 	defer delete(state.stderr_ring)
+	defer delete(state.pending_stdout)
+	defer delete(state.pending_stderr)
 
 	run := run_child(
 		{
@@ -209,6 +256,7 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	if len(state.line_buf) > 0 {
 		task_handle_line(&state, ctx.project, string(state.line_buf[:]))
 	}
+	task_flush_pending(&state)
 	if !run.spawned {
 		res := tool_fail(run.error)
 		res.fatal = true
@@ -259,7 +307,7 @@ task_metadata :: proc(state: ^Task_State, duration_ms: int) -> json.Value {
 	obj := make(json.Object)
 	obj["child_session_id"] = json.String(state.child_session_id)
 	obj["stop_reason"] = json.String(state.stop_reason)
-	usage_data, _ := json_marshal_utf8(state.usage)
+	usage_data, _ := platform.json_marshal_utf8(state.usage)
 	usage_value, _ := json.parse_string(string(usage_data), .JSON, true)
 	obj["usage"] = usage_value
 	obj["duration_ms"] = json.Integer(duration_ms)

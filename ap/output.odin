@@ -1,5 +1,7 @@
 package ap
 
+import "engine"
+import "protocol"
 import "core:encoding/json"
 import "core:time"
 
@@ -20,7 +22,7 @@ now_ms :: proc() -> i64 {
 	return time.time_to_unix_nano(time.now()) / 1_000_000
 }
 
-output_transcript :: proc(user: rawptr, event: Event) {
+output_transcript :: proc(user: rawptr, event: protocol.Transcript_Event) {
 	out := (^Output_State)(user)
 	if out.format != .Stream_Json {
 		return
@@ -117,7 +119,7 @@ output_progress :: proc(user: rawptr, line: string) {
 	write_stderr(transmute([]byte)string("\n"))
 }
 
-make_loop_emitter :: proc(out: ^Output_State) -> Loop_Emitter {
+make_loop_emitter :: proc(out: ^Output_State) -> engine.Emitter {
 	return {
 		user = out,
 		on_transcript = output_transcript,
@@ -134,10 +136,10 @@ Final_Json :: struct {
 	result:      string,
 	stop_reason: Maybe(string),
 	num_steps:   int,
-	usage:       Usage,
+	usage:       protocol.Usage,
 }
 
-output_final :: proc(out: ^Output_State, session_id: string, result: Loop_Result) {
+output_final :: proc(out: ^Output_State, session_id: string, result: engine.Turn_Result) {
 	switch out.format {
 	case .Text:
 		if len(result.result_text) == 0 {

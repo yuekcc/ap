@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -9,8 +11,8 @@ test_project_and_settings :: proc(t: ^testing.T, name: string) -> (Project, Sett
 	dir := test_temp_dir(name)
 	root := fmt.tprintf("%s/work", dir)
 	os.make_directory_all(root)
-	project, perr := open_project(fmt.tprintf("%s/config", dir), root)
-	testing.expect_value(t, perr.code, Exit_Code.OK)
+	project, perr := platform.open_project(fmt.tprintf("%s/config", dir), root)
+	testing.expect(t, platform.is_ok(perr))
 	settings := settings_defaults()
 	settings.blob_threshold_bytes = 100
 	return project, settings, dir
@@ -22,7 +24,7 @@ test_transcript_append_read_roundtrip :: proc(t: ^testing.T) {
 	defer test_cleanup(dir)
 
 	store, serr := new_transcript_store(project, "sess-1", &settings)
-	testing.expect_value(t, serr.code, Exit_Code.OK)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
 
 	start := Session_Start_Event {
 		header = make_header(&store, "session_start"),
@@ -38,21 +40,21 @@ test_transcript_append_read_roundtrip :: proc(t: ^testing.T) {
 		parent_tool_call_id = nil,
 		resumed_from = nil,
 	}
-	testing.expect_value(t, transcript_append(&store, start).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&store, start).kind, Error_Kind.None)
 	user := User_Message_Event {
 		header = make_header(&store, "user_message"),
 		content = "hi",
 	}
-	testing.expect_value(t, transcript_append(&store, user).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&store, user).kind, Error_Kind.None)
 	turn_start := Turn_Start_Event {
 		header = make_header(&store, "turn_start"),
 		turn = 1,
 	}
-	testing.expect_value(t, transcript_append(&store, turn_start).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&store, turn_start).kind, Error_Kind.None)
 	transcript_close(&store)
 
 	events, rerr := transcript_read_all(project, "sess-1")
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 	testing.expect_value(t, len(events), 3)
 	testing.expect_value(t, events[0].type, "session_start")
 	testing.expect_value(t, events[0].seq, 0)
@@ -73,7 +75,7 @@ test_transcript_ignores_partial_last_line :: proc(t: ^testing.T) {
 	project, settings, dir := test_project_and_settings(t, "partial")
 	defer test_cleanup(dir)
 	store, serr := new_transcript_store(project, "sess-partial", &settings)
-	testing.expect_value(t, serr.code, Exit_Code.OK)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
 	start := Session_Start_Event {
 		header = make_header(&store, "session_start"),
 		session_id = "sess-partial",
@@ -83,7 +85,7 @@ test_transcript_ignores_partial_last_line :: proc(t: ^testing.T) {
 		provider = PROVIDER_NAME,
 		agent_name = "general",
 	}
-	testing.expect_value(t, transcript_append(&store, start).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&store, start).kind, Error_Kind.None)
 	transcript_close(&store)
 
 	file, _ := os.open(store.path, {.Write, .Append})
@@ -92,7 +94,7 @@ test_transcript_ignores_partial_last_line :: proc(t: ^testing.T) {
 	os.close(file)
 
 	events, rerr := transcript_read_all(project, "sess-partial")
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 	testing.expect_value(t, len(events), 1)
 }
 
@@ -101,7 +103,7 @@ test_transcript_skips_unknown_and_rejects_future_version :: proc(t: ^testing.T) 
 	project, settings, dir := test_project_and_settings(t, "unknown")
 	defer test_cleanup(dir)
 	store, serr := new_transcript_store(project, "sess-unknown", &settings)
-	testing.expect_value(t, serr.code, Exit_Code.OK)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
 	start := Session_Start_Event {
 		header = make_header(&store, "session_start"),
 		session_id = "sess-unknown",
@@ -118,7 +120,7 @@ test_transcript_skips_unknown_and_rejects_future_version :: proc(t: ^testing.T) 
 		fmt.tprintf("%s%s\n", test_read_file(store.path), `{"v":1,"seq":9,"ts":1,"type":"future_event","x":1}`),
 	)
 	events, rerr := transcript_read_all(project, "sess-unknown")
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 	testing.expect_value(t, len(events), 1)
 
 	test_write_file(
@@ -126,7 +128,7 @@ test_transcript_skips_unknown_and_rejects_future_version :: proc(t: ^testing.T) 
 		fmt.tprintf("%s%s\n", test_read_file(store.path), `{"v":2,"seq":10,"ts":1,"type":"session_end","reason":"exit"}`),
 	)
 	_, rerr2 := transcript_read_all(project, "sess-unknown")
-	testing.expect_value(t, rerr2.code, Exit_Code.Usage)
+	testing.expect_value(t, rerr2.kind, Error_Kind.Usage)
 }
 
 @(test)
@@ -135,16 +137,16 @@ test_blob_roundtrip_and_dedup :: proc(t: ^testing.T) {
 	defer test_cleanup(dir)
 	data: []byte = transmute([]byte)string("hello blob\n")
 	sha, err := blob_write(project, data)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(sha), 64)
 	sha2, err2 := blob_write(project, data)
-	testing.expect_value(t, err2.code, Exit_Code.OK)
+	testing.expect_value(t, err2.kind, Error_Kind.None)
 	testing.expect_value(t, sha, sha2)
 
 	got, rerr := blob_read(project, sha)
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 	testing.expect_value(t, string(got), "hello blob\n")
-	testing.expect(t, os.exists(blob_file(project, sha)))
+	testing.expect(t, os.exists(platform.blob_file(project, sha)))
 }
 
 @(test)
@@ -153,16 +155,16 @@ test_blob_missing_and_corrupt :: proc(t: ^testing.T) {
 	defer test_cleanup(dir)
 	missing := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	_, rerr := blob_read(project, missing)
-	testing.expect_value(t, rerr.code, Exit_Code.Usage)
+	testing.expect_value(t, rerr.kind, Error_Kind.Usage)
 
 	data: []byte = transmute([]byte)string("payload")
 	sha, _ := blob_write(project, data)
-	test_write_file(blob_file(project, sha), "tampered")
+	test_write_file(platform.blob_file(project, sha), "tampered")
 	_, rerr2 := blob_read(project, sha)
-	testing.expect_value(t, rerr2.code, Exit_Code.Usage)
+	testing.expect_value(t, rerr2.kind, Error_Kind.Usage)
 
 	_, rerr3 := blob_read(project, "../../etc/passwd")
-	testing.expect_value(t, rerr3.code, Exit_Code.Usage)
+	testing.expect_value(t, rerr3.kind, Error_Kind.Usage)
 }
 
 @(test)
@@ -174,7 +176,7 @@ test_maybe_blob_threshold :: proc(t: ^testing.T) {
 
 	small: []byte = transmute([]byte)string("small")
 	fields, err := maybe_blob(&store, small)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	_, has_ref := fields.ref.?
 	testing.expect(t, !has_ref)
 
@@ -183,7 +185,7 @@ test_maybe_blob_threshold :: proc(t: ^testing.T) {
 		big_data[i] = 'a'
 	}
 	fields2, err2 := maybe_blob(&store, big_data)
-	testing.expect_value(t, err2.code, Exit_Code.OK)
+	testing.expect_value(t, err2.kind, Error_Kind.None)
 	sha, has_ref2 := fields2.ref.?
 	testing.expect(t, has_ref2)
 	testing.expect_value(t, len(sha), 64)
@@ -214,14 +216,14 @@ test_resume_repairs_partial_last_line :: proc(t: ^testing.T) {
 	os.close(file)
 
 	resumed, rerr := resume_transcript_store(project, "resume-partial", &settings)
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 	defer transcript_close(&resumed)
 	user := User_Message_Event{header = make_header(&resumed, "user_message"), content = "next"}
-	testing.expect_value(t, transcript_append(&resumed, user).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&resumed, user).kind, Error_Kind.None)
 	transcript_close(&resumed)
 
 	events, rerr2 := transcript_read_all(project, "resume-partial")
-	testing.expect_value(t, rerr2.code, Exit_Code.OK)
+	testing.expect_value(t, rerr2.kind, Error_Kind.None)
 	testing.expect_value(t, len(events), 2)
 	testing.expect_value(t, events[1].type, "user_message")
 	// 恢复后追加的事件必须接着源文件的最大 seq，而不是从 0 重来：
@@ -253,7 +255,7 @@ test_fork_transcript_copies_events :: proc(t: ^testing.T) {
 	transcript_close(&store)
 
 	forked, ferr := fork_transcript(project, "source", "forked", &settings)
-	testing.expect_value(t, ferr.code, Exit_Code.OK)
+	testing.expect_value(t, ferr.kind, Error_Kind.None)
 	testing.expect_value(t, forked.next_seq, 2)
 	new_start := Session_Start_Event {
 		header = make_header(&forked, "session_start"),
@@ -266,7 +268,7 @@ test_fork_transcript_copies_events :: proc(t: ^testing.T) {
 		agent_name = "general",
 		resumed_from = "source",
 	}
-	testing.expect_value(t, transcript_append(&forked, new_start).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&forked, new_start).kind, Error_Kind.None)
 	transcript_close(&forked)
 
 	events, _ := transcript_read_all(project, "forked")
@@ -284,20 +286,43 @@ test_transcript_invalid_utf8_content_is_not_dropped :: proc(t: ^testing.T) {
 	defer test_cleanup(dir)
 
 	store, serr := new_transcript_store(project, "sess-bad", &settings)
-	testing.expect_value(t, serr.code, Exit_Code.OK)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
 	// 模拟 Windows 本地代码页（GBK）传进来的提示词：字节不是合法 UTF-8。
 	gbk := transmute(string)([]byte{0xd6, 0xd0, 0xce, 0xc4})
 	ev := User_Message_Event {
 		header = make_header(&store, "user_message"),
 		content = gbk,
 	}
-	testing.expect_value(t, transcript_append(&store, ev).code, Exit_Code.OK)
+	testing.expect_value(t, transcript_append(&store, ev).kind, Error_Kind.None)
 	transcript_close(&store)
 
 	events, rerr := transcript_read_all(project, "sess-bad")
-	testing.expect_value(t, rerr.code, Exit_Code.OK)
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
 	testing.expect_value(t, len(events), 1)
 	parsed: User_Message_Event
 	testing.expect_value(t, json.unmarshal_string(events[0].line, &parsed), nil)
 	testing.expect(t, len(parsed.content) > 0)
+}
+
+@(test)
+test_transcript_writes_unicode_without_escaping :: proc(t: ^testing.T) {
+	project, settings, dir := test_project_and_settings(t, "json-unicode")
+	defer test_cleanup(dir)
+	store, _ := new_transcript_store(project, "unicode", &settings)
+	ev := User_Message_Event {
+		header  = make_header(&store, "user_message"),
+		content = "中文内容",
+	}
+	testing.expect_value(t, transcript_append(&store, ev).kind, Error_Kind.None)
+	transcript_close(&store)
+
+	raw := test_read_file(store.path)
+	testing.expect(t, test_contains(raw, "中文内容"))
+	testing.expect(t, !test_contains(raw, "\\u4e2d"))
+	events, rerr := transcript_read_all(project, "unicode")
+	testing.expect_value(t, rerr.kind, Error_Kind.None)
+	testing.expect_value(t, len(events), 1)
+	parsed: User_Message_Event
+	testing.expect_value(t, json.unmarshal_string(events[0].line, &parsed), nil)
+	testing.expect_value(t, parsed.content, "中文内容")
 }

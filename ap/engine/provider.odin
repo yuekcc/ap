@@ -1,4 +1,7 @@
-package ap
+package engine
+
+import "../platform"
+import "../protocol"
 
 import "base:runtime"
 import c "core:c/libc"
@@ -191,7 +194,7 @@ build_chat_request_body :: proc(req: Chat_Message_Request) -> ([]byte, Error) {
 	if req.include_usage {
 		body.stream_options = Chat_Stream_Options{include_usage = true}
 	}
-	data, jerr := json_marshal_utf8(body)
+	data, jerr := platform.json_marshal_utf8(body)
 	if jerr != nil {
 		return nil, make_error(.Internal, "cannot serialize chat request: %v", jerr)
 	}
@@ -620,7 +623,7 @@ provider_init :: proc(settings: ^Settings) -> Provider {
 
 Curl_Context :: struct {
 	assembler:         ^Stream_Assembler,
-	cancel:            ^Cancel_Token,
+	cancel:            ^platform.Cancel_Token,
 	status:            c.long,
 	retry_after_ms:    Maybe(int),
 	raw:               [dynamic]byte,
@@ -711,7 +714,7 @@ curl_header_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawpt
 curl_xferinfo_cb :: proc "c" (user: rawptr, dltotal, dlnow, ultotal, ulnow: curl.off_t) -> c.int {
 	context = runtime.default_context()
 	ctx := (^Curl_Context)(user)
-	if cancel_token_cancelled(ctx.cancel) {
+	if platform.cancel_token_cancelled(ctx.cancel) {
 		return 1
 	}
 	if !ctx.got_data && time.tick_since(ctx.started) > FIRST_BYTE_TIMEOUT {
@@ -745,7 +748,7 @@ provider_stream :: proc(
 	p: ^Provider,
 	req: ^Chat_Message_Request,
 	sink: Stream_Sink,
-	cancel: ^Cancel_Token,
+	cancel: ^platform.Cancel_Token,
 ) -> Provider_Error {
 	if gerr := provider_global_init(); !is_ok(gerr) {
 		return {kind = .Network, message = gerr.message, retryable = false}
@@ -776,7 +779,7 @@ provider_stream :: proc(
 
 	headers: ^curl.slist
 	auth := fmt.tprintf("Authorization: Bearer %s", p.api_key)
-	user_agent := fmt.tprintf("User-Agent: ap/%s", VERSION)
+	user_agent := fmt.tprintf("User-Agent: ap/%s", protocol.VERSION)
 	headers = curl.slist_append(headers, cstring("Content-Type: application/json"))
 	headers = curl.slist_append(headers, cstring("Accept: text/event-stream"))
 	headers = curl.slist_append(headers, strings.clone_to_cstring(user_agent, context.temp_allocator))
@@ -822,7 +825,7 @@ provider_stream :: proc(
 	if a.failed {
 		return a.last_error
 	}
-	if cancel_token_cancelled(cancel) {
+	if platform.cancel_token_cancelled(cancel) {
 		return {kind = .Cancelled, message = "cancelled"}
 	}
 	if ctx.first_byte_timeout {

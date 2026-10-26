@@ -1,4 +1,4 @@
-package ap
+package engine
 
 import "core:encoding/json"
 import "core:strings"
@@ -292,7 +292,7 @@ test_chat_request_body_shape :: proc(t: ^testing.T) {
 			include_usage = true,
 		},
 	)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	value, perr := json.parse_string(string(body), .JSON, true)
 	testing.expect_value(t, perr, nil)
 	obj := value.(json.Object)
@@ -326,7 +326,7 @@ test_chat_request_body_shape :: proc(t: ^testing.T) {
 test_chat_request_body_preserves_unicode :: proc(t: ^testing.T) {
 	messages := []Chat_Message{{role = "user", content = "中文请求"}}
 	body, err := build_chat_request_body({model = "m", messages = messages, max_tokens = 16})
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	text := string(body)
 	testing.expect(t, test_contains(text, "中文请求"))
 	testing.expect(t, !test_contains(text, `\u4e2d`))

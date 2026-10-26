@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -273,7 +275,7 @@ load_agent :: proc(config_dir, name: string) -> (Agent_Def, Error) {
 		if derr != nil {
 			return {}, make_error(.Usage, "cannot read agent definition %s: %v", path, derr)
 		}
-		if !valid_utf8(data) {
+		if !platform.valid_utf8(data) {
 			return {}, make_error(.Usage, "agent definition is not valid UTF-8: %s", path)
 		}
 		def, aerr := parse_agent_definition(path, name, string(data))

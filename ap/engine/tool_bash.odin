@@ -1,6 +1,7 @@
-package ap
+package engine
 
-import "platform"
+import "../platform"
+
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -26,10 +27,6 @@ bash_output_prefix :: proc(text: string, max_lines: int) -> (string, int) {
 		}
 	}
 	return text, total
-}
-
-resolve_self_exe :: proc() -> string {
-	return platform.resolve_self_exe()
 }
 
 bash_update :: proc(user: rawptr, chunk: string) {
@@ -104,7 +101,7 @@ tool_bash :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		return failed
 	}
 
-	output := sanitize_utf8(result.combined)
+	output := platform.sanitize_utf8(result.combined)
 	preview, total_lines := bash_output_prefix(output, BASH_OUTPUT_MAX_LINES)
 	b := strings.builder_make()
 	fmt.sbprintf(&b, "[exit %d, %dms]\n", result.exit_code, result.duration_ms)

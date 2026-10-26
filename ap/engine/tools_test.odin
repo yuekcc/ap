@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -8,11 +10,11 @@ import "core:testing"
 import "core:thread"
 import "core:time"
 
-test_cancel_thread_token: ^Cancel_Token
+test_cancel_thread_token: ^platform.Cancel_Token
 
 test_cancel_thread :: proc() {
 	time.sleep(300 * time.Millisecond)
-	cancel_token_cancel(test_cancel_thread_token)
+	platform.cancel_token_cancel(test_cancel_thread_token)
 }
 
 json_obj :: proc(text: string) -> json.Object {
@@ -29,18 +31,18 @@ json_obj :: proc(text: string) -> json.Object {
 
 tool_test_context :: proc(t: ^testing.T, name: string) -> (Tool_Context, string) {
 	dir := test_temp_dir(name)
-	project, perr := open_project(fmt.tprintf("%s/config", dir), dir)
-	testing.expect_value(t, perr.code, Exit_Code.OK)
+	project, perr := platform.open_project(fmt.tprintf("%s/config", dir), dir)
+	testing.expect(t, platform.is_ok(perr))
 	settings := new(Settings)
 	settings^ = settings_defaults()
 	settings.max_capture_bytes = 1024 * 1024
-	bash, berr := find_bash()
-	testing.expect_value(t, berr.code, Exit_Code.OK)
+	bash, berr := platform.find_bash()
+	testing.expect(t, platform.is_ok(berr))
 	ctx := Tool_Context {
 		cwd = dir,
 		project = project,
 		settings = settings,
-		cancel = new(Cancel_Token),
+		cancel = new(platform.Cancel_Token),
 		session_id = "s",
 		agent_name = "general",
 		config_dir = fmt.tprintf("%s/config", dir),
@@ -328,7 +330,7 @@ test_bash_strips_api_key :: proc(t: ^testing.T) {
 test_tool_definitions_are_valid :: proc(t: ^testing.T) {
 	agent := agent_default_general()
 	defs, err := tool_definitions(agent, 0, 1)
-	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, len(defs), 5)
 	for def in defs {
 		testing.expect(t, len(def.function.name) > 0)

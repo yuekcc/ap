@@ -1,4 +1,6 @@
-package ap
+package engine
+
+import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -160,9 +162,9 @@ tool_read_file :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		truncated = true
 	}
 
-	resolved, rerr := resolve_tool_path(ctx.cwd, raw_path)
-	if !is_ok(rerr) {
-		return arg_error(rerr)
+	resolved, rerr := platform.resolve_tool_path(ctx.cwd, raw_path)
+	if !platform.is_ok(rerr) {
+		return arg_error(from_platform(rerr, .Tool))
 	}
 	info, serr := os.stat(resolved, context.allocator)
 	if serr != nil {
@@ -281,9 +283,9 @@ tool_write_file :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	if len(content) > ctx.settings.max_capture_bytes {
 		return tool_fail(fmt.tprintf("content exceeds max_capture_bytes (%d)", ctx.settings.max_capture_bytes))
 	}
-	resolved, rerr := resolve_tool_path(ctx.cwd, raw_path)
-	if !is_ok(rerr) {
-		return arg_error(rerr)
+	resolved, rerr := platform.resolve_tool_path(ctx.cwd, raw_path)
+	if !platform.is_ok(rerr) {
+		return arg_error(from_platform(rerr, .Tool))
 	}
 	normalized := normalize_crlf(content)
 	written, lines, werr := atomic_write_text(resolved, normalized)
@@ -315,9 +317,9 @@ tool_edit_file :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	if len(old_string) == 0 {
 		return tool_fail("old_string must not be empty")
 	}
-	resolved, rerr := resolve_tool_path(ctx.cwd, raw_path)
-	if !is_ok(rerr) {
-		return arg_error(rerr)
+	resolved, rerr := platform.resolve_tool_path(ctx.cwd, raw_path)
+	if !platform.is_ok(rerr) {
+		return arg_error(from_platform(rerr, .Tool))
 	}
 	info, serr := os.stat(resolved, context.allocator)
 	if serr != nil {
@@ -334,7 +336,7 @@ tool_edit_file :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	if derr != nil {
 		return tool_fail(fmt.tprintf("cannot read %s: %v", resolved, derr))
 	}
-	if !valid_utf8(data) {
+	if !platform.valid_utf8(data) {
 		return tool_fail("file is not valid UTF-8; use bash instead")
 	}
 	text := normalize_crlf(string(data))
