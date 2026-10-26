@@ -1,10 +1,9 @@
 package ap
 
-import "../internal"
+import "platform"
 import "protocol"
 import "core:fmt"
 import "core:os"
-import "core:strings"
 
 VERSION :: protocol.VERSION
 PROVIDER_NAME :: protocol.PROVIDER_NAME
@@ -77,7 +76,7 @@ log_debug :: proc(format: string, args: ..any) {
 }
 
 write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {
-	return internal.write_all(handle, data)
+	return platform.write_all(handle, data)
 }
 
 write_stdout :: proc(data: []byte) -> bool {
@@ -140,21 +139,4 @@ stderr_write_string :: proc(s: string) {
 	if len(s) > 0 {
 		write_stderr(transmute([]byte)s)
 	}
-}
-
-split_lines :: proc(s: string, allocator := context.allocator) -> []string {
-	out := make([dynamic]string, 0, 8, allocator)
-	start := 0
-	for i in 0 ..= len(s) {
-		if i == len(s) || s[i] == '\n' {
-			line := s[start:i]
-			if len(line) > 0 && line[len(line) - 1] == '\r' {
-				line = line[:len(line) - 1]
-			}
-			cloned, _ := strings.clone(line, allocator)
-			append(&out, cloned)
-			start = i + 1
-		}
-	}
-	return out[:]
 }

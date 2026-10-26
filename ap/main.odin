@@ -330,7 +330,7 @@ main :: proc() {
 	loop_destroy(&loop)
 	// turn 结束后进程即退出；给出可直接复制的续聊命令。
 	if len(args) > 0 {
-		fmt.eprintf("%s -s %s\n", args[0], session_id)
+		fmt.eprintf("继续对话，请执行：%s -s %s\n", args[0], session_id)
 	}
 	os.exit(exit_code)
 }

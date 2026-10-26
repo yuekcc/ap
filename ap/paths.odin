@@ -1,154 +1,114 @@
 package ap
 
-import "../internal"
-import "core:fmt"
-import "core:os"
-import "core:strings"
-import "core:time"
-import "core:unicode/utf8"
+// CLI/adapter 与 engine 迁移期的桥：本地包统一由 ap/platform 提供实现。
+// 真正的实现在 ap/platform；这里只做退出码映射与少量转发。
 
-sha256_hex :: proc(data: []byte) -> string {
-	return internal.sha256_hex(data)
+import "platform"
+
+sha256_hex :: platform.sha256_hex
+fnv32a_hex :: platform.fnv32a_hex
+normalize_slashes :: platform.normalize_slashes
+trim_trailing_slashes :: platform.trim_trailing_slashes
+valid_utf8 :: platform.valid_utf8
+split_lines :: platform.split_lines
+sanitize_utf8 :: platform.sanitize_utf8
+utf8_prefix :: platform.utf8_prefix
+
+json_marshal_utf8 :: platform.json_marshal_utf8
+json_canonical_string :: platform.json_canonical_string
+json_arguments_string :: platform.json_arguments_string
+json_value_or_empty_object :: platform.json_value_or_empty_object
+json_unescape_unicode :: platform.json_unescape_unicode
+
+Cancel_Token :: platform.Cancel_Token
+cancel_token_cancel :: platform.cancel_token_cancel
+cancel_token_cancelled :: platform.cancel_token_cancelled
+
+Job_Handle :: platform.Job_Handle
+attach_process_job :: platform.attach_job
+register_job :: platform.register_job
+kill_process_tree :: platform.kill_process_tree
+cleanup_jobs :: platform.cleanup_jobs
+
+find_bash :: proc() -> (string, Error) {
+	value, err := platform.find_bash()
+	return value, platform_error_to_ap(err)
 }
+local_now :: platform.local_now
+setup_console_utf8 :: platform.setup_console
+normalize_cli_args :: platform.normalize_args
 
-fnv32a_hex :: proc(data: []byte) -> string {
-	return internal.fnv32a_hex(data)
-}
+Project :: platform.Project
+session_file :: platform.session_file
+blob_file :: platform.blob_file
 
-normalize_slashes :: proc(path: string, allocator := context.allocator) -> string {
-	return internal.normalize_slashes(path, allocator)
-}
-
-trim_trailing_slashes :: proc(path: string) -> string {
-	return internal.trim_trailing_slashes(path)
-}
-
-// internal 只返回 message；ap 在边界处映射成自己的退出码。
-internal_error_to_ap :: proc(err: internal.Error, code: Exit_Code = .Usage) -> Error {
-	if internal.is_ok(err) {
+// platform 只返回 message；ap 在边界处映射成自己的退出码。
+platform_error_to_ap :: proc(err: platform.Error, code: Exit_Code = .Usage) -> Error {
+	if platform.is_ok(err) {
 		return ok_error()
 	}
 	return {code = code, message = err.message}
 }
 
 canonicalize_path :: proc(path: string, resolve_links := true) -> (string, Error) {
-	value, err := internal.canonicalize_path(path, resolve_links)
-	return value, internal_error_to_ap(err)
+	value, err := platform.canonicalize_path(path, resolve_links)
+	return value, platform_error_to_ap(err)
 }
 
 default_config_dir :: proc(cli_config_dir: Maybe(string)) -> (string, Error) {
-	value, err := internal.default_config_dir(cli_config_dir)
-	return value, internal_error_to_ap(err)
+	value, err := platform.default_config_dir(cli_config_dir)
+	return value, platform_error_to_ap(err)
 }
 
-Project :: internal.Project
+locate_project :: proc(config_dir, cwd: string) -> (Project, Error) {
+	value, err := platform.locate_project(config_dir, cwd)
+	return value, platform_error_to_ap(err)
+}
 
-// ap 需要写入的 project 初始化：定位、确保 blobs 目录、补写 path.txt。
 open_project :: proc(config_dir, cwd: string) -> (Project, Error) {
-	project, perr := internal.locate_project(config_dir, cwd)
-	if !internal.is_ok(perr) {
-		return {}, internal_error_to_ap(perr)
-	}
-	if err := ensure_dir(project.blobs_dir); !is_ok(err) {
-		return {}, err
-	}
-
-	path_file := fmt.tprintf("%s/path.txt", project.dir)
-	if !os.exists(path_file) {
-		content := fmt.tprintf("%s\n", project.root)
-		content_bytes: []byte = transmute([]byte)content
-		if werr := os.write_entire_file_from_bytes(path_file, content_bytes); werr != nil {
-			return {}, make_error(.Usage, "cannot write %s: %v", path_file, werr)
-		}
-	}
-	return project, ok_error()
-}
-
-session_file :: proc(p: Project, session_id: string) -> string {
-	return internal.session_file(p, session_id)
-}
-
-blob_file :: proc(p: Project, sha: string) -> string {
-	return internal.blob_file(p, sha)
+	value, err := platform.open_project(config_dir, cwd)
+	return value, platform_error_to_ap(err)
 }
 
 expand_home :: proc(path: string) -> (string, Error) {
-	if path == "~" || strings.has_prefix(path, "~/") || strings.has_prefix(path, `~\`) {
-		home, herr := os.user_home_dir(context.allocator)
-		if herr != nil {
-			return "", make_error(.Usage, "cannot determine home directory")
-		}
-		if path == "~" {
-			return home, ok_error()
-		}
-		rest := internal.normalize_slashes(path[2:], context.allocator)
-		home_norm := internal.trim_trailing_slashes(internal.normalize_slashes(home, context.allocator))
-		return fmt.tprintf("%s/%s", home_norm, rest), ok_error()
-	}
-	return path, ok_error()
+	value, err := platform.expand_home(path)
+	return value, platform_error_to_ap(err)
 }
 
 join_and_clean :: proc(base, path: string) -> (string, Error) {
-	expanded, eerr := expand_home(path)
-	if !is_ok(eerr) {
-		return "", eerr
-	}
-	combined := expanded
-	if !os.is_absolute_path(expanded) {
-		joined, jerr := os.join_path([]string{base, expanded}, context.allocator)
-		if jerr != nil {
-			return "", make_error(.Usage, "cannot join path %q: %v", path, jerr)
-		}
-		combined = joined
-	}
-	clean, cerr := os.clean_path(combined, context.allocator)
-	if cerr != nil {
-		clean = combined
-	}
-	return internal.normalize_slashes(clean, context.allocator), ok_error()
+	value, err := platform.join_and_clean(base, path)
+	return value, platform_error_to_ap(err)
 }
 
-// 工具用的路径解析：相对启动目录，支持 ~，不要求目标存在。
 resolve_tool_path :: proc(cwd, path: string) -> (string, Error) {
-	if len(path) == 0 {
-		return "", make_error(.Usage, "path must not be empty")
-	}
-	when ODIN_OS == .Windows {
-		if len(path) >= 3 && path[0] == '/' && path[2] == '/' {
-			ch := path[1]
-			if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
-				return "", make_error(.Usage, "MSYS 路径不受支持，请使用 Win32 路径: %s", path)
-			}
-		}
-	}
-	return join_and_clean(cwd, path)
+	value, err := platform.resolve_tool_path(cwd, path)
+	return value, platform_error_to_ap(err)
 }
 
 ensure_dir :: proc(dir: string) -> Error {
-	if !os.is_dir(dir) {
-		if err := os.make_directory_all(dir); err != nil {
-			return make_error(.Usage, "cannot create directory %s: %v", dir, err)
-		}
-	}
-	if !os.is_dir(dir) {
-		return make_error(.Usage, "not a directory: %s", dir)
-	}
-	return ok_error()
+	return platform_error_to_ap(platform.ensure_dir(dir))
 }
 
 ensure_writable_dir :: proc(dir: string) -> Error {
-	if err := ensure_dir(dir); !is_ok(err) {
-		return err
-	}
-	probe := fmt.tprintf("%s/.ap-write-test-%d-%d", dir, os.get_pid(), time.time_to_unix_nano(time.now()))
-	probe_data: []byte = transmute([]byte)string("ok")
-	if werr := os.write_entire_file_from_bytes(probe, probe_data); werr != nil {
-		return make_error(.Usage, "$AP_CONFIG is not writable: %s", dir)
-	}
-	os.remove(probe)
-	return ok_error()
+	return platform_error_to_ap(platform.ensure_writable_dir(dir))
 }
 
-valid_utf8 :: proc(data: []byte) -> bool {
-	return utf8.valid_string(string(data))
+blob_read :: proc(project: Project, sha: string, allocator := context.allocator) -> ([]byte, Error) {
+	data, err := platform.blob_read(project, sha, allocator)
+	return data, platform_error_to_ap(err)
+}
+
+blob_write :: proc(project: Project, data: []byte) -> (string, Error) {
+	sha, err := platform.blob_write(project, data)
+	return sha, platform_error_to_ap(err)
+}
+
+blob_write_text :: proc(project: Project, data: []byte) -> (string, Error) {
+	path, err := platform.blob_write_text(project, data)
+	return path, platform_error_to_ap(err)
+}
+
+// internal_error_to_ap 保留旧名字，供已有调用点使用。
+internal_error_to_ap :: proc(err: platform.Error, code: Exit_Code = .Usage) -> Error {
+	return platform_error_to_ap(err, code)
 }

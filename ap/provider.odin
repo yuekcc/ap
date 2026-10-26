@@ -5,28 +5,10 @@ import c "core:c/libc"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
-import "core:sync"
 import "core:time"
 import "vendor:curl"
 
 FIRST_BYTE_TIMEOUT :: 120 * time.Second
-
-Cancel_Token :: struct {
-	value: i32,
-}
-
-cancel_token_cancel :: proc(token: ^Cancel_Token) {
-	if token != nil {
-		sync.atomic_store(&token.value, 1)
-	}
-}
-
-cancel_token_cancelled :: proc(token: ^Cancel_Token) -> bool {
-	if token == nil {
-		return false
-	}
-	return sync.atomic_load(&token.value) != 0
-}
 
 Stop_Reason :: enum {
 	Stop,

@@ -1,15 +1,15 @@
 #+build !windows
 package tui
 
-import "../internal"
+import "../ap/platform"
 import "core:os"
 
 setup_console :: proc() {
-	internal.setup_console()
+	platform.setup_console()
 }
 
 normalize_args :: proc(args: []string) -> []string {
-	return internal.normalize_args(args)
+	return platform.normalize_args(args)
 }
 
 mark_non_inheritable :: proc(file: ^os.File) {

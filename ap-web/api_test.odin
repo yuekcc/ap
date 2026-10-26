@@ -1,6 +1,6 @@
 package main
 
-import "../internal"
+import "../ap/platform"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -382,8 +382,8 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	defer runner_shutdown(&app)
 	os.make_directory_all(app.project.blobs_dir)
 
-	text_sha := internal.sha256_hex(transmute([]byte)string(HISTORY_BLOB_TEXT))
-	args_sha := internal.sha256_hex(transmute([]byte)string(HISTORY_ARGS_BLOB))
+	text_sha := platform.sha256_hex(transmute([]byte)string(HISTORY_BLOB_TEXT))
+	args_sha := platform.sha256_hex(transmute([]byte)string(HISTORY_ARGS_BLOB))
 	test_write_file(blob_file(app.project, text_sha), HISTORY_BLOB_TEXT)
 	test_write_file(blob_file(app.project, args_sha), HISTORY_ARGS_BLOB)
 
@@ -392,7 +392,7 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 		fmt.sbprintf(&big, "line-%03d\n", i)
 	}
 	big_text := strings.to_string(big)
-	big_sha := internal.sha256_hex(transmute([]byte)big_text)
+	big_sha := platform.sha256_hex(transmute([]byte)big_text)
 	test_write_file(blob_file(app.project, big_sha), big_text)
 
 	missing_sha := strings.repeat("0", 64, context.temp_allocator)

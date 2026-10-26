@@ -1,13 +1,11 @@
 package ap
 
-import "../internal"
+import "platform"
 import "protocol"
 import "core:encoding/json"
-import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:time"
-import "core:unicode/utf8"
 
 PREVIEW_BYTES :: 8192
 
@@ -318,75 +316,8 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 	return events[:], ok_error()
 }
 
-blob_read :: proc(project: Project, sha: string) -> ([]byte, Error) {
-	data, err := internal.blob_read(project, sha)
-	return data, internal_error_to_ap(err)
-}
-
-blob_write :: proc(project: Project, data: []byte) -> (string, Error) {
-	sha := sha256_hex(data)
-	path := blob_file(project, sha)
-	if os.exists(path) {
-		return sha, ok_error()
-	}
-	if err := blob_write_at(project, path, data); !is_ok(err) {
-		return "", err
-	}
-	return sha, ok_error()
-}
-
-// 把完整工具输出写成模型可直接用 read_file 读取的 .txt 文件。
-// 返回绝对路径；文件名使用内容 sha256，重复输出自动去重。
-blob_write_text :: proc(project: Project, data: []byte) -> (string, Error) {
-	sha := sha256_hex(data)
-	path := fmt.tprintf("%s/%s.txt", project.blobs_dir, sha)
-	if os.exists(path) {
-		return path, ok_error()
-	}
-	if err := blob_write_at(project, path, data); !is_ok(err) {
-		return "", err
-	}
-	return path, ok_error()
-}
-
-blob_write_at :: proc(project: Project, path: string, data: []byte) -> Error {
-	tmp := fmt.tprintf("%s/.tmp-%d-%d", project.blobs_dir, os.get_pid(), time.time_to_unix_nano(time.now()))
-	perm := os.Permissions{.Read_User, .Write_User}
-	file, ferr := os.open(tmp, {.Write, .Create, .Excl, .Trunc}, perm)
-	if ferr != nil {
-		return make_error(.Tool, "failed to persist output blob: cannot create %s: %v", tmp, ferr)
-	}
-	ok_write := write_all_file(file, data)
-	sync_err := os.sync(file)
-	close_err := os.close(file)
-	if !ok_write || sync_err != nil || close_err != nil {
-		os.remove(tmp)
-		return make_error(.Tool, "failed to persist output blob: write error")
-	}
-	if rerr := os.rename(tmp, path); rerr != nil {
-		os.remove(tmp)
-		return make_error(.Tool, "failed to persist output blob: rename failed: %v", rerr)
-	}
-	return ok_error()
-}
-
 write_all_file :: proc(file: ^os.File, data: []byte) -> bool {
-	return internal.write_all(file, data)
-}
-
-utf8_prefix :: proc(data: []byte, max_bytes: int) -> string {
-	if len(data) <= max_bytes {
-		return string(data)
-	}
-	cut := max_bytes
-	for cut > 0 && !utf8.valid_string(string(data[:cut])) {
-		// 只截断可能不完整的多字节序列，最多回退 3 字节。
-		if max_bytes - cut >= 3 {
-			break
-		}
-		cut -= 1
-	}
-	return string(data[:cut])
+	return platform.write_all(file, data)
 }
 
 Blob_Fields :: struct {
@@ -493,6 +424,6 @@ session_system_prompt :: proc(project: Project, events: []Event) -> (Session_Sta
 }
 
 find_latest_root_session :: proc(project: Project) -> (string, Error) {
-	id, err := internal.find_latest_root_session(project)
+	id, err := platform.find_latest_root_session(project)
 	return id, internal_error_to_ap(err)
 }

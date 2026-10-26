@@ -1,4 +1,4 @@
-package ap
+package platform
 
 import "core:encoding/json"
 import "core:fmt"

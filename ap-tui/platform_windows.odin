@@ -1,16 +1,16 @@
 #+build windows
 package tui
 
-import "../internal"
+import "../ap/platform"
 import "core:os"
 import win32 "core:sys/windows"
 
 setup_console :: proc() {
-	internal.setup_console()
+	platform.setup_console()
 }
 
 normalize_args :: proc(args: []string) -> []string {
-	return internal.normalize_args(args)
+	return platform.normalize_args(args)
 }
 
 // 管道两端默认都可继承；stdin 的写端、stdout/stderr 的读端如果被 ap 继承，

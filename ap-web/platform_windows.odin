@@ -1,14 +1,14 @@
 #+build windows
 package main
 
-import "../internal"
+import "../ap/platform"
 import "core:fmt"
 import "core:net"
 import "core:time"
 import win32 "core:sys/windows"
 
 setup_console :: proc() {
-	internal.setup_console()
+	platform.setup_console()
 }
 
 Dpi_Awareness_Context_Proc :: #type proc "system" (
@@ -35,7 +35,7 @@ setup_dpi_awareness :: proc() {
 }
 
 normalize_args :: proc(args: []string) -> []string {
-	return internal.normalize_args(args)
+	return platform.normalize_args(args)
 }
 
 Listener :: struct {

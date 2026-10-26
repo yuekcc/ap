@@ -1,6 +1,6 @@
 package main
 
-import "../internal"
+import "../ap/platform"
 import protocol "../ap/protocol"
 import "base:runtime"
 import "core:fmt"
@@ -163,7 +163,7 @@ read_stream :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool) {
 }
 
 resolve_self_exe :: proc() -> string {
-	return internal.resolve_self_exe()
+	return platform.resolve_self_exe()
 }
 
 // 目录 ap/ 与 Unix 二进制 ap 同名；查找 agent 时必须排除目录。
@@ -349,7 +349,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 	os.close(stderr_w)
 
 	// 提示词走 stdin；关写端就是 --print0 的 EOF 信号。
-	if !internal.write_all(stdin_w, transmute([]byte)prompt) {
+	if !platform.write_all(stdin_w, transmute([]byte)prompt) {
 		append_stderr_line(&state.stderr_log, "cannot write prompt to agent stdin")
 	}
 	os.close(stdin_w)

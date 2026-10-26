@@ -4,9 +4,6 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:time"
-import "core:unicode/utf8"
-
-Job_Handle :: distinct uintptr
 
 Child_Process :: struct {
 	process:    os.Process,
@@ -313,24 +310,4 @@ close_child_pipes :: proc(child: ^Child_Process) {
 		os.remove(child.stdin_temp)
 		child.stdin_temp = ""
 	}
-}
-
-// 把可能包含非法 UTF-8 的字节转成合法字符串，用于 JSON transcript。
-sanitize_utf8 :: proc(data: []byte) -> string {
-	if utf8.valid_string(string(data)) {
-		return string(data)
-	}
-	b := strings.builder_make()
-	remaining := data
-	for len(remaining) > 0 {
-		r, size := utf8.decode_rune(remaining)
-		if r == utf8.RUNE_ERROR && size == 1 {
-			strings.write_string(&b, "\uFFFD")
-			remaining = remaining[1:]
-			continue
-		}
-		strings.write_rune(&b, r)
-		remaining = remaining[size:]
-	}
-	return strings.to_string(b)
 }

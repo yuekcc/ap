@@ -1,21 +1,21 @@
 #+build !windows
 package main
 
-import "../internal"
+import "../ap/platform"
 import "core:fmt"
 import "core:net"
 import "core:sys/posix"
 import "core:time"
 
 setup_console :: proc() {
-	internal.setup_console()
+	platform.setup_console()
 }
 
 // 原生目录选择框在 Unix 上直接返回 501（见 pickdir.odin），没有 HiDPI 窗口。
 setup_dpi_awareness :: proc() {}
 
 normalize_args :: proc(args: []string) -> []string {
-	return internal.normalize_args(args)
+	return platform.normalize_args(args)
 }
 
 Listener :: struct {
