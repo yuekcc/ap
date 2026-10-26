@@ -91,9 +91,8 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 	restoring := req.kind != .New
 
 	if restoring {
-		if req.kind == .Fork && len(req.source_session_id) == 0 {
-			return resolved, make_error(.Usage, "--fork-session requires --session or --continue")
-		}
+		// Resume 与 Fork 都允许 source_session_id 为空：此时取最近根 session。
+		// CLI 已保证 --fork-session 必须与 -s / -c 连用。
 		source_id := req.source_session_id
 		if len(source_id) == 0 {
 			found, ferr := find_latest_root_session(req.project)
@@ -254,6 +253,48 @@ preview_prompt :: proc(req: Session_Request) -> (Session_Info, Error) {
 	return info, ok_error()
 }
 
+make_session :: proc(
+	req: Session_Request,
+	resolved: Resolved_Session,
+	store: Transcript_Store,
+	session_id: string,
+	agent_depth: int,
+	events: []Event,
+) -> Session {
+	return {
+		project     = req.project,
+		settings    = req.settings,
+		store       = store,
+		agent       = resolved.agent,
+		model       = resolved.model,
+		config_dir  = req.config_dir,
+		self_exe    = req.self_exe,
+		bash_path   = req.bash_path,
+		session_id  = session_id,
+		agent_depth = agent_depth,
+		max_steps   = resolved.max_steps,
+		max_tokens  = resolved.max_tokens,
+		events      = events,
+	}
+}
+
+make_info :: proc(
+	resolved: Resolved_Session,
+	session_id: string,
+	agent_depth: int,
+	initial_line: string,
+) -> Session_Info {
+	return {
+		session_id    = session_id,
+		model         = resolved.model,
+		agent_name    = resolved.agent.name,
+		agent_depth   = agent_depth,
+		system_prompt = resolved.system_prompt,
+		initial_line  = initial_line,
+		warnings      = resolved.warnings[:],
+	}
+}
+
 session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 	resolved, rerr := resolve_session(req)
 	if !is_ok(rerr) {
@@ -263,11 +304,7 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 	store: Transcript_Store
 	session_id := ""
 	var_events: []Event
-	agent := resolved.agent
-	model := resolved.model
 	agent_depth := resolved.agent_depth
-	max_steps := resolved.max_steps
-	max_tokens := resolved.max_tokens
 
 	if req.kind == .New {
 		session_id = new_session_id()
@@ -293,9 +330,9 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 		start := Session_Start_Event {
 			content       = stored_content,
 			cwd           = req.project.root,
-			model         = model,
+			model         = resolved.model,
 			provider      = PROVIDER_NAME,
-			agent_name    = agent.name,
+			agent_name    = resolved.agent.name,
 			content_ref   = var_ref,
 			content_bytes = var_bytes,
 		}
@@ -313,31 +350,8 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 			return {}, {}, aerr
 		}
 		var_events = evs
-		info := Session_Info {
-			session_id    = session_id,
-			model         = model,
-			agent_name    = agent.name,
-			agent_depth   = agent_depth,
-			system_prompt = resolved.system_prompt,
-			initial_line  = line,
-			warnings      = resolved.warnings[:],
-		}
-		session := Session {
-			project     = req.project,
-			settings    = req.settings,
-			store       = store,
-			agent       = agent,
-			model       = model,
-			config_dir  = req.config_dir,
-			self_exe    = req.self_exe,
-			bash_path   = req.bash_path,
-			session_id  = session_id,
-			agent_depth = agent_depth,
-			max_steps   = max_steps,
-			max_tokens  = max_tokens,
-			events      = var_events,
-		}
-		return session, info, ok_error()
+		session := make_session(req, resolved, store, session_id, agent_depth, var_events)
+		return session, make_info(resolved, session_id, agent_depth, line), ok_error()
 	}
 
 	// Resume / Fork
@@ -377,31 +391,8 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 		return {}, {}, aerr
 	}
 	var_events = evs
-	info := Session_Info {
-		session_id    = session_id,
-		model         = model,
-		agent_name    = agent.name,
-		agent_depth   = agent_depth,
-		system_prompt = resolved.system_prompt,
-		initial_line  = line,
-		warnings      = resolved.warnings[:],
-	}
-	session := Session {
-		project     = req.project,
-		settings    = req.settings,
-		store       = store,
-		agent       = agent,
-		model       = model,
-		config_dir  = req.config_dir,
-		self_exe    = req.self_exe,
-		bash_path   = req.bash_path,
-		session_id  = session_id,
-		agent_depth = agent_depth,
-		max_steps   = max_steps,
-		max_tokens  = max_tokens,
-		events      = var_events,
-	}
-	return session, info, ok_error()
+	session := make_session(req, resolved, store, session_id, agent_depth, var_events)
+	return session, make_info(resolved, session_id, agent_depth, line), ok_error()
 }
 
 turn_run :: proc(
@@ -433,6 +424,10 @@ turn_run :: proc(
 }
 
 session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error) {
+	reason := opts.reason
+	if len(reason) == 0 {
+		reason = "signal" if opts.cancelled else "exit"
+	}
 	usage := opts.usage
 	if events_now, eerr := transcript_read_all(s.project, s.session_id); is_ok(eerr) {
 		summed := historical_usage_from_events(events_now)
@@ -443,7 +438,7 @@ session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error) {
 	h := make_header(&s.store, "session_end")
 	ev := Session_End_Event {
 		header = h,
-		reason = opts.reason,
+		reason = reason,
 		usage  = usage,
 	}
 	line, err := transcript_append_line(&s.store, ev)

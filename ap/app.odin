@@ -6,8 +6,6 @@ import "core:fmt"
 import "core:os"
 
 VERSION :: protocol.VERSION
-PROVIDER_NAME :: protocol.PROVIDER_NAME
-SCHEMA_VERSION :: protocol.SCHEMA_VERSION
 
 Exit_Code :: enum int {
 	OK       = 0,
@@ -36,43 +34,10 @@ is_ok :: proc(err: Error) -> bool {
 	return err.code == .OK
 }
 
-Log_Level :: enum int {
-	Error = 0,
-	Warn  = 1,
-	Info  = 2,
-	Debug = 3,
-}
-
-Logger :: struct {
-	level: Log_Level,
-}
-
-logger: Logger = {level = .Info}
-
-log_set_level :: proc(level: Log_Level) {
-	logger.level = level
-}
-
 log_error :: proc(format: string, args: ..any) {
 	fmt.eprintf("ap: error: ")
 	fmt.eprintf(format, ..args)
 	fmt.eprintln()
-}
-
-log_warn :: proc(format: string, args: ..any) {
-	if logger.level >= .Warn {
-		fmt.eprintf("ap: warning: ")
-		fmt.eprintf(format, ..args)
-		fmt.eprintln()
-	}
-}
-
-log_debug :: proc(format: string, args: ..any) {
-	if logger.level >= .Debug {
-		fmt.eprintf("ap: debug: ")
-		fmt.eprintf(format, ..args)
-		fmt.eprintln()
-	}
 }
 
 write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {

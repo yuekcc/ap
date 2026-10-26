@@ -8,8 +8,8 @@ import "core:fmt"
 // agent 实现全部在 ap/engine；这里只做编排。
 
 run :: proc(args: []string) -> int {
-	setup_console_utf8()
-	normalized := normalize_cli_args(args)
+	platform.setup_console()
+	normalized := platform.normalize_args(args)
 	opts, perr := parse_args(normalized)
 	if !is_ok(perr) {
 		log_error(perr.message)
@@ -35,12 +35,12 @@ run :: proc(args: []string) -> int {
 		engine.log_set_level(.Warn)
 	}
 
-	config_dir, cerr := default_config_dir(opts.config_dir)
-	if !is_ok(cerr) {
+	config_dir, cerr := platform.default_config_dir(opts.config_dir)
+	if !platform.is_ok(cerr) {
 		log_error(cerr.message)
 		return int(Exit_Code.Usage)
 	}
-	if err := ensure_writable_dir(config_dir); !is_ok(err) {
+	if err := platform.ensure_writable_dir(config_dir); !platform.is_ok(err) {
 		log_error(err.message)
 		return int(Exit_Code.Usage)
 	}
@@ -50,18 +50,18 @@ run :: proc(args: []string) -> int {
 		return exit_code_for(serr.kind)
 	}
 
-	cwd, cwderr := canonicalize_path(".", true)
-	if !is_ok(cwderr) {
+	cwd, cwderr := platform.canonicalize_path(".", true)
+	if !platform.is_ok(cwderr) {
 		log_error(cwderr.message)
 		return int(Exit_Code.Usage)
 	}
-	project, jerr := open_project(config_dir, cwd)
-	if !is_ok(jerr) {
+	project, jerr := platform.open_project(config_dir, cwd)
+	if !platform.is_ok(jerr) {
 		log_error(jerr.message)
 		return int(Exit_Code.Usage)
 	}
-	bash_path, berr := find_bash()
-	if !is_ok(berr) {
+	bash_path, berr := platform.find_bash()
+	if !platform.is_ok(berr) {
 		log_error(berr.message)
 		return int(Exit_Code.Usage)
 	}
@@ -134,8 +134,12 @@ run :: proc(args: []string) -> int {
 	result, terr := engine.turn_run(&session, prompt, &cancel, emitter)
 	if !engine.is_ok(terr) {
 		engine.log_error(terr.message)
-		_, _ = engine.session_close(&session, {reason = "error", usage = {}})
-		return int(Exit_Code.Internal)
+		err_end_line, _ := engine.session_close(&session, {reason = "error", usage = {}})
+		if out.format == .Stream_Json {
+			write_stdout(transmute([]byte)err_end_line)
+			write_stdout(transmute([]byte)string("\n"))
+		}
+		return exit_code_for(terr.kind)
 	}
 
 	if result.error_kind == .None && !result.cancelled && signal_exit_code() != 0 {
@@ -180,8 +184,8 @@ run :: proc(args: []string) -> int {
 }
 
 list_skills :: proc() -> int {
-	cwd, cerr := canonicalize_path(".", true)
-	if !is_ok(cerr) {
+	cwd, cerr := platform.canonicalize_path(".", true)
+	if !platform.is_ok(cerr) {
 		log_error(cerr.message)
 		return int(Exit_Code.Usage)
 	}

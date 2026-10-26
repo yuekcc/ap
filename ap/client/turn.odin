@@ -28,11 +28,15 @@ Turn_Options :: struct {
 	allocator:   runtime.Allocator,
 }
 
-turn_allocator :: proc(options: ^Turn_Options) -> runtime.Allocator {
-	if options.allocator.procedure == nil {
+allocator_or_default :: proc(allocator: runtime.Allocator) -> runtime.Allocator {
+	if allocator.procedure == nil {
 		return context.allocator
 	}
-	return options.allocator
+	return allocator
+}
+
+turn_allocator :: proc(options: ^Turn_Options) -> runtime.Allocator {
+	return allocator_or_default(options.allocator)
 }
 
 // 逐事件转发、可选 stderr 日志、结束信封。
@@ -77,10 +81,7 @@ Pump_State :: struct {
 }
 
 pump_allocator :: proc(state: ^Pump_State) -> runtime.Allocator {
-	if state.allocator.procedure == nil {
-		return context.allocator
-	}
-	return state.allocator
+	return allocator_or_default(state.allocator)
 }
 
 Pump_Context :: struct {

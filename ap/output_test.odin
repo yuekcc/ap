@@ -1,5 +1,6 @@
 package ap
 
+import "platform"
 import "core:encoding/json"
 import "core:strings"
 import "core:testing"
@@ -12,7 +13,7 @@ test_text_delta_event_has_nested_delta :: proc(t: ^testing.T) {
 	delta := obj["delta"].(json.Object)
 	testing.expect_value(t, delta["text"].(json.String), json.String("hi"))
 
-	data, err := json_marshal_utf8(obj)
+	data, err := platform.json_marshal_utf8(obj)
 	testing.expect_value(t, err, nil)
 	testing.expect(t, strings.contains(string(data), `"delta":{"text":"hi"}`))
 }

@@ -27,6 +27,7 @@ ctrl_handler :: proc "system" (ctrl_type: win32.DWORD) -> win32.BOOL {
 	sync.atomic_store(&g_signal_code, code)
 	g_signal_tick = time.tick_now()
 	if token := g_cancel_token; token != nil {
+		// 信号处理器没有 Odin context，不能调用普通 proc；直接写原子标志。
 		sync.atomic_store(&token.value, 1)
 	}
 	return true

@@ -29,3 +29,8 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
+
+& ./tools/check-deps.ps1
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}

@@ -8,7 +8,8 @@
 
 | 模块 | 负责 | 明确不做 |
 | --- | --- | --- |
-| CLI | 参数解析、配置加载、退出码、信号安装 | 不组装消息，不碰 provider |
+| CLI adapter（`ap`） | 参数解析、配置入口、输出格式、退出码、信号安装 | 不组装消息，不碰 provider/loop/transcript |
+| Session（`ap/engine/session.odin`） | 新会话/恢复/fork 解析、system prompt 预览、`session_start`/`session_end` 写入 | 不决定退出码与输出格式 |
 | Loop | turn/step 状态机、事件编排、重试决策、中断处理 | 不解析 SSE，不实现工具 |
 | Context | transcript → messages 投影、system prompt 组装、blob 解析 | 不发请求，不写 transcript |
 | Skills | 发现并解析技能目录、生成 system prompt 清单与 `--list-skills` 简表 | 不执行技能、不把正文注入上下文 |
@@ -16,32 +17,45 @@
 | Tools | 工具注册、参数校验、执行、结果结构化、进程树管理 | 不改上下文，不做循环控制 |
 | Subagent Runner | 拉起 `ap` 子进程、解析 stream-json、转换为 tool 结果 | 不直接调用父进程内存里的对象 |
 | Transcript Store | 事件追加、读取、blob 读写、重放 | 不做业务判断 |
-| Internal | 路径/project hash/session 发现、blob 读取、平台原语、事件信封/usage schema | 不依赖 ap、ap-tui 或 ap-web，不含 UI、loop、provider、tools |
-| External frontends | `ap-tui`（终端）与 `ap-web`（浏览器）：每轮拉起 ap 子进程、解析 `stream-json`、渲染；`ap-web` 额外提供 HTTP/SSE | 不 import ap 或 ap-tui，不实现 agent、provider、工具或 transcript 写入 |
+| Protocol（`ap/protocol`） | 事件 schema、usage、宽松事件解析、行分帧 | 只依赖 core；不含 IO、路径、agent 逻辑 |
+| Platform（`ap/platform`） | 路径/project hash/session 发现、blob 读写、JSON/文本、平台原语、进程树、取消 token | 不依赖任何本地包，不含 UI、loop、provider、tools |
+| Client（`ap/client`） | 前端 kit：定位 ap、拼 argv、spawn、逐行泵、取消、只读 session/blob 访问、历史展示辅助 | 不 import `ap/engine` 或 `ap` 根包，不实现 agent |
+| Engine（`ap/engine`） | Loop / Provider / Context / Skills / Tools / Transcript Store / Session 编排 | 不 import `ap`、`ap/client`、`ap-tui`、`ap-web` |
+| External frontends | `ap-tui`（终端）与 `ap-web`（浏览器）：每轮拉起 ap 子进程、解析 `stream-json`、渲染；`ap-web` 额外提供 HTTP/SSE | 只 import `ap/client` + `ap/protocol`，不 import `ap/engine`、`ap/platform`、`ap` 根包或彼此，不实现 agent |
 
 ## 依赖方向
 
 单向，违反即视为设计错误：
 
 ```
-CLI ──► Loop ──► Context ──► (纯计算)
- │        │
- │        ├────► Provider ──► vendor:curl ──► OpenAI API
- │        ├────► Tools ──► Subagent Runner ──► 子进程 ap
- │        └────► Transcript Store ──► *.jsonl + blobs/
- └──► Skills（新 session 发现技能，片段交给 Context）──► 文件系统
+cmd/ap ──► ap（CLI adapter）
+             ├──► ap/engine ──► ap/platform
+             │        └──────► ap/protocol
+             └──► ap/platform, ap/protocol
 
-CLI ─┐
-     ├──► Internal（路径 / project / session / blob / platform / schema）
-ap-tui ─┤
-ap-web ─┘
+ap/client ──► ap/platform, ap/protocol
+
+ap-tui ─┐
+ap-web ─┴──► ap/client, ap/protocol
 ```
+
+Engine 内部：
+
+```
+Session ──► Loop ──► Context ──► (纯计算)
+              │
+              ├────► Provider ──► vendor:curl ──► OpenAI API
+              ├────► Tools ──► Subagent Runner ──► 子进程 ap
+              └────► Transcript Store ──► *.jsonl + blobs/
+```
+
 
 1. `Provider`、`Skills` 互不依赖；`Transcript Store` 只提供事件/blob 的读写原语；`Tools` 不依赖 Provider，但 `task` 会通过 `blob_read` 读取子代理 `message_end` 中的 `text_ref`
 2. `Context` 只读 transcript、配置和 blob，不写回、不发请求
 3. `Tools` 不感知 Loop 的状态机；只接收 `(name, args, ctx)` 返回结构化结果
 4. 子代理只能通过命令行 + stdout/stderr 协议交互，不允许依赖父进程内存结构
-5. `Internal` 只能依赖 core 库；`ap`、`ap-tui` 和 `ap-web` 都可以依赖它，它不能反向依赖三者
+5. `ap/protocol` 只依赖 core；`ap/platform` 只依赖 core/vendor。`ap/engine` 只依赖 `ap/platform` 与 `ap/protocol`；`ap/client` 只依赖这两者；前端只依赖 `ap/client` 与 `ap/protocol`
+6. 子目录就是独立包：`ap/*.odin` 是 `package ap`，`ap/engine/*.odin` 是 `package engine`。`odin build cmd/ap` 只链接需要的那部分
 
 ## 关键接口
 
@@ -63,9 +77,9 @@ loop_init :: proc(
     model: string,
     config_dir, self_exe, bash_path, session_id: string,
     agent_depth, max_agent_depth, max_steps, max_tokens: int,
-    cancel: ^Cancel_Token,
+    cancel: ^platform.Cancel_Token,
     events: []Event,
-    emitter: Loop_Emitter,
+    emitter: Emitter,
 ) -> Loop
 loop_run_turn :: proc(l: ^Loop, prompt: string) -> Loop_Result
 
@@ -75,13 +89,19 @@ discover_skills :: proc(cwd: string) -> []Skill
 skills_prompt_block :: proc(skills: []Skill) -> string
 skills_brief :: proc(skills: []Skill) -> string
 
+Session_Request :: struct { ... }
+preview_prompt :: proc(req: Session_Request) -> (Session_Info, Error)
+session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error)
+turn_run :: proc(s: ^Session, prompt: string, cancel: ^platform.Cancel_Token, emitter: Emitter) -> (Turn_Result, Error)
+session_close :: proc(s: ^Session, opts: Close_Options) -> (line: string, Error)
+
 Provider :: struct { ... }
 
 provider_stream :: proc(
     p:      ^Provider,
     req:    ^Chat_Message_Request,
     sink:   Stream_Sink,
-    cancel: ^Cancel_Token,
+    cancel: ^platform.Cancel_Token,
 ) -> Provider_Error
 
 Tool_Context :: struct { ... }
@@ -93,7 +113,7 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 说明：
 
 - `Stream_Sink` 是 `{user, on_event}`，所有 Provider 事件通过 `Provider_Event` union 回调：`Provider_Message_Start` / `Provider_Text_Delta` / `Provider_Reasoning_Delta` / `Provider_Tool_Start` / `Provider_Tool_Delta` / `Provider_Tool_End` / `Provider_Message_End` / `Provider_Error_Event`。Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。
-- `Cancel_Token` 只有一个原子标志；信号处理器设置它，Provider 在 curl 的进度回调里轮询。没有关闭通知或额外的 `loop_cancel` 接口。
+- `platform.Cancel_Token` 只有一个原子标志；信号处理器设置它，Provider 在 curl 的进度回调里轮询。没有关闭通知或额外的 `loop_cancel` 接口。
 - `Tool_Result` 是工具结果结构，见 [tools.md](tools.md)。
 - 启动子代理所需的信息直接放在 `Tool_Context` 里：`session_id`、`cwd`、`model`、`agent_name`、`agent_depth`、`config_dir`、`self_exe`、`bash_path` 等。
 - `Skills` 只在组装新 session 的 system prompt 前运行一次，把清单交给 `Context`；`context_build` 本身不访问技能目录，只从 transcript 的 `session_start` 取冻结的 system prompt。
@@ -129,23 +149,36 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 3. 配置与 agent 定义是外部输入，不进 transcript；但 `session_start` 冻结当次使用的 system prompt、model、provider、agent_name、agent_depth、cwd，保证恢复可解释
 4. blob 是 transcript 的一部分（按引用计入），不是缓存；内容寻址、只读、用户负责清理
 
-## 共享包 internal/
+## 包布局与边界
 
-`internal/` 是 ap、ap-tui 与 ap-web 的唯一公共底层包，负责：
+```
+cmd/ap/             package main：os.exit(ap.run(os.args))
+ap/                 package ap：run / cli / output / app / signals
+ap/protocol/        package protocol：事件 schema、parse、Line_Reader、usage
+ap/platform/        package platform：paths / sessions / blob / json / text / 平台原语 / 进程树 / cancel
+ap/engine/          package engine：errors / config / session / loop / provider / sse / skills / transcript / process / tools / prompts
+ap/client/          package client：turn / spawn / store / history
+ap-tui/, ap-web/    前端（各自一个 package）
+```
 
-- 路径规范化、config dir、project hash、`Project` 定位
-- session 列表、最近根 session、transcript 原始读取
-- blob 路径、sha256、blob 读取与校验
-- Windows ACP 参数归一化、控制台 UTF-8、`realpath`
-- v1 事件信封（`Event_Header`）与 `Usage` schema
+允许的 import 边：
 
-边界：`internal` 不 import ap、ap-tui 或 ap-web；不包含 renderer、行输入、loop、provider、tools、transcript store 写入。ap 侧保留 `open_project`（创建目录/写 `path.txt`）、错误码和写入逻辑，TUI/Web 侧保留只读定位与渲染。
+| 源 | 允许 | 禁止 |
+| --- | --- | --- |
+| `ap-web` / `ap-tui` | `ap/client`、`ap/protocol`、core/vendor | `ap/engine`、`ap/platform`、`ap` 根包、彼此 |
+| `ap/client` | `ap/platform`、`ap/protocol`、core/vendor | `ap/engine`、`ap` 根包 |
+| `ap` | `ap/engine`、`ap/platform`、`ap/protocol`、core/vendor | `ap-web`、`ap-tui` |
+| `ap/engine` | `ap/platform`、`ap/protocol`、core/vendor | `ap`、`ap/client`、前端 |
+| `ap/platform` | core/vendor | 所有本地包 |
+| `ap/protocol` | core | 所有本地包 |
+
+Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 在测试与构建前强制：扫描 import 行，并用 `-export-dependencies:json` 断言前端的编译文件清单里没有 `ap/engine/`。脚本带 `--self-test` 反向用例，确认禁止 import 会返回非 0。
 
 ## 外部消费者：ap-tui 与 ap-web
 
 `ap-tui` 不属于 ap 进程内的模块，也不依赖 ap 的内存结构。它每轮启动一个新的 ap 子进程，通过 `--print0 --output-format stream-json` 交互，并直接读取 v1 transcript 做历史重放。修改 stream-json 事件或 transcript schema 时要同步检查 [tui.md](tui.md)。
 
-`ap-web` 与 ap-tui 同构，只是把渲染器换成浏览器：每轮 spawn 一个 ap 子进程，逐行解析 `stream-json` 并经 SSE 转发；历史同样来自 transcript，额外用 `internal/` 的 session/blob 原语做重放。它自带 HTTP/1.1 + SSE 服务器（`core:net`）和编译期内置的前端资源，不 import ap 或 ap-tui；运行态按 session 注册并记录各自的 working directory，同一 session 单飞、不同标签页/不同 project 可并发。协议、并发、取消和目录选择见 [web.md](web.md)。
+`ap-web` 与 ap-tui 同构，只是把渲染器换成浏览器：每轮 spawn 一个 ap 子进程，逐行解析 `stream-json` 并经 SSE 转发；历史同样来自 transcript，额外用 `ap/client` 的 session/blob 原语做重放。它自带 HTTP/1.1 + SSE 服务器（`core:net`）和编译期内置的前端资源，不 import ap 或 ap-tui；运行态按 session 注册并记录各自的 working directory，同一 session 单飞、不同标签页/不同 project 可并发。协议、并发、取消和目录选择见 [web.md](web.md)。
 
 ## 实现约束（Odin）
 

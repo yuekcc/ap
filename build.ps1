@@ -17,6 +17,11 @@ if ($npx) {
     Write-Host "npx not found: using committed ap-web/dist"
 }
 
+& ./tools/check-deps.ps1
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 $out = "bin"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 Set-Location $out

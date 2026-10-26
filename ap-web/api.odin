@@ -580,8 +580,8 @@ history_enrich_event :: proc(value: ^json.Value, ev: protocol.Stream_Event, proj
 		args_text := client.tool_args_text(ev, &local)
 		json_object_set(&obj, "args_preview", json.String(args_text))
 	case "tool_execution_end":
-		local := project
-		content, _ := client.tool_result_text(ev, &local)
+		local_content := project
+		content, _ := client.tool_result_text(ev, &local_content)
 		preview, truncated := client.preview_content(content)
 		// 与 ap-tui 重放一致：超限结果只给预览窗口。为了让前端据此显示
 		// 「已截断」提示，截断时把完整 content 拿掉、改放 content_preview。

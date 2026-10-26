@@ -1,5 +1,6 @@
 package ap
 
+import "platform"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -317,7 +318,7 @@ read_all_stdin :: proc() -> (string, Error) {
 	if len(buf) == 0 {
 		return "", ok_error()
 	}
-	if !valid_utf8(buf[:]) {
+	if !platform.valid_utf8(buf[:]) {
 		return "", make_error(.Usage, "prompt from stdin is not valid UTF-8")
 	}
 	return string(buf[:]), ok_error()
@@ -331,7 +332,7 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		if len(value) == 0 {
 			return "", make_error(.Usage, "--print requires a non-empty prompt")
 		}
-		if !valid_utf8(transmute([]byte)value) {
+		if !platform.valid_utf8(transmute([]byte)value) {
 			return "", make_error(
 				.Usage,
 				"--print prompt is not valid UTF-8; on Windows check the console code page or use --input-file",
@@ -340,9 +341,9 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		prompt = value
 	case opts.input_file != nil:
 		path, _ := opts.input_file.?
-		resolved, rerr := resolve_tool_path(cwd, path)
-		if !is_ok(rerr) {
-			return "", rerr
+		resolved, rerr := platform.resolve_tool_path(cwd, path)
+		if !platform.is_ok(rerr) {
+			return "", make_error(.Usage, "%s", rerr.message)
 		}
 		data, derr := os.read_entire_file_from_path(resolved, context.allocator)
 		if derr != nil {
@@ -351,7 +352,7 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		if len(data) == 0 {
 			return "", make_error(.Usage, "--input-file is empty: %s", resolved)
 		}
-		if !valid_utf8(data) {
+		if !platform.valid_utf8(data) {
 			return "", make_error(.Usage, "--input-file is not valid UTF-8: %s", resolved)
 		}
 		prompt = string(data)

@@ -25,6 +25,21 @@ v1 已实现：
 - 构建产物需要能在 PATH 中找到 `bash`。
 - 修改 `ap-web` 前端时才需要 Node（`esbuild` + `alpinejs`、`markdown-exit`、`github-markdown-css`）；`ap-web/dist/` 已提交，平时构建不需要 Node。
 
+## 源码结构
+
+```
+ap/            CLI adapter：参数、输出格式、退出码、信号
+ap/engine/     agent：loop / provider / tools / context / skills / transcript / session
+ap/platform/   路径、project/session、blob、JSON/文本、进程树、取消 token
+ap/protocol/   事件 schema、宽松解析、行分帧（只依赖 core）
+ap/client/     前端 kit：spawn ap、逐行泵事件、只读 session 访问
+cmd/ap/        可执行入口
+ap-tui/        终端前端
+ap-web/        HTTP/SSE 前端
+```
+
+前端只允许 import `ap/client` 与 `ap/protocol`，由 `tools/check-deps` 在测试/构建时强制。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
+
 ## 构建
 
 Windows：
@@ -33,7 +48,7 @@ Windows：
 .\build.ps1
 # 或
 mkdir bin
-odin build ap -out:bin/ap.exe -vet
+odin build cmd/ap -out:bin/ap.exe -vet
 odin build ap-tui -out:bin/ap-tui.exe -vet
 odin build ap-web -out:bin/ap-web.exe -vet
 ```
@@ -42,14 +57,14 @@ Linux / macOS：
 
 ```sh
 ./build.sh
-# 或（源码目录 ap/ 与二进制 ap 同名，Unix 上产物放 bin/）
+# 或
 mkdir -p bin
-odin build ap -out:bin/ap -vet
+odin build cmd/ap -out:bin/ap -vet
 odin build ap-tui -out:bin/ap-tui -vet
 odin build ap-web -out:bin/ap-web -vet
 ```
 
-构建产物统一放在 `bin/`（Unix 上源码目录 `ap/` 与二进制 `ap` 同名，不能都放在仓库根目录）。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。`build.sh` / `build.ps1` 会在检测到 `npx` 时先刷新 `ap-web/dist`，否则使用仓库里已提交的前端产物。
+构建产物统一放在 `bin/`。CLI 入口在 `cmd/ap`，因此源码目录 `ap/` 与二进制 `ap` 不再同名。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。`build.sh` / `build.ps1` 会在检测到 `npx` 时先刷新 `ap-web/dist`，否则使用仓库里已提交的前端产物。
 
 ## 配置
 
@@ -112,7 +127,7 @@ ap --list-skills
 
 ## 交互式 TUI
 
-`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑；路径、project hash、session 发现和 blob 读取与 ap 共用 `internal/`。
+`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑；路径、project hash、session 发现、blob 读取与子进程泵共用 `ap/client` + `ap/protocol`。
 
 ```sh
 # 新 session

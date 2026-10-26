@@ -1,6 +1,7 @@
 package ap
 
 import "engine"
+import "platform"
 import "protocol"
 import "core:encoding/json"
 import "core:time"
@@ -10,7 +11,7 @@ Output_State :: struct {
 }
 
 output_write_json :: proc(obj: json.Object) {
-	data, err := json_marshal_utf8(obj)
+	data, err := platform.json_marshal_utf8(obj)
 	if err != nil {
 		return
 	}
@@ -107,7 +108,7 @@ output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 		obj["type"] = json.String("tool_execution_update")
 		obj["ts"] = json.Integer(now_ms())
 		obj["tool_call_id"] = json.String(tool_call_id)
-		obj["chunk"] = json.String(sanitize_utf8(transmute([]byte)chunk))
+		obj["chunk"] = json.String(platform.sanitize_utf8(transmute([]byte)chunk))
 		output_write_json(obj)
 	} else {
 		write_stderr(transmute([]byte)chunk)
@@ -161,7 +162,7 @@ output_final :: proc(out: ^Output_State, session_id: string, result: engine.Turn
 			num_steps = result.num_steps,
 			usage = result.usage,
 		}
-		data, err := json_marshal_utf8(payload)
+		data, err := platform.json_marshal_utf8(payload)
 		if err != nil {
 			return
 		}

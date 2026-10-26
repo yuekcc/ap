@@ -17,7 +17,7 @@
 ap 的 CLI 契约是「一条提示词进，一个 turn 出，进程退出」。TUI 利用这一契约复用同一套 session、工具和 transcript 逻辑，不把交互状态塞进 ap：
 
 - ap 仍可被脚本、子代理和 TUI 共用
-- 路径、project hash、session 发现和 blob 读取共用 `internal/`，不会各写一套
+- 路径、project hash、session 发现、blob 读取、spawn/事件泵共用 `ap/client` + `ap/protocol`，不会各写一套
 - TUI 崩溃或重启不会破坏 ap 的写入路径
 - 每轮都能看到真实的退出码与 `session_end`
 
@@ -36,7 +36,7 @@ ap --print0 --output-format stream-json [ -s <session_id> ] <透传参数>
 - stderr 在 `--verbose` 时实时显示，否则缓存，只在本轮异常退出时展示
 - `--config-dir`、`--model`、`--agent`、`--max-steps`、`--max-tokens` 原样透传
 
-Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉 stdin 写端、stdout/stderr 读端的继承标志（`ap-tui/platform_windows.odin` 的 `mark_non_inheritable`），否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF。
+Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉 stdin 写端、stdout/stderr 读端的继承标志（`ap/platform/process_windows.odin` 的 `mark_non_inheritable`，由 `ap/client/turn.odin` 调用），否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF。
 
 ### 可执行文件查找
 
@@ -69,7 +69,7 @@ $AP_CONFIG/projects/<project_path_hash>/<session_id>.jsonl
 
 按 v1 transcript 事件重放 `user_message`、`message_end` 的 text 块、工具调用与结果、错误事件。`text_ref` / `content_ref` / `args_ref` 从同目录 `blobs/` 解析；缺失时退化为 `*_preview`。
 
-TUI 与 ap 共用 `internal/` 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位）。路径规则只维护一份，`ap/paths.odin` 与 `ap-tui/project.odin` 都只是转发/包装，避免两边漂移后找不到 transcript。
+TUI 与 ap 共用 `ap/platform` 的 project 识别规则（绝对路径 → 解析链接 → 反斜杠转 `/` → Windows 小写 → FNV-1a 32 位），通过 `ap/client` 暴露给前端。路径规则只维护一份，避免两边漂移后找不到 transcript。
 
 重放只读文件，不重新调用模型、不重新执行工具。
 

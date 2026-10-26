@@ -17,7 +17,7 @@
 ## 目标
 
 1. 用 `core:net` 手写 HTTP/1.1 + SSE 服务器，零第三方依赖（不引入 laytan/odin-http）
-2. 复用 ap-tui 已验证的子进程模型与事件解析；协议层复用 `internal/` 与 ap-tui 的既有结构
+2. 复用 ap-tui 已验证的子进程模型与事件解析；这部分已下沉到 `ap/client` 与 `ap/protocol`
 3. Web UI 用 Alpine.js + 原生 `fetch`/`EventSource`，esbuild 打包；npm 依赖为 `esbuild`（dev）+ `alpinejs`、`markdown-exit`、`github-markdown-css`（runtime）
 4. 跨平台行为与 ap-tui 一致（Windows/Linux/macOS）；产物形态与 ap 一致：单 exe，无运行时文件依赖
 
@@ -38,13 +38,10 @@ ap-web/
 ├── http_util.odin       # MIME、percent-decode、状态行/头部写出
 ├── api.odin             # 路由表 → handler；JSON 编解码
 ├── sse.odin             # SSE 帧编码、hub（订阅表 + 互斥锁 + 广播）、心跳
-├── agent.odin           # 复刻 ap-tui/agent.odin：spawn ap、pipe、事件泵、退出码
 ├── runner.odin          # session registry：按 session 分飞、取消、stderr 缓存、turn_done 组装
-├── events.odin          # 与 ap-tui/events.odin 同构的 Event 解析（先复制，后下沉）
 ├── pickdir.odin         # 工作目录选择对话框：Windows IFileDialog（COM STA）；Unix 返回 501
 ├── assets.odin          # 内置资源表：#load_directory("dist") + 查找/兜底
-├── platform_windows.odin / platform_unix.odin
-├── process_platform_windows.odin / process_platform_unix.odin  # Job/进程树终止（与 ap 同构）
+├── net_windows.odin / net_unix.odin  # socket / 监听 / DPI / 关停信号
 ├── package.json         # deps: esbuild + alpinejs + markdown-exit + github-markdown-css；scripts: build / watch / test
 ├── build.mjs            # esbuild 脚本：frontend/main.js → dist/（app.js + styles.css），拷贝 index.html
 ├── index.html           # Alpine 模板宿主（构建时拷入 dist/）
@@ -81,7 +78,7 @@ ap-web（主进程）
 ### 为什么每连接一线程而不是事件循环
 
 - 目标规模是同一用户的几个浏览器标签页（每个标签页一个 session）；线程数仍是个位数，`core:thread` 足够
-- 阻塞 IO 的代码与 ap-tui 的子进程读取逻辑同构，可以直接照搬 `ap-tui/agent.odin` 的 spawn/pipe 模式（含 Windows 继承标志清理）
+- 子进程 spawn/pipe/泵直接复用 `ap/client/turn.odin`（含 Windows 继承标志清理与取消时杀进程树）
 - Odin 没有 async/await；写一个 select/epoll 抽象层的复杂度远超收益
 
 ### Turn 生命周期
@@ -145,7 +142,7 @@ ap-web（主进程）
 | GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 从 ap-web 启动参数/env 组装，前端展示；`platform` 决定是否显示目录选择入口 |
 | GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, cwd, running, turn}` | 指定 key 时返回该 session 的运行态；不带参数返回「最近活跃」session（仅作新标签页兜底） |
 | POST | `/api/session/new` | `{cwd?}` | `{session_id: null, session_key, cwd}` | 只分配一个 slot，不落盘；`cwd` 决定 slot 属于哪个 project，缺省用默认目录。下一条提示词让 ap 新建 session（同 ap-tui `/new`） |
-| GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running}]` | 复用 `internal/sessions.odin` 列表；`cwd` 定位 project，缺省用默认目录；`running` 表示该 transcript 对应的 session 是否在跑 |
+| GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running}]` | 复用 `ap/client/store.odin` 的 session 列表；`cwd` 定位 project，缺省用默认目录；`running` 表示该 transcript 对应的 session 是否在跑 |
 | GET | `/api/projects` | – | `[{cwd, hash, latest_ts, sessions}]` | 侧栏分组：枚举 `$AP_CONFIG/projects/*/path.txt`，返回所有有 session 的 project 及其会话，按最近活动倒序 |
 | POST | `/api/session/resume` | `{session_id, cwd?}` | `{session_id, session_key, cwd}` | 切换/注册该 session 的运行态；`cwd` 定位 project；不因其他 session 在跑而 409，也不校验 transcript 合法性（交给 history/下一轮 ap 报错） |
 | GET | `/api/history?session_id=<id>&cwd=<dir>` | – | `{events: [...]}` | 从该 project 的 transcript 重放：逐行读 JSONL，`text_ref` / `input_ref` / `args_ref` / `content_ref` 从 blobs 解析（缺失则退化为对应 `*_preview`），超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
@@ -262,7 +259,7 @@ npm --prefix ap-web run watch      # 开发期监听
 构建脚本逻辑：
 
 1. 探测 `npx`：存在则先跑 `npm --prefix ap-web run build` 刷新 dist；不存在则跳过（用仓库里已提交的 dist）
-2. `odin build ../ap-web -out:ap-web -vet`（与 ap、ap-tui 并列）
+2. `odin build ../ap-web -out:ap-web -vet`（与 `cmd/ap`、ap-tui 并列）
 
 注意：`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，目录不存在直接编译失败——这就是 dist 必须提交仓库、且前端构建必须先于 Odin 构建的原因。
 
@@ -284,7 +281,7 @@ ap-web [--port 8417] [--host 127.0.0.1] [--web-root <dir>]
 ```
 
 - `--agent-bin` / `AP_AGENT_BIN` / 同目录 / PATH：可执行文件查找顺序与 ap-tui 相同
-- `-s` / `-c`：启动时定位初始 session（复用 internal/sessions）
+- `-s` / `-c`：启动时定位初始 session（复用 `ap/client`）
 - `--cwd <dir>`：默认工作目录，默认进程启动目录；每个 session 创建/恢复时记录自己的 cwd，运行期可通过 Web UI 打开其它目录（不修改进程 cwd，也不持久化为全局默认）
 - `--port` 默认 8417；`--host` 默认 `127.0.0.1`，写死本机回环为默认值是刻意的安全默认
 
@@ -293,11 +290,12 @@ ap-web [--port 8417] [--host 127.0.0.1] [--web-root <dir>]
 对齐 [architecture.md](architecture.md)：
 
 ```
-ap-web ──► internal ──► (core only)
-ap-web 不 import ap、不 import ap-tui
+ap-web ──► ap/client ──► ap/platform、ap/protocol ──► (core / vendor)
+       └─► ap/protocol
+ap-web 不 import ap、ap/engine、ap/platform、ap-tui
 ```
 
-事件解析、spawn/pipe、project hash 三块与 ap-tui 重复度高。方案：**先复制，后下沉**——phase 1 直接把 `ap-tui/agent.odin`、`events.odin`、`project.odin` 拷进 ap-web 起步（同一仓库，无碍）；跑通后把无 UI 依赖的部分（事件解析、spawn 封装）下沉到 `internal/`，ap-tui 与 ap-web 共同引用。避免第一版就做跨三个包的大重构。
+事件解析、spawn/pipe、project hash、blob 读取都在 `ap/client` / `ap/protocol` 共一份；`tools/check-deps` 会在构建期阻止前端直接 import 底层包，并用编译文件清单确认 agent 代码没有进前端二进制。
 
 ## 安全
 
@@ -320,7 +318,7 @@ ap-web 不 import ap、不 import ap-tui
 | `#load_directory` 要求 dist 在编译期存在 | dist 提交仓库 + 构建脚本先跑 esbuild（有 npx 时）；CI 无 Node 也能用提交的 dist 编译 |
 | 内置资源让 exe 变大 | dist 三个文件合计 < 100KB（Alpine ~15KB gzip），可忽略 |
 | SSE 被浏览器/代理缓冲 | `text/event-stream` + 立即 flush + 心跳；本地直连无中间代理，风险低 |
-| 事件解析三处漂移（ap/ap-tui/ap-web） | phase 1 先复制起步，phase 2 下沉 `internal/` 后只剩一处 |
+| 事件解析多处漂移 | 统一到 `ap/protocol`；前端只 import `ap/client` + `ap/protocol`，由 `tools/check-deps` 强制 |
 
 ## 实现细节与额外语义
 
@@ -328,7 +326,7 @@ ap-web 不 import ap、不 import ap-tui
 
 ### 连接超时与错误体
 
-- 连接线程读完一个请求后复用连接等待下一个请求，空闲上限 30s；开始读取某个请求后改用 10s（`SO_RCVTIMEO`，`platform_*.odin` 的 `socket_set_read_timeout`）。读超时即关闭连接，不写错误响应——慢速客户端不能长期占住连接线程
+- 连接线程读完一个请求后复用连接等待下一个请求，空闲上限 30s；开始读取某个请求后改用 10s（`SO_RCVTIMEO`，`net_*.odin` 的 `socket_set_read_timeout`）。读超时即关闭连接，不写错误响应——慢速客户端不能长期占住连接线程
 - 解析层的 4xx（含请求体超过 2MB 的 413）对 `/api/*` 目标同样返回 `{"error":{"code","message"}}`；静态资源仍回纯文本，方便直接用浏览器访问。请求体超限的 code 是 `payload_too_large`
 - `api_json` 编码失败（服务端 bug）固定返回 500 `internal_error`，不会把错误体挂在 2xx 上
 
@@ -367,5 +365,5 @@ ap-web 不 import ap、不 import ap-tui
 1. `Last-Event-ID` 断点续传（transcript seq 补差）
 2. diff 渲染、reasoning 展示开关、usage 状态条
 3. session fork / 删除；文件附件上传
-4. 事件解析与 spawn 层下沉 `internal/`，三消费者共用一份
+4. 事件解析与 spawn 层在 `ap/protocol` / `ap/client`，所有消费者共用一份
 5. 远程访问模式：`--host` 放开 + token 鉴权 + HTTPS 由外部代理

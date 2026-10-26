@@ -5,8 +5,6 @@ import protocol "../ap/protocol"
 import "core:fmt"
 import "core:strings"
 
-MAX_STDERR_BYTES :: 64 * 1024
-
 remember_session :: proc(app: ^App, session_id: string) {
 	if len(session_id) == 0 {
 		return
@@ -16,21 +14,6 @@ remember_session :: proc(app: ^App, session_id: string) {
 		delete(app.session_id, context.allocator)
 	}
 	app.session_id = cloned
-}
-
-append_stderr_line :: proc(app: ^App, line: string) {
-	append(&app.stderr_log, ..transmute([]byte)line)
-	append(&app.stderr_log, '\n')
-	if len(app.stderr_log) > MAX_STDERR_BYTES {
-		keep := MAX_STDERR_BYTES / 2
-		start := len(app.stderr_log) - keep
-		if idx := strings.index_byte(transmute(string)app.stderr_log[start:], '\n'); idx >= 0 {
-			start += idx + 1
-		}
-		remaining := len(app.stderr_log) - start
-		copy(app.stderr_log[:], app.stderr_log[start:])
-		resize(&app.stderr_log, remaining)
-	}
 }
 
 on_agent_event :: proc(user: rawptr, ev: protocol.Stream_Event) {
@@ -46,8 +29,6 @@ on_agent_stderr_line :: proc(user: rawptr, line: string) {
 	app := (^App)(user)
 	if app.options.verbose {
 		renderer_note(app, fmt.tprintf("[ap] %s", line))
-	} else {
-		append_stderr_line(app, line)
 	}
 	free_all(context.temp_allocator)
 }
@@ -76,9 +57,6 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 	if len(result.session_id) > 0 {
 		delete(result.session_id, context.allocator)
 	}
-	if len(result.stderr_preview) > 0 {
-		delete(result.stderr_preview, context.allocator)
-	}
 
 	finish_assistant(&app.renderer)
 	ensure_line_start(&app.renderer)
@@ -94,15 +72,17 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 			renderer_note(app, fmt.tprintf("agent exited with code %d", exit_code))
 		}
 	}
-	if !app.options.verbose && len(app.stderr_log) > 0 && exit_code != 0 {
+	if !app.options.verbose && len(result.stderr_preview) > 0 && exit_code != 0 {
 		renderer_note(app, "── agent stderr ──")
-		for line in strings.split_lines(transmute(string)app.stderr_log[:], context.temp_allocator) {
+		for line in strings.split_lines(result.stderr_preview, context.temp_allocator) {
 			if len(strings.trim_space(line)) > 0 {
 				renderer_note(app, line)
 			}
 		}
 	}
-	clear(&app.stderr_log)
+	if len(result.stderr_preview) > 0 {
+		delete(result.stderr_preview, context.allocator)
+	}
 	return exit_code
 }
 

@@ -100,7 +100,7 @@ ReAct Loop（react-loop-and-session.md）
   └── Transcript Store ──────────────► <session_id>.jsonl + blobs/
 ```
 
-ap、ap-tui 与 ap-web 共用 `internal/` 的路径、project、session、blob 与平台原语，见 [architecture.md](architecture.md)。
+ap、ap-tui 与 ap-web 共用 `ap/platform` 的路径、project、session、blob 与平台原语；前端通过 `ap/client` + `ap/protocol` 使用，见 [architecture.md](architecture.md) 与 [dependencies.md](dependencies.md)。
 
 ## 文档地图
 
@@ -108,6 +108,7 @@ ap、ap-tui 与 ap-web 共用 `internal/` 的路径、project、session、blob �
 | --- | --- | --- |
 | [README.md](README.md) | 总览、决策、术语、索引 | 定稿 v1 |
 | [architecture.md](architecture.md) | 模块边界、依赖方向、进程模型、Odin 约束 | 定稿 v1 |
+| [dependencies.md](dependencies.md) | 包布局、允许的 import 边、check-deps 用法 | 定稿 v2 |
 | [cli-and-config.md](cli-and-config.md) | 启动参数、输出格式、配置、工作区布局、项目识别 | 定稿 v1 |
 | [react-loop-and-session.md](react-loop-and-session.md) | 循环状态机、事件 schema、恢复与重放、fork | 定稿 v1 |
 | [context-management.md](context-management.md) | system prompt、记忆文件、消息投影 | 定稿 v1 |

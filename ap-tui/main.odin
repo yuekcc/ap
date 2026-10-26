@@ -15,7 +15,6 @@ App :: struct {
 	renderer:   Renderer,
 	agent_bin:  string,
 	session_id: string,
-	stderr_log: [dynamic]u8,
 }
 
 renderer_note :: proc(app: ^App, text: string) {

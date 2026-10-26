@@ -19,6 +19,8 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) ext=".exe" ;;
 esac
 
+tools/check-deps.sh
+
 mkdir -p $out
 cd $out
 
