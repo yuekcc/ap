@@ -1,54 +1,13 @@
 package main
 
 import "../internal"
+import protocol "../ap/protocol"
 import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:sync"
 import "core:time"
-
-// 把管道里的字节流切成完整行；一行 stdout 就是一个 stream-json 事件。
-// 每次 feed 后压实缓冲，避免长 turn 的无界增长。
-Line_Reader :: struct {
-	buf:      [dynamic]u8,
-	start:    int,
-	callback: proc(user: rawptr, line: string),
-	user:     rawptr,
-}
-
-line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
-	if len(chunk) > 0 {
-		append(&lr.buf, ..chunk)
-	}
-	for {
-		view := transmute(string)lr.buf[lr.start:]
-		idx := strings.index_byte(view, '\n')
-		if idx < 0 {
-			break
-		}
-		line := view[:idx]
-		lr.callback(lr.user, line)
-		lr.start += idx + 1
-	}
-	if lr.start > 0 {
-		remaining := len(lr.buf) - lr.start
-		if remaining > 0 {
-			copy(lr.buf[:], lr.buf[lr.start:])
-		}
-		resize(&lr.buf, remaining)
-		lr.start = 0
-	}
-}
-
-// 进程退出时把最后一截没有换行结尾的内容也交出去。
-line_reader_flush :: proc(lr: ^Line_Reader) {
-	if lr.start < len(lr.buf) {
-		lr.callback(lr.user, transmute(string)lr.buf[lr.start:])
-	}
-	resize(&lr.buf, 0)
-	lr.start = 0
-}
 
 MAX_STDERR_BYTES :: 64 * 1024
 
@@ -399,11 +358,11 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		callbacks = &cb,
 		state     = &state,
 	}
-	out_reader := Line_Reader {
+	out_reader := protocol.Line_Reader {
 		callback = on_agent_stdout_line,
 		user     = &ctx,
 	}
-	err_reader := Line_Reader {
+	err_reader := protocol.Line_Reader {
 		callback = on_agent_stderr_line,
 		user     = &ctx,
 	}
@@ -423,7 +382,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		if stdout_open {
 			data, done := read_stream(stdout_r, read_buf[:])
 			if len(data) > 0 {
-				line_reader_feed(&out_reader, data)
+				protocol.line_reader_feed(&out_reader, data)
 			}
 			if done {
 				os.close(stdout_r)
@@ -433,7 +392,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		if stderr_open {
 			data, done := read_stream(stderr_r, read_buf[:])
 			if len(data) > 0 {
-				line_reader_feed(&err_reader, data)
+				protocol.line_reader_feed(&err_reader, data)
 			}
 			if done {
 				os.close(stderr_r)
@@ -472,7 +431,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 				if stdout_open {
 					data, done := read_stream(stdout_r, read_buf[:])
 					if len(data) > 0 {
-						line_reader_feed(&out_reader, data)
+						protocol.line_reader_feed(&out_reader, data)
 						any = true
 					}
 					if done {
@@ -483,7 +442,7 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 				if stderr_open {
 					data, done := read_stream(stderr_r, read_buf[:])
 					if len(data) > 0 {
-						line_reader_feed(&err_reader, data)
+						protocol.line_reader_feed(&err_reader, data)
 						any = true
 					}
 					if done {
@@ -501,8 +460,8 @@ pump_agent :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callb
 		time.sleep(5 * time.Millisecond)
 	}
 
-	line_reader_flush(&out_reader)
-	line_reader_flush(&err_reader)
+	protocol.line_reader_flush(&out_reader)
+	protocol.line_reader_flush(&err_reader)
 	if stdout_open {
 		os.close(stdout_r)
 	}

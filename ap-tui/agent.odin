@@ -1,51 +1,13 @@
 package tui
 
 import "../internal"
+import protocol "../ap/protocol"
 import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:time"
 
 MAX_STDERR_BYTES :: 64 * 1024
-
-Line_Reader :: struct {
-	buf:      [dynamic]u8,
-	start:    int,
-	callback: proc(user: rawptr, line: string),
-	user:     rawptr,
-}
-
-line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
-	if len(chunk) > 0 {
-		append(&lr.buf, ..chunk)
-	}
-	for {
-		view := transmute(string)lr.buf[lr.start:]
-		idx := strings.index_byte(view, '\n')
-		if idx < 0 {
-			break
-		}
-		line := view[:idx]
-		lr.callback(lr.user, line)
-		lr.start += idx + 1
-	}
-	if lr.start > 0 {
-		remaining := len(lr.buf) - lr.start
-		if remaining > 0 {
-			copy(lr.buf[:], lr.buf[lr.start:])
-		}
-		resize(&lr.buf, remaining)
-		lr.start = 0
-	}
-}
-
-line_reader_flush :: proc(lr: ^Line_Reader) {
-	if lr.start < len(lr.buf) {
-		lr.callback(lr.user, transmute(string)lr.buf[lr.start:])
-	}
-	resize(&lr.buf, 0)
-	lr.start = 0
-}
 
 read_stream :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool) {
 	has, herr := os.pipe_has_data(file)
@@ -283,10 +245,10 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 	}
 	os.close(stdin_w)
 
-	out_reader: Line_Reader
+	out_reader: protocol.Line_Reader
 	out_reader.callback = on_stdout_line
 	out_reader.user = app
-	err_reader: Line_Reader
+	err_reader: protocol.Line_Reader
 	err_reader.callback = on_stderr_line
 	err_reader.user = app
 
@@ -300,7 +262,7 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 		if stdout_open {
 			data, done := read_stream(stdout_r, read_buf[:])
 			if len(data) > 0 {
-				line_reader_feed(&out_reader, data)
+				protocol.line_reader_feed(&out_reader, data)
 			}
 			if done {
 				os.close(stdout_r)
@@ -310,7 +272,7 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 		if stderr_open {
 			data, done := read_stream(stderr_r, read_buf[:])
 			if len(data) > 0 {
-				line_reader_feed(&err_reader, data)
+				protocol.line_reader_feed(&err_reader, data)
 			}
 			if done {
 				os.close(stderr_r)
@@ -336,7 +298,7 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 				if stdout_open {
 					data, done := read_stream(stdout_r, read_buf[:])
 					if len(data) > 0 {
-						line_reader_feed(&out_reader, data)
+						protocol.line_reader_feed(&out_reader, data)
 						any = true
 					}
 					if done {
@@ -347,7 +309,7 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 				if stderr_open {
 					data, done := read_stream(stderr_r, read_buf[:])
 					if len(data) > 0 {
-						line_reader_feed(&err_reader, data)
+						protocol.line_reader_feed(&err_reader, data)
 						any = true
 					}
 					if done {
@@ -365,8 +327,8 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 		time.sleep(5 * time.Millisecond)
 	}
 
-	line_reader_flush(&out_reader)
-	line_reader_flush(&err_reader)
+	protocol.line_reader_flush(&out_reader)
+	protocol.line_reader_flush(&err_reader)
 	if stdout_open {
 		os.close(stdout_r)
 	}

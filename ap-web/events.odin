@@ -1,105 +1,20 @@
 package main
 
-import "../internal"
+import protocol "../ap/protocol"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
-Usage :: internal.Usage
+Usage :: protocol.Usage
+Tool_Call_Delta :: protocol.Tool_Call_Delta
+Delta :: protocol.Delta
 
-Tool_Call_Delta :: struct {
-	index:      int    `json:"index"`,
-	id:         string `json:"id"`,
-	name:       string `json:"name"`,
-	args_delta: string `json:"args_delta"`,
-}
+// stream-json 的 transcript/stream 事件在客户端里共用一个宽松结构。
+Event :: protocol.Stream_Event
 
-Delta :: struct {
-	text:      Maybe(string)          `json:"text"`,
-	reasoning: Maybe(string)          `json:"reasoning"`,
-	tool_call: Maybe(Tool_Call_Delta) `json:"tool_call"`,
-}
-
-// stream-json 的 transcript/stream 事件在本程序里共用一个宽松结构。
-// content 在不同事件里可能是 string、array 或 null，所以用 json.Value 承载。
-Event :: struct {
-	using _: internal.Event_Header,
-
-	session_id:          string         `json:"session_id"`,
-	parent_session_id:   Maybe(string)  `json:"parent_session_id"`,
-	parent_tool_call_id: Maybe(string)  `json:"parent_tool_call_id"`,
-
-	role:       string `json:"role"`,
-	message_id: string `json:"message_id"`,
-	model:      string `json:"model"`,
-	delta:      Delta  `json:"delta"`,
-
-	content:     json.Value    `json:"content"`,
-	stop_reason: string        `json:"stop_reason"`,
-	usage:       Usage         `json:"usage"`,
-	reasoning:   Maybe(string) `json:"reasoning"`,
-
-	tool_call_id: string       `json:"tool_call_id"`,
-	name:         string       `json:"name"`,
-	args:         json.Value   `json:"args"`,
-	args_ref:     Maybe(string) `json:"args_ref"`,
-	args_bytes:   Maybe(int)    `json:"args_bytes"`,
-	args_preview: Maybe(string) `json:"args_preview"`,
-
-	ok:              bool          `json:"ok"`,
-	content_ref:     Maybe(string) `json:"content_ref"`,
-	content_bytes:   Maybe(int)    `json:"content_bytes"`,
-	content_preview: Maybe(string) `json:"content_preview"`,
-	error:           Maybe(string) `json:"error"`,
-	duration_ms:     Maybe(int)    `json:"duration_ms"`,
-	exit_code:       Maybe(int)    `json:"exit_code"`,
-
-	scope:     string        `json:"scope"`,
-	kind:      Maybe(string) `json:"kind"`,
-	message:   string        `json:"message"`,
-	retryable: bool          `json:"retryable"`,
-	attempt:   int           `json:"attempt"`,
-
-	target_id: Maybe(string) `json:"target_id"`,
-	reason:    string        `json:"reason"`,
-	chunk:     string        `json:"chunk"`,
-
-	turn: int `json:"turn"`,
-	step: int `json:"step"`,
-}
-
-parse_event_line :: proc(line: string) -> (Event, bool) {
-	if len(strings.trim_space(line)) == 0 {
-		return {}, false
-	}
-	ev: Event
-	if err := json.unmarshal(transmute([]byte)line, &ev, json.DEFAULT_SPECIFICATION, context.temp_allocator); err != nil {
-		return {}, false
-	}
-	if len(ev.type) == 0 {
-		return {}, false
-	}
-	return ev, true
-}
-
-json_string_field :: proc(obj: json.Object, key: string) -> (string, bool) {
-	value, ok := obj[key]
-	if !ok {
-		return "", false
-	}
-	text, is_string := value.(json.String)
-	if !is_string {
-		return "", false
-	}
-	return string(text), true
-}
-
-content_string :: proc(value: json.Value) -> (string, bool) {
-	if s, ok := value.(json.String); ok {
-		return string(s), true
-	}
-	return "", false
-}
+parse_event_line :: protocol.parse_stream_event
+json_string_field :: protocol.json_string_field
+content_string :: protocol.content_string
 
 event_text_block :: proc(block: json.Object, project: ^Project) -> (string, bool) {
 	if typ, ok := json_string_field(block, "type"); !ok || typ != "text" {

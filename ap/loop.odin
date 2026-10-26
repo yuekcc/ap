@@ -77,15 +77,6 @@ loop_default_sleep :: proc(ms: int) {
 	time.sleep(time.Duration(ms) * time.Millisecond)
 }
 
-usage_has_any :: proc(usage: Usage) -> bool {
-	_, a := usage.input_tokens.?
-	_, b := usage.output_tokens.?
-	_, c := usage.cached_tokens.?
-	_, d := usage.reasoning_tokens.?
-	_, e := usage.total_tokens.?
-	return a || b || c || d || e
-}
-
 historical_usage_from_events :: proc(events: []Event) -> Usage {
 	total := Usage{}
 	for ev in events {

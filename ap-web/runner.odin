@@ -1,6 +1,6 @@
 package main
 
-import "../internal"
+import protocol "../ap/protocol"
 import "base:runtime"
 import "core:fmt"
 import "core:strings"
@@ -67,7 +67,7 @@ Turn_Job :: struct {
 	prompt:       string,
 	stop_reason:  string, // 最后一条 turn_end.stop_reason
 	session_end:  string, // 最后一条 session_end.reason（turn_end 缺失时兜底）
-	usage:        internal.Usage,
+	usage:        protocol.Usage,
 	have_usage:   bool,
 }
 
@@ -546,13 +546,7 @@ runner_on_event_line :: proc(user: rawptr, ev: Event, line: string) {
 	}
 }
 
-usage_has_values :: proc(usage: internal.Usage) -> bool {
-	return usage.input_tokens != nil ||
-	       usage.output_tokens != nil ||
-	       usage.cached_tokens != nil ||
-	       usage.reasoning_tokens != nil ||
-	       usage.total_tokens != nil
-}
+usage_has_values :: protocol.usage_has_any
 
 runner_stop_reason :: proc(job: ^Turn_Job) -> Maybe(string) {
 	if len(job.stop_reason) > 0 {

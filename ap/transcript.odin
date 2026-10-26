@@ -1,6 +1,7 @@
 package ap
 
 import "../internal"
+import "protocol"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -10,157 +11,27 @@ import "core:unicode/utf8"
 
 PREVIEW_BYTES :: 8192
 
-Usage :: internal.Usage
+// 事件类型与公共信封定义在 ap/protocol；这里保留别名让引擎代码保持简洁。
+Usage :: protocol.Usage
+Event_Header :: protocol.Event_Header
+Event :: protocol.Transcript_Event
 
-usage_add :: proc(a, b: Usage) -> Usage {
-	out := Usage{}
-	add_field :: proc(x, y: Maybe(int)) -> Maybe(int) {
-		xv, xok := x.?
-		yv, yok := y.?
-		if !xok && !yok {
-			return nil
-		}
-		sum := 0
-		if xok {
-			sum += xv
-		}
-		if yok {
-			sum += yv
-		}
-		return sum
-	}
-	out.input_tokens = add_field(a.input_tokens, b.input_tokens)
-	out.output_tokens = add_field(a.output_tokens, b.output_tokens)
-	out.cached_tokens = add_field(a.cached_tokens, b.cached_tokens)
-	out.reasoning_tokens = add_field(a.reasoning_tokens, b.reasoning_tokens)
-	out.total_tokens = add_field(a.total_tokens, b.total_tokens)
-	return out
-}
+usage_add :: protocol.usage_add
+usage_has_any :: protocol.usage_has_any
 
-Event_Header :: internal.Event_Header
-
-Session_Start_Event :: struct {
-	using header: Event_Header,
-	session_id:          string,
-	content:             string,
-	role:                string,
-	cwd:                 string,
-	model:               string,
-	provider:            string,
-	agent_name:          string,
-	agent_depth:         int,
-	parent_session_id:   Maybe(string),
-	parent_tool_call_id: Maybe(string),
-	resumed_from:        Maybe(string),
-	content_ref:         Maybe(string) `json:"content_ref,omitempty"`,
-	content_bytes:       Maybe(int) `json:"content_bytes,omitempty"`,
-}
-
-Session_End_Event :: struct {
-	using header: Event_Header,
-	reason: string,
-	usage:  Usage,
-}
-
-User_Message_Event :: struct {
-	using header: Event_Header,
-	content: string,
-}
-
-Turn_Start_Event :: struct {
-	using header: Event_Header,
-	turn: int,
-}
-
-Turn_End_Event :: struct {
-	using header: Event_Header,
-	turn:        int,
-	stop_reason: string,
-	usage:       Usage,
-}
-
-Step_Start_Event :: struct {
-	using header: Event_Header,
-	step: int,
-}
-
-Message_Start_Event :: struct {
-	using header: Event_Header,
-	message_id: string,
-	role:       string,
-	model:      string,
-}
-
-Content_Block :: struct {
-	type:         string,
-	text:         Maybe(string) `json:"text,omitempty"`,
-	text_ref:     Maybe(string) `json:"text_ref,omitempty"`,
-	text_bytes:   Maybe(int)    `json:"text_bytes,omitempty"`,
-	text_preview: Maybe(string) `json:"text_preview,omitempty"`,
-	id:           Maybe(string) `json:"id,omitempty"`,
-	name:         Maybe(string) `json:"name,omitempty"`,
-	input:        json.Value    `json:"input,omitempty"`,
-	input_ref:    Maybe(string) `json:"input_ref,omitempty"`,
-	input_bytes:  Maybe(int)    `json:"input_bytes,omitempty"`,
-	input_preview: Maybe(string) `json:"input_preview,omitempty"`,
-}
-
-Message_End_Event :: struct {
-	using header: Event_Header,
-	message_id: string,
-	role:       string,
-	content:    []Content_Block,
-	stop_reason: string,
-	usage:      Maybe(Usage),
-	reasoning:  Maybe(string) `json:"reasoning"`,
-}
-
-Tool_Execution_Start_Event :: struct {
-	using header: Event_Header,
-	tool_call_id: string,
-	name:         string,
-	args:         json.Value  `json:"args,omitempty"`,
-	args_ref:     Maybe(string) `json:"args_ref,omitempty"`,
-	args_bytes:   Maybe(int)    `json:"args_bytes,omitempty"`,
-	args_preview: Maybe(string) `json:"args_preview,omitempty"`,
-}
-
-Tool_Execution_End_Event :: struct {
-	using header: Event_Header,
-	tool_call_id:    string,
-	ok:              bool,
-	content:         Maybe(string) `json:"content"`,
-	content_ref:     Maybe(string) `json:"content_ref,omitempty"`,
-	content_bytes:   Maybe(int)    `json:"content_bytes,omitempty"`,
-	content_preview: Maybe(string) `json:"content_preview,omitempty"`,
-	error:           Maybe(string) `json:"error"`,
-	duration_ms:     Maybe(int)    `json:"duration_ms"`,
-	exit_code:       Maybe(int)    `json:"exit_code"`,
-	metadata:        json.Value    `json:"metadata"`,
-}
-
-Error_Event :: struct {
-	using header: Event_Header,
-	scope:     string,
-	kind:      Maybe(string) `json:"kind"`,
-	message:   string,
-	retryable: bool,
-	attempt:   int,
-}
-
-Cancel_Event :: struct {
-	using header: Event_Header,
-	scope:     string,
-	target_id: Maybe(string) `json:"target_id"`,
-}
-
-Event :: struct {
-	v:    int,
-	seq:  int,
-	ts:   i64,
-	type: string,
-	line: string,
-}
+Session_Start_Event :: protocol.Session_Start_Event
+Session_End_Event :: protocol.Session_End_Event
+User_Message_Event :: protocol.User_Message_Event
+Turn_Start_Event :: protocol.Turn_Start_Event
+Turn_End_Event :: protocol.Turn_End_Event
+Step_Start_Event :: protocol.Step_Start_Event
+Message_Start_Event :: protocol.Message_Start_Event
+Content_Block :: protocol.Content_Block
+Message_End_Event :: protocol.Message_End_Event
+Tool_Execution_Start_Event :: protocol.Tool_Execution_Start_Event
+Tool_Execution_End_Event :: protocol.Tool_Execution_End_Event
+Error_Event :: protocol.Error_Event
+Cancel_Event :: protocol.Cancel_Event
 
 Transcript_Error :: enum {
 	None,

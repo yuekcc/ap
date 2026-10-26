@@ -1,4 +1,4 @@
-package main
+package protocol
 
 import "core:strings"
 import "core:testing"

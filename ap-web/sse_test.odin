@@ -4,7 +4,7 @@ import "core:testing"
 import "core:strings"
 import "core:thread"
 
-import "../internal"
+import protocol "../ap/protocol"
 
 // SSE 帧是逐字节的协议：测试直接断言完整输出，不用 contains 之类宽松匹配。
 @(test)
@@ -67,7 +67,7 @@ test_sse_turn_done_json :: proc(t: ^testing.T) {
 	done := Sse_Turn_Done {
 		exit_code      = 0,
 		stop_reason    = "stop",
-		usage          = internal.Usage{input_tokens = 10, output_tokens = 5, total_tokens = 15},
+		usage          = protocol.Usage{input_tokens = 10, output_tokens = 5, total_tokens = 15},
 		stderr_preview = "line one\nline two\n",
 	}
 

@@ -1,13 +1,14 @@
 package ap
 
 import "../internal"
+import "protocol"
 import "core:fmt"
 import "core:os"
 import "core:strings"
 
-VERSION :: "0.1.0"
-PROVIDER_NAME :: "openai-chat-completions"
-SCHEMA_VERSION :: 1
+VERSION :: protocol.VERSION
+PROVIDER_NAME :: protocol.PROVIDER_NAME
+SCHEMA_VERSION :: protocol.SCHEMA_VERSION
 
 Exit_Code :: enum int {
 	OK       = 0,

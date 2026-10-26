@@ -1,5 +1,6 @@
 package main
 
+import protocol "../ap/protocol"
 import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
@@ -8,7 +9,6 @@ import "core:sync"
 import sync_chan "core:sync/chan"
 import "core:time"
 
-import "../internal"
 
 // SSE 帧格式固定为 event / data / id 三行加一个空行（docs/web.md「SSE」）。
 // id 由 hub 单点分配，编码器只负责按协议写出字节。
@@ -50,11 +50,11 @@ sse_ping_data :: proc(ts: i64) -> string {
 
 // turn 结束信封。stop_reason 取自 turn_end，缺失时回退 session_end，两者都没有则 null；
 // stderr_preview 只放尾部一小段供前端展示（可能是空/多行文本）。
-// usage 用 internal.Usage：所有 token 字段可为 null，不用 0 冒充缺失。
+// usage 用 protocol.Usage：所有 token 字段可为 null，不用 0 冒充缺失。
 Sse_Turn_Done :: struct {
 	exit_code:      int            `json:"exit_code"`,
 	stop_reason:    Maybe(string)  `json:"stop_reason"`,
-	usage:          internal.Usage `json:"usage"`,
+	usage:          protocol.Usage `json:"usage"`,
 	stderr_preview: Maybe(string)  `json:"stderr_preview"`,
 }
 
