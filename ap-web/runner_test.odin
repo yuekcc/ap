@@ -1,5 +1,7 @@
 package main
 
+import client "../ap/client"
+
 import "base:runtime"
 import "core:fmt"
 import "core:os"
@@ -51,9 +53,9 @@ runner_test_setup :: proc(t: ^testing.T, app: ^App, dir: string) {
 	if len(agent_bin) == 0 {
 		return
 	}
-	config_dir, config_err := canonicalize_path(dir, false)
+	config_dir, config_err := client.canonicalize_path(dir, false)
 	testing.expect_value(t, config_err.message, "")
-	project, project_err := open_project(config_dir, dir)
+	project, project_err := client.locate_project(config_dir, dir)
 	testing.expect_value(t, project_err.message, "")
 
 	app.agent_bin = agent_bin

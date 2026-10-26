@@ -1,5 +1,8 @@
 package main
 
+import client "../ap/client"
+import protocol "../ap/protocol"
+
 import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
@@ -318,13 +321,13 @@ api_session_resume :: proc(user: rawptr, request: ^Http_Request, response: ^Http
 }
 
 // cwd 为空时回落到 ap-web 的默认 project（启动目录/--cwd）。
-resolve_cwd_project :: proc(app: ^App, cwd: string) -> (Project, string) {
+resolve_cwd_project :: proc(app: ^App, cwd: string) -> (client.Project, string) {
 	text := strings.trim_space(cwd)
 	if len(text) == 0 {
 		return app_project(app), ""
 	}
-	project, err := open_project(app.config_dir, text)
-	if !is_ok(err) {
+	project, err := client.locate_project(app.config_dir, text)
+	if !client.is_ok(err) {
 		return {}, err.message
 	}
 	if !os.is_dir(project.root) {
@@ -353,8 +356,8 @@ api_sessions :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 // 出现在结果里，所以单独补一次。
 api_projects :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
-	discovered, err := list_projects(app.config_dir)
-	if !is_ok(err) {
+	discovered, err := client.list_projects(app.config_dir)
+	if !client.is_ok(err) {
 		api_error(response, 500, "internal_error", err.message)
 		return
 	}
@@ -404,11 +407,11 @@ api_projects :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 // 目录读取得到，使用调用方 allocator，函数内负责释放临时列表。
 session_entries :: proc(
 	app: ^App,
-	project: Project,
+	project: client.Project,
 	allocator := context.allocator,
 ) -> []Api_Session_Entry {
-	ids, ids_err := session_ids(project)
-	if !is_ok(ids_err) {
+	ids, ids_err := client.session_ids(project)
+	if !client.is_ok(ids_err) {
 		return nil
 	}
 	defer {
@@ -421,11 +424,11 @@ session_entries :: proc(
 	entries := make([dynamic]Api_Session_Entry, 0, len(ids), allocator)
 	for id in ids {
 		ts: i64 = 0
-		if info, stat_err := os.stat(session_file(project, id), context.temp_allocator); stat_err == nil {
+		if info, stat_err := os.stat(client.session_file(project, id), context.temp_allocator); stat_err == nil {
 			ts = time.time_to_unix_nano(info.modification_time) / 1_000_000
 		}
 		append(&entries, Api_Session_Entry{
-			// id 来自 session_ids 的临时列表，helper 返回前会释放；必须克隆到
+			// id 来自 client.session_ids 的临时列表，helper 返回前会释放；必须克隆到
 			// 调用方 allocator，否则响应序列化时读到的是悬空字符串。
 			session_id = strings.clone(id, allocator),
 			ts         = ts,
@@ -457,17 +460,17 @@ Type_Probe :: struct {
 	type: string `json:"type"`,
 }
 
-session_turn_count :: proc(project: Project, session_id: string) -> int {
-	data, err := read_transcript(project, session_id)
-	if !is_ok(err) {
+session_turn_count :: proc(project: client.Project, session_id: string) -> int {
+	data, err := client.read_transcript(project, session_id)
+	if !client.is_ok(err) {
 		return 0
 	}
 	defer delete(data, context.allocator)
 
 	count := 0
-	it := Line_Iterator{data = string(data)}
+	it := client.Line_Iterator{data = string(data)}
 	for {
-		line, more := next_line(&it)
+		line, more := client.next_line(&it)
 		if !more {
 			break
 		}
@@ -489,7 +492,7 @@ session_turn_count :: proc(project: Project, session_id: string) -> int {
 // - session_start 的 content_ref 解析成 content（缺失 blob 退化为 content_preview）
 // - message_end 的 text_ref 解析成 text、tool_use 的 input_ref 解析成 input
 //   （缺失 blob 分别退化为 text_preview / input_preview）
-// - tool_execution_start 增加 args_preview（与 ap-tui tool_args_text 相同规则）
+// - tool_execution_start 增加 args_preview（与 ap-tui client.tool_args_text 相同规则）
 // - tool_execution_end 超过 200 行/20KB 时换成 content_preview 并标记 content_truncated
 api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
 	app := (^App)(user)
@@ -504,21 +507,21 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 		api_error(response, 400, "invalid_cwd", message)
 		return
 	}
-	data, read_err := read_transcript(project, session_id)
-	if !is_ok(read_err) {
+	data, read_err := client.read_transcript(project, session_id)
+	if !client.is_ok(read_err) {
 		api_error(response, 404, "session_not_found", read_err.message)
 		return
 	}
 	defer delete(data, context.allocator)
 
 	events := make([dynamic]json.Value, 0, 32, context.temp_allocator)
-	it := Line_Iterator{data = string(data)}
+	it := client.Line_Iterator{data = string(data)}
 	for {
-		line, more := next_line(&it)
+		line, more := client.next_line(&it)
 		if !more {
 			break
 		}
-		ev, parsed := parse_event_line(line)
+		ev, parsed := protocol.parse_stream_event(line)
 		if !parsed {
 			continue
 		}
@@ -532,7 +535,7 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 	api_json(response, 200, Api_History{events = events[:]})
 }
 
-history_enrich_event :: proc(value: ^json.Value, ev: Event, project: Project) {
+history_enrich_event :: proc(value: ^json.Value, ev: protocol.Stream_Event, project: client.Project) {
 	obj, is_object := value.(json.Object)
 	if !is_object {
 		return
@@ -544,13 +547,13 @@ history_enrich_event :: proc(value: ^json.Value, ev: Event, project: Project) {
 		if _, has_content := obj["content"]; has_content {
 			return
 		}
-		if ref, has_ref := json_string_field(obj, "content_ref"); has_ref {
-			if blob, blob_err := blob_read(project, ref, context.temp_allocator); is_ok(blob_err) {
+		if ref, has_ref := protocol.json_string_field(obj, "content_ref"); has_ref {
+			if blob, blob_err := client.blob_read(project, ref, context.temp_allocator); client.is_ok(blob_err) {
 				json_object_set(&obj, "content", json.String(string(blob)))
 				return
 			}
 		}
-		if preview, has_preview := json_string_field(obj, "content_preview"); has_preview {
+		if preview, has_preview := protocol.json_string_field(obj, "content_preview"); has_preview {
 			json_object_set(&obj, "content", json.String(preview))
 		}
 	case "message_end":
@@ -563,7 +566,7 @@ history_enrich_event :: proc(value: ^json.Value, ev: Event, project: Project) {
 			if !block_is_object {
 				continue
 			}
-			block_type, _ := json_string_field(block, "type")
+			block_type, _ := protocol.json_string_field(block, "type")
 			switch block_type {
 			case "text":
 				history_resolve_text_block(&block, project)
@@ -574,12 +577,12 @@ history_enrich_event :: proc(value: ^json.Value, ev: Event, project: Project) {
 		}
 	case "tool_execution_start":
 		local := project
-		args_text := tool_args_text(ev, &local)
+		args_text := client.tool_args_text(ev, &local)
 		json_object_set(&obj, "args_preview", json.String(args_text))
 	case "tool_execution_end":
 		local := project
-		content, _ := tool_result_text(ev, &local)
-		preview, truncated := preview_content(content)
+		content, _ := client.tool_result_text(ev, &local)
+		preview, truncated := client.preview_content(content)
 		// 与 ap-tui 重放一致：超限结果只给预览窗口。为了让前端据此显示
 		// 「已截断」提示，截断时把完整 content 拿掉、改放 content_preview。
 		if truncated {
@@ -592,29 +595,29 @@ history_enrich_event :: proc(value: ^json.Value, ev: Event, project: Project) {
 	}
 }
 
-history_resolve_text_block :: proc(block: ^json.Object, project: Project) {
-	if _, has_text := json_string_field(block^, "text"); has_text {
+history_resolve_text_block :: proc(block: ^json.Object, project: client.Project) {
+	if _, has_text := protocol.json_string_field(block^, "text"); has_text {
 		return
 	}
-	if ref, has_ref := json_string_field(block^, "text_ref"); has_ref {
-		if blob, blob_err := blob_read(project, ref, context.temp_allocator); is_ok(blob_err) {
+	if ref, has_ref := protocol.json_string_field(block^, "text_ref"); has_ref {
+		if blob, blob_err := client.blob_read(project, ref, context.temp_allocator); client.is_ok(blob_err) {
 			json_object_set(block, "text", json.String(string(blob)))
 			return
 		}
 	}
-	if preview, has_preview := json_string_field(block^, "text_preview"); has_preview {
+	if preview, has_preview := protocol.json_string_field(block^, "text_preview"); has_preview {
 		json_object_set(block, "text", json.String(preview))
 	}
 }
 
 // tool_use 的 input 是结构化 JSON：blob 内容必须能整体解析；解析失败与
 // blob 缺失都退化为 input_preview（字符串），至少让前端能显示参数摘要。
-history_resolve_tool_input :: proc(block: ^json.Object, project: Project) {
+history_resolve_tool_input :: proc(block: ^json.Object, project: client.Project) {
 	if _, has_input := block["input"]; has_input {
 		return
 	}
-	if ref, has_ref := json_string_field(block^, "input_ref"); has_ref {
-		if blob, blob_err := blob_read(project, ref, context.temp_allocator); is_ok(blob_err) {
+	if ref, has_ref := protocol.json_string_field(block^, "input_ref"); has_ref {
+		if blob, blob_err := client.blob_read(project, ref, context.temp_allocator); client.is_ok(blob_err) {
 			if parsed, parse_err := json.parse_string(
 				string(blob),
 				.JSON,
@@ -626,7 +629,7 @@ history_resolve_tool_input :: proc(block: ^json.Object, project: Project) {
 			}
 		}
 	}
-	if preview, has_preview := json_string_field(block^, "input_preview"); has_preview {
+	if preview, has_preview := protocol.json_string_field(block^, "input_preview"); has_preview {
 		json_object_set(block, "input", json.String(preview))
 	}
 }

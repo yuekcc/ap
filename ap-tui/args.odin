@@ -1,5 +1,7 @@
 package tui
 
+import client "../ap/client"
+
 import "core:fmt"
 import "core:strconv"
 import "core:strings"
@@ -27,25 +29,25 @@ option_value :: proc(
 	inline: string,
 	has_inline: bool,
 	name: string,
-) -> (value: string, next: int, err: Error) {
+) -> (value: string, next: int, err: client.Error) {
 	if has_inline {
-		return inline, i + 1, ok_error()
+		return inline, i + 1, client.ok_error()
 	}
 	if i + 1 >= len(args) {
-		return "", i + 1, errorf("%s requires a value", name)
+		return "", i + 1, client.errorf("%s requires a value", name)
 	}
-	return args[i + 1], i + 2, ok_error()
+	return args[i + 1], i + 2, client.ok_error()
 }
 
-parse_positive_int :: proc(value, name: string) -> (int, Error) {
+parse_positive_int :: proc(value, name: string) -> (int, client.Error) {
 	n, ok := strconv.parse_int(value, 10)
 	if !ok || n <= 0 {
-		return 0, errorf("%s requires a positive integer", name)
+		return 0, client.errorf("%s requires a positive integer", name)
 	}
-	return n, ok_error()
+	return n, client.ok_error()
 }
 
-parse_args :: proc(args: []string) -> (Tui_Options, Error) {
+parse_args :: proc(args: []string) -> (Tui_Options, client.Error) {
 	opts := Tui_Options{}
 	i := 1
 	for i < len(args) {
@@ -68,66 +70,66 @@ parse_args :: proc(args: []string) -> (Tui_Options, Error) {
 			i += 1
 		case "-c", "--continue":
 			if has_inline {
-				return opts, errorf("%s does not take a value", name)
+				return opts, client.errorf("%s does not take a value", name)
 			}
 			opts.continue_session = true
 			i += 1
 		case "-s", "--session":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			if len(value) == 0 {
-				return opts, errorf("%s requires a session id", name)
+				return opts, client.errorf("%s requires a session id", name)
 			}
 			opts.session_id = value
 			i = next
 		case "--config-dir":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.config_dir = value
 			i = next
 		case "--agent-bin":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.agent_bin = value
 			i = next
 		case "--model":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.model = value
 			i = next
 		case "--agent":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.agent = value
 			i = next
 		case "--max-steps":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			n, nerr := parse_positive_int(value, name)
-			if !is_ok(nerr) {
+			if !client.is_ok(nerr) {
 				return opts, nerr
 			}
 			opts.max_steps = n
 			i = next
 		case "--max-tokens":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			n, nerr := parse_positive_int(value, name)
-			if !is_ok(nerr) {
+			if !client.is_ok(nerr) {
 				return opts, nerr
 			}
 			opts.max_tokens = n
@@ -139,14 +141,14 @@ parse_args :: proc(args: []string) -> (Tui_Options, Error) {
 			opts.no_color = true
 			i += 1
 		case:
-			return opts, errorf("unknown argument: %s", arg)
+			return opts, client.errorf("unknown argument: %s", arg)
 		}
 	}
 
 	if opts.session_id != nil && opts.continue_session {
-		return opts, errorf("-s/--session and -c/--continue are mutually exclusive")
+		return opts, client.errorf("-s/--session and -c/--continue are mutually exclusive")
 	}
-	return opts, ok_error()
+	return opts, client.ok_error()
 }
 
 print_usage :: proc() {

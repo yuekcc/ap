@@ -1,6 +1,7 @@
 package main
 
-import "../ap/platform"
+import client "../ap/client"
+
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -38,7 +39,7 @@ asset_etag :: proc(data: []byte, allocator := context.temp_allocator) -> string 
 }
 
 normalize_asset_name :: proc(name: string, allocator := context.allocator) -> string {
-	return platform.normalize_slashes(name, allocator)
+	return client.normalize_slashes(name, allocator)
 }
 
 make_assets :: proc(web_root: string) -> (Assets, string) {
@@ -56,8 +57,8 @@ make_assets :: proc(web_root: string) -> (Assets, string) {
 		return assets, ""
 	}
 
-	root, err := platform.canonicalize_path(web_root, true)
-	if !platform.is_ok(err) {
+	root, err := client.canonicalize_path(web_root, true)
+	if !client.is_ok(err) {
 		return {}, err.message
 	}
 	if !os.is_dir(root) {
@@ -132,12 +133,12 @@ within_root :: proc(root, target: string) -> bool {
 	return strings.has_prefix(target, prefix)
 }
 
-// platform.canonicalize_path 用 context.allocator；磁盘模式每个请求都要调用，
+// client.canonicalize_path 用 context.allocator；磁盘模式每个请求都要调用，
 // 临时把 allocator 指向 temp，避免静态文件服务持续泄漏。
-canonicalize_temp :: proc(path: string) -> (string, platform.Error) {
+canonicalize_temp :: proc(path: string) -> (string, client.Error) {
 	old_allocator := context.allocator
 	context.allocator = context.temp_allocator
-	result, err := platform.canonicalize_path(path, true)
+	result, err := client.canonicalize_path(path, true)
 	context.allocator = old_allocator
 	return result, err
 }
@@ -162,7 +163,7 @@ lookup_disk :: proc(root, name: string) -> Asset_Lookup {
 
 	// 解析符号链接后再检查是否仍在 web-root 内，防止 web-root 里的链接指向外部。
 	canonical, cerr := canonicalize_temp(candidate)
-	if !platform.is_ok(cerr) || !within_root(root, canonical) {
+	if !client.is_ok(cerr) || !within_root(root, canonical) {
 		return {status = 403}
 	}
 	stat, serr := os.stat(canonical, context.temp_allocator)

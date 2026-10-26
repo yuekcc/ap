@@ -1,5 +1,7 @@
 package main
 
+import client "../ap/client"
+
 import "base:runtime"
 import "core:fmt"
 import "core:net"
@@ -38,35 +40,35 @@ option_value :: proc(
 	inline: string,
 	has_inline: bool,
 	name: string,
-) -> (value: string, next: int, err: Error) {
+) -> (value: string, next: int, err: client.Error) {
 	if has_inline {
-		return inline, i + 1, ok_error()
+		return inline, i + 1, client.ok_error()
 	}
 	if i + 1 >= len(args) {
-		return "", i + 1, errorf("%s requires a value", name)
+		return "", i + 1, client.errorf("%s requires a value", name)
 	}
-	return args[i + 1], i + 2, ok_error()
+	return args[i + 1], i + 2, client.ok_error()
 }
 
-parse_positive_int :: proc(value, name: string) -> (int, Error) {
+parse_positive_int :: proc(value, name: string) -> (int, client.Error) {
 	n, ok := strconv.parse_int(value, 10)
 	if !ok || n <= 0 {
-		return 0, errorf("%s requires a positive integer", name)
+		return 0, client.errorf("%s requires a positive integer", name)
 	}
-	return n, ok_error()
+	return n, client.ok_error()
 }
 
-parse_port :: proc(value: string) -> (int, Error) {
+parse_port :: proc(value: string) -> (int, client.Error) {
 	n, ok := strconv.parse_int(value, 10)
 	if !ok || n <= 0 || n > 65535 {
-		return 0, errorf("--port requires an integer in 1..65535")
+		return 0, client.errorf("--port requires an integer in 1..65535")
 	}
-	return n, ok_error()
+	return n, client.ok_error()
 }
 
 // 与 ap-tui/args.odin 保持同一套解析风格：--opt=value 与 --opt value 都支持，
 // 布尔开关拒绝内联值。
-parse_args :: proc(args: []string) -> (Web_Options, Error) {
+parse_args :: proc(args: []string) -> (Web_Options, client.Error) {
 	opts := Web_Options {
 		port = DEFAULT_PORT,
 		host = DEFAULT_HOST,
@@ -86,127 +88,127 @@ parse_args :: proc(args: []string) -> (Web_Options, Error) {
 		switch name {
 		case "-h", "--help":
 			if has_inline {
-				return opts, errorf("%s does not take a value", name)
+				return opts, client.errorf("%s does not take a value", name)
 			}
 			opts.help = true
 			i += 1
 		case "--version":
 			if has_inline {
-				return opts, errorf("%s does not take a value", name)
+				return opts, client.errorf("%s does not take a value", name)
 			}
 			opts.version = true
 			i += 1
 		case "-c", "--continue":
 			if has_inline {
-				return opts, errorf("%s does not take a value", name)
+				return opts, client.errorf("%s does not take a value", name)
 			}
 			opts.continue_session = true
 			i += 1
 		case "-s", "--session":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			if len(value) == 0 {
-				return opts, errorf("%s requires a session id", name)
+				return opts, client.errorf("%s requires a session id", name)
 			}
 			opts.session_id = value
 			i = next
 		case "--port":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			port, perr := parse_port(value)
-			if !is_ok(perr) {
+			if !client.is_ok(perr) {
 				return opts, perr
 			}
 			opts.port = port
 			i = next
 		case "--host":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			if len(value) == 0 {
-				return opts, errorf("%s requires a host", name)
+				return opts, client.errorf("%s requires a host", name)
 			}
 			opts.host = value
 			opts.host_explicit = true
 			i = next
 		case "--web-root":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.web_root = value
 			i = next
 		case "--agent-bin":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.agent_bin = value
 			i = next
 		case "--model":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.model = value
 			i = next
 		case "--agent":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.agent = value
 			i = next
 		case "--max-steps":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			n, nerr := parse_positive_int(value, name)
-			if !is_ok(nerr) {
+			if !client.is_ok(nerr) {
 				return opts, nerr
 			}
 			opts.max_steps = n
 			i = next
 		case "--max-tokens":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			n, nerr := parse_positive_int(value, name)
-			if !is_ok(nerr) {
+			if !client.is_ok(nerr) {
 				return opts, nerr
 			}
 			opts.max_tokens = n
 			i = next
 		case "--config-dir":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.config_dir = value
 			i = next
 		case "--cwd":
 			value, next, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
+			if !client.is_ok(err) {
 				return opts, err
 			}
 			opts.cwd = value
 			i = next
 		case:
-			return opts, errorf("unknown argument: %s", arg)
+			return opts, client.errorf("unknown argument: %s", arg)
 		}
 	}
 
 	if opts.session_id != nil && opts.continue_session {
-		return opts, errorf("-s/--session and -c/--continue are mutually exclusive")
+		return opts, client.errorf("-s/--session and -c/--continue are mutually exclusive")
 	}
-	return opts, ok_error()
+	return opts, client.ok_error()
 }
 
 App :: struct {
@@ -216,7 +218,7 @@ App :: struct {
 	runner:      Runner,
 	config_dir:  string,
 	agent_bin:   string,
-	project:     Project,
+	project:     client.Project,
 	cwd:         string,
 	cwd_mu:      sync.Mutex, // 保护 cwd/project：pick 成功后会整体替换
 	picker_busy: i32, // 原子标志：同一时刻只允许一个目录对话框
@@ -305,7 +307,7 @@ app_shutdown :: proc(app: ^App) {
 	runner_shutdown(app)
 	// 关停时必须唤醒还阻塞在 SSE recv 上的连接线程，否则进程退出会留下悬挂线程。
 	sse_hub_destroy(&app.hub)
-	cleanup_jobs()
+	client.cleanup_jobs()
 }
 
 on_shutdown_signal :: proc(user: rawptr) {
@@ -368,10 +370,10 @@ shutdown_watcher_start :: proc() {
 main :: proc() {
 	// 必须在任何窗口/COM 对话框出现前设置：原生目录选择框按显示器 DPI 渲染。
 	setup_dpi_awareness()
-	setup_console()
-	args := normalize_args(os.args)
+	client.setup_console()
+	args := client.normalize_args(os.args)
 	opts, oerr := parse_args(args)
-	if !is_ok(oerr) {
+	if !client.is_ok(oerr) {
 		fmt.eprintln("ap-web: ", oerr.message)
 		fmt.eprintln("hint: run ap-web --help for usage")
 		os.exit(2)
@@ -400,8 +402,8 @@ main :: proc() {
 	if value, ok := opts.cwd.?; ok {
 		cwd_input = value
 	}
-	cwd, cwd_err := canonicalize_path(cwd_input, true)
-	if !is_ok(cwd_err) {
+	cwd, cwd_err := client.canonicalize_path(cwd_input, true)
+	if !client.is_ok(cwd_err) {
 		fmt.eprintln("ap-web: ", cwd_err.message)
 		os.exit(2)
 	}
@@ -412,18 +414,18 @@ main :: proc() {
 		}
 	}
 
-	config_dir, config_err := default_config_dir(opts.config_dir)
-	if !is_ok(config_err) {
+	config_dir, config_err := client.default_config_dir(opts.config_dir)
+	if !client.is_ok(config_err) {
 		fmt.eprintln("ap-web: ", config_err.message)
 		os.exit(2)
 	}
-	project, project_err := open_project(config_dir, cwd)
-	if !is_ok(project_err) {
+	project, project_err := client.locate_project(config_dir, cwd)
+	if !client.is_ok(project_err) {
 		fmt.eprintln("ap-web: ", project_err.message)
 		os.exit(2)
 	}
-	agent_bin, agent_err := resolve_agent_bin(opts.agent_bin)
-	if !is_ok(agent_err) {
+	agent_bin, agent_err := client.resolve_agent_bin(opts.agent_bin)
+	if !client.is_ok(agent_err) {
 		fmt.eprintln("ap-web: ", agent_err.message)
 		os.exit(2)
 	}
@@ -442,14 +444,14 @@ main :: proc() {
 	runner_init(&app)
 
 	if id, has_session := opts.session_id.?; has_session {
-		if !os.exists(session_file(project, id)) {
+		if !os.exists(client.session_file(project, id)) {
 			fmt.eprintf("ap-web: session %q not found in project %s\n", id, project.hash)
 			os.exit(2)
 		}
 		_ = runner_session_resume(&app, id, cwd)
 	} else if opts.continue_session {
-		latest, latest_err := find_latest_root_session(project)
-		if is_ok(latest_err) {
+		latest, latest_err := client.find_latest_root_session(project)
+		if client.is_ok(latest_err) {
 			_ = runner_session_resume(&app, latest, cwd)
 			delete(latest, context.allocator)
 		} else {

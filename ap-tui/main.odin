@@ -1,5 +1,7 @@
 package tui
 
+import client "../ap/client"
+
 import "core:bufio"
 import "core:fmt"
 import "core:io"
@@ -9,7 +11,7 @@ import "core:terminal"
 
 App :: struct {
 	options:    Tui_Options,
-	project:    Project,
+	project:    client.Project,
 	renderer:   Renderer,
 	agent_bin:  string,
 	session_id: string,
@@ -126,10 +128,10 @@ run_input_loop :: proc(app: ^App) {
 }
 
 main :: proc() {
-	setup_console()
-	args := normalize_args(os.args)
+	client.setup_console()
+	args := client.normalize_args(os.args)
 	opts, oerr := parse_args(args)
-	if !is_ok(oerr) {
+	if !client.is_ok(oerr) {
 		fmt.eprintln("ap-tui: ", oerr.message)
 		fmt.eprintln("hint: run ap-tui --help for usage")
 		os.exit(2)
@@ -143,23 +145,23 @@ main :: proc() {
 		return
 	}
 
-	config_dir, cerr := default_config_dir(opts.config_dir)
-	if !is_ok(cerr) {
+	config_dir, cerr := client.default_config_dir(opts.config_dir)
+	if !client.is_ok(cerr) {
 		fmt.eprintln("ap-tui: ", cerr.message)
 		os.exit(2)
 	}
-	cwd, cwderr := canonicalize_path(".", true)
-	if !is_ok(cwderr) {
+	cwd, cwderr := client.canonicalize_path(".", true)
+	if !client.is_ok(cwderr) {
 		fmt.eprintln("ap-tui: ", cwderr.message)
 		os.exit(2)
 	}
-	project, perr := open_project(config_dir, cwd)
-	if !is_ok(perr) {
+	project, perr := client.locate_project(config_dir, cwd)
+	if !client.is_ok(perr) {
 		fmt.eprintln("ap-tui: ", perr.message)
 		os.exit(2)
 	}
-	agent_bin, aerr := resolve_agent_bin(opts.agent_bin)
-	if !is_ok(aerr) {
+	agent_bin, aerr := client.resolve_agent_bin(opts.agent_bin)
+	if !client.is_ok(aerr) {
 		fmt.eprintln("ap-tui: ", aerr.message)
 		os.exit(2)
 	}
@@ -181,19 +183,19 @@ main :: proc() {
 	}
 
 	if id, ok := opts.session_id.?; ok {
-		if !os.exists(session_file(project, id)) {
+		if !os.exists(client.session_file(project, id)) {
 			fmt.eprintfln(
 				"ap-tui: session %q not found in project %s (expected %s)",
 				id,
 				project.hash,
-				session_file(project, id),
+				client.session_file(project, id),
 			)
 			os.exit(2)
 		}
 		remember_session(&app, id)
 	} else if opts.continue_session {
-		found, ferr := find_latest_root_session(project)
-		if is_ok(ferr) {
+		found, ferr := client.find_latest_root_session(project)
+		if client.is_ok(ferr) {
 			remember_session(&app, found)
 			delete(found, context.allocator)
 		} else {
@@ -204,7 +206,7 @@ main :: proc() {
 
 	print_banner(&app)
 	if len(app.session_id) > 0 {
-		if err := replay_session(&app, app.session_id); !is_ok(err) {
+		if err := replay_session(&app, app.session_id); !client.is_ok(err) {
 			renderer_note(&app, err.message)
 		}
 	}

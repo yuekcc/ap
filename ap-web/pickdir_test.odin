@@ -1,5 +1,7 @@
 package main
 
+import client "../ap/client"
+
 import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
@@ -52,7 +54,7 @@ test_pick_cancelled_returns_409_without_touching_cwd :: proc(t: ^testing.T) {
 	defer sse_hub_destroy(&app.hub)
 	defer runner_shutdown(&app)
 
-	before, before_err := canonicalize_path(".", true)
+	before, before_err := client.canonicalize_path(".", true)
 	testing.expect_value(t, before_err.message, "")
 
 	response := api_call(&app, .Post, "/api/cwd/pick")
@@ -64,7 +66,7 @@ test_pick_cancelled_returns_409_without_touching_cwd :: proc(t: ^testing.T) {
 	testing.expect_value(t, app_cwd(&app), dir)
 	testing.expect_value(t, sync.atomic_load(&app.picker_busy), i32(0))
 
-	after, after_err := canonicalize_path(".", true)
+	after, after_err := client.canonicalize_path(".", true)
 	testing.expect_value(t, after_err.message, "")
 	testing.expect_value(t, after, before)
 }
@@ -76,10 +78,10 @@ test_pick_success_returns_canonical_cwd_without_switching_project :: proc(t: ^te
 
 	selected := fmt.aprintf("%s/selected", base)
 	os.make_directory_all(selected)
-	expected, expected_err := canonicalize_path(selected, true)
+	expected, expected_err := client.canonicalize_path(selected, true)
 	testing.expect_value(t, expected_err.message, "")
 
-	original, original_err := canonicalize_path(".", true)
+	original, original_err := client.canonicalize_path(".", true)
 	testing.expect_value(t, original_err.message, "")
 	defer os.chdir(original)
 
@@ -99,7 +101,7 @@ test_pick_success_returns_canonical_cwd_without_switching_project :: proc(t: ^te
 	testing.expect_value(t, app_cwd(&app), base)
 	project := app_project(&app)
 	testing.expect_value(t, project.root, base)
-	current, current_err := canonicalize_path(".", true)
+	current, current_err := client.canonicalize_path(".", true)
 	testing.expect_value(t, current_err.message, "")
 	testing.expect_value(t, current, original)
 	session := runner_session(&app)
@@ -198,7 +200,7 @@ test_pick_concurrent_duplicate_returns_busy :: proc(t: ^testing.T) {
 	selected := fmt.aprintf("%s/selected", base)
 	os.make_directory_all(selected)
 
-	original, original_err := canonicalize_path(".", true)
+	original, original_err := client.canonicalize_path(".", true)
 	testing.expect_value(t, original_err.message, "")
 	defer os.chdir(original)
 

@@ -1,6 +1,7 @@
 package tui
 
-import "core:encoding/json"
+import client "../ap/client"
+import protocol "../ap/protocol"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -32,52 +33,7 @@ test_write_file :: proc(path, content: string) {
 
 @(test)
 test_fnv32a_known_value :: proc(t: ^testing.T) {
-	testing.expect_value(t, fnv32a_hex(transmute([]byte)string("hello")), "4f9f2cab")
-}
-
-@(test)
-test_parse_stream_events :: proc(t: ^testing.T) {
-	ev, ok := parse_event_line(`{"type":"message_update","message_id":"m1","delta":{"text":"hi"}}`)
-	testing.expect(t, ok)
-	testing.expect_value(t, ev.type, "message_update")
-	text, has_text := ev.delta.text.?
-	testing.expect(t, has_text)
-	testing.expect_value(t, text, "hi")
-
-	start, ok2 := parse_event_line(`{"type":"session_start","session_id":"ses_x","content":"sys","parent_session_id":null}`)
-	testing.expect(t, ok2)
-	testing.expect_value(t, start.session_id, "ses_x")
-	_, has_parent := start.parent_session_id.?
-	testing.expect(t, !has_parent)
-}
-
-@(test)
-test_format_tool_args :: proc(t: ^testing.T) {
-	value: json.Value
-	args_json := `{"file_path":"ap/main.odin","limit":20,"ok":true}`
-	err := json.unmarshal(transmute([]byte)args_json, &value)
-	testing.expect_value(t, err, nil)
-	testing.expect_value(t, format_args(value, nil), "file_path=ap/main.odin, limit=20, ok=true")
-}
-
-@(test)
-test_preview_content_truncates :: proc(t: ^testing.T) {
-	b := strings.builder_make()
-	defer strings.builder_destroy(&b)
-	for i in 0 ..< 10 {
-		fmt.sbprintf(&b, "line %d\n", i)
-	}
-	out, truncated := preview_content(strings.to_string(b))
-	testing.expect(t, !truncated)
-	testing.expect(t, strings.contains(out, "line 9"))
-
-	_, truncated_many_lines := preview_content(strings.repeat("x\n", 300, context.temp_allocator))
-	testing.expect(t, truncated_many_lines)
-
-	long := strings.repeat("y", 30000, context.temp_allocator)
-	out_long, truncated_bytes := preview_content(long)
-	testing.expect(t, truncated_bytes)
-	testing.expect(t, len(out_long) <= 20000)
+	testing.expect_value(t, client.fnv32a_hex(transmute([]byte)string("hello")), "4f9f2cab")
 }
 
 test_render_to_file :: proc(
@@ -88,12 +44,12 @@ test_render_to_file :: proc(
 	dir := test_temp_dir("render")
 	defer os.remove_all(dir)
 
-	project := Project {
+	project := client.Project {
 		config_dir = dir,
-		root = dir,
-		hash = "test",
-		dir = dir,
-		blobs_dir = fmt.aprintf("%s/blobs", dir),
+		root       = dir,
+		hash       = "test",
+		dir        = dir,
+		blobs_dir  = fmt.aprintf("%s/blobs", dir),
 	}
 	os.make_directory_all(project.blobs_dir)
 
@@ -105,13 +61,13 @@ test_render_to_file :: proc(
 	}
 
 	r := Renderer {
-		out = file,
-		color = false,
-		project = &project,
+		out           = file,
+		color         = false,
+		project       = &project,
 		at_line_start = true,
 	}
 	for line in events {
-		ev, ok := parse_event_line(line)
+		ev, ok := protocol.parse_stream_event(line)
 		if !ok {
 			continue
 		}
@@ -172,7 +128,7 @@ test_render_history :: proc(t: ^testing.T) {
 test_find_latest_root_session :: proc(t: ^testing.T) {
 	dir := test_temp_dir("sessions")
 	defer os.remove_all(dir)
-	project := Project {
+	project := client.Project {
 		config_dir = dir,
 		root = dir,
 		hash = "test",
@@ -186,7 +142,7 @@ test_find_latest_root_session :: proc(t: ^testing.T) {
 	test_write_file(fmt.tprintf("%s/ses_root.jsonl", dir), strings.concatenate({root_line, "\n"}))
 	test_write_file(fmt.tprintf("%s/ses_child.jsonl", dir), strings.concatenate({child_line, "\n"}))
 
-	found, err := find_latest_root_session(project)
+	found, err := client.find_latest_root_session(project)
 	testing.expect_value(t, err.message, "")
 	testing.expect_value(t, found, "ses_root")
 }
@@ -195,7 +151,7 @@ test_find_latest_root_session :: proc(t: ^testing.T) {
 test_replay_session :: proc(t: ^testing.T) {
 	dir := test_temp_dir("replay")
 	defer os.remove_all(dir)
-	project := Project {
+	project := client.Project {
 		config_dir = dir,
 		root = dir,
 		hash = "test",
@@ -246,7 +202,7 @@ test_replay_session :: proc(t: ^testing.T) {
 test_replay_session_resolves_blobs :: proc(t: ^testing.T) {
 	dir := test_temp_dir("blob")
 	defer os.remove_all(dir)
-	project := Project {
+	project := client.Project {
 		config_dir = dir,
 		root = dir,
 		hash = "test",
@@ -296,11 +252,12 @@ test_replay_session_resolves_blobs :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_on_stdout_line_remembers_session :: proc(t: ^testing.T) {
+test_on_agent_event_remembers_session :: proc(t: ^testing.T) {
 	app := App{}
-	on_stdout_line(
-		&app,
+	ev, ok := protocol.parse_stream_event(
 		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_x","content":"sys","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null}`,
 	)
+	testing.expect(t, ok)
+	on_agent_event(&app, ev)
 	testing.expect_value(t, app.session_id, "ses_x")
 }

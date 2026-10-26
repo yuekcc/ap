@@ -1,5 +1,5 @@
 #+build windows
-package main
+package platform
 
 import "core:sync"
 import "core:testing"

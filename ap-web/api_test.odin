@@ -1,6 +1,8 @@
 package main
 
-import "../ap/platform"
+import client "../ap/client"
+import protocol "../ap/protocol"
+
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -48,7 +50,7 @@ api_json_field :: proc(t: ^testing.T, body: string, key: string) -> (json.Value,
 
 // 只读 fixture：project 目录直接指到临时目录，方便塞 fake transcript/blob。
 api_fixture_setup :: proc(t: ^testing.T, app: ^App, dir: string) {
-	app.project = Project {
+	app.project = client.Project {
 		config_dir = dir,
 		root       = dir,
 		hash       = "test",
@@ -225,12 +227,12 @@ test_api_sessions_list :: proc(t: ^testing.T) {
 	os.make_directory_all(app.project.dir)
 
 	test_write_file(
-		session_file(app.project, "ses_old"),
+		client.session_file(app.project, "ses_old"),
 		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_old"}` + "\n" +
 		`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}` + "\n",
 	)
 	test_write_file(
-		session_file(app.project, "ses_new"),
+		client.session_file(app.project, "ses_new"),
 		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_new"}` + "\n" +
 		`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}` + "\n" +
 		`{"v":1,"seq":2,"ts":3,"type":"turn_end","turn":1,"stop_reason":"stop"}` + "\n" +
@@ -255,11 +257,11 @@ test_api_sessions_list :: proc(t: ^testing.T) {
 }
 
 // 造一个 ap project：真实 root + config_dir/projects/<hash>/path.txt + project 目录。
-test_make_project :: proc(t: ^testing.T, config_dir, root: string) -> Project {
+test_make_project :: proc(t: ^testing.T, config_dir, root: string) -> client.Project {
 	os.make_directory_all(root)
-	canonical, canonical_err := canonicalize_path(root, true)
+	canonical, canonical_err := client.canonicalize_path(root, true)
 	testing.expect_value(t, canonical_err.message, "")
-	project, project_err := open_project(config_dir, canonical)
+	project, project_err := client.locate_project(config_dir, canonical)
 	testing.expect_value(t, project_err.message, "")
 	os.make_directory_all(project.dir)
 	test_write_file(fmt.tprintf("%s/path.txt", project.dir), canonical)
@@ -278,12 +280,12 @@ test_api_projects_and_cwd_scoped_endpoints :: proc(t: ^testing.T) {
 	project_b := test_make_project(t, config_dir, fmt.aprintf("%s/b", base))
 
 	test_write_file(
-		session_file(project_a, "ses_a"),
+		client.session_file(project_a, "ses_a"),
 		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_a"}` + "\n" +
 		`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}` + "\n",
 	)
 	test_write_file(
-		session_file(project_b, "ses_b"),
+		client.session_file(project_b, "ses_b"),
 		`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_b"}` + "\n" +
 		`{"v":1,"seq":1,"ts":2,"type":"turn_start","turn":1}` + "\n" +
 		`{"v":1,"seq":2,"ts":3,"type":"turn_end","turn":1,"stop_reason":"stop"}` + "\n" +
@@ -382,18 +384,18 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	defer runner_shutdown(&app)
 	os.make_directory_all(app.project.blobs_dir)
 
-	text_sha := platform.sha256_hex(transmute([]byte)string(HISTORY_BLOB_TEXT))
-	args_sha := platform.sha256_hex(transmute([]byte)string(HISTORY_ARGS_BLOB))
-	test_write_file(blob_file(app.project, text_sha), HISTORY_BLOB_TEXT)
-	test_write_file(blob_file(app.project, args_sha), HISTORY_ARGS_BLOB)
+	text_sha := client.sha256_hex(transmute([]byte)string(HISTORY_BLOB_TEXT))
+	args_sha := client.sha256_hex(transmute([]byte)string(HISTORY_ARGS_BLOB))
+	test_write_file(client.blob_file(app.project, text_sha), HISTORY_BLOB_TEXT)
+	test_write_file(client.blob_file(app.project, args_sha), HISTORY_ARGS_BLOB)
 
 	big := strings.builder_make(context.temp_allocator)
 	for i in 0 ..< 300 {
 		fmt.sbprintf(&big, "line-%03d\n", i)
 	}
 	big_text := strings.to_string(big)
-	big_sha := platform.sha256_hex(transmute([]byte)big_text)
-	test_write_file(blob_file(app.project, big_sha), big_text)
+	big_sha := client.sha256_hex(transmute([]byte)big_text)
+	test_write_file(client.blob_file(app.project, big_sha), big_text)
 
 	missing_sha := strings.repeat("0", 64, context.temp_allocator)
 
@@ -426,7 +428,7 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 		},
 		context.temp_allocator,
 	)
-	test_write_file(session_file(app.project, "ses_hist"), transcript)
+	test_write_file(client.session_file(app.project, "ses_hist"), transcript)
 
 	response := api_call(&app, .Get, "/api/history", "session_id=ses_hist")
 	testing.expect_value(t, response.status, 200)
@@ -438,7 +440,7 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 
 	session_start, has_session_start := history_event(history.events, "session_start")
 	testing.expect(t, has_session_start)
-	session_content, session_content_ok := json_string_field(session_start, "content")
+	session_content, session_content_ok := protocol.json_string_field(session_start, "content")
 	testing.expect(t, session_content_ok)
 	testing.expect_value(t, session_content, HISTORY_BLOB_TEXT)
 
@@ -448,12 +450,12 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	testing.expect(t, blocks_ok)
 	if len(blocks) == 4 {
 		first, _ := blocks[0].(json.Object)
-		text, text_ok := json_string_field(first, "text")
+		text, text_ok := protocol.json_string_field(first, "text")
 		testing.expect(t, text_ok)
 		testing.expect_value(t, text, HISTORY_BLOB_TEXT)
 
 		second, _ := blocks[1].(json.Object)
-		fallback, fallback_ok := json_string_field(second, "text")
+		fallback, fallback_ok := protocol.json_string_field(second, "text")
 		testing.expect(t, fallback_ok)
 		testing.expect_value(t, fallback, "fallback preview")
 
@@ -462,13 +464,13 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 		testing.expect(t, tool_use_ok)
 		input, input_ok := tool_use["input"].(json.Object)
 		testing.expect(t, input_ok)
-		file_path, path_ok := json_string_field(input, "file_path")
+		file_path, path_ok := protocol.json_string_field(input, "file_path")
 		testing.expect(t, path_ok)
 		testing.expect_value(t, file_path, "x.txt")
 
 		missing_input, missing_input_ok := blocks[3].(json.Object)
 		testing.expect(t, missing_input_ok)
-		preview_input, preview_input_ok := json_string_field(missing_input, "input")
+		preview_input, preview_input_ok := protocol.json_string_field(missing_input, "input")
 		testing.expect(t, preview_input_ok)
 		testing.expect_value(t, preview_input, "partial input")
 	} else {
@@ -477,7 +479,7 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 
 	tool_start, has_tool_start := history_event(history.events, "tool_execution_start")
 	testing.expect(t, has_tool_start)
-	args_preview, args_preview_ok := json_string_field(tool_start, "args_preview")
+	args_preview, args_preview_ok := protocol.json_string_field(tool_start, "args_preview")
 	testing.expect(t, args_preview_ok)
 	testing.expect_value(t, args_preview, HISTORY_ARGS_BLOB)
 
@@ -486,7 +488,7 @@ test_api_history_resolves_refs_and_truncates :: proc(t: ^testing.T) {
 	// 截断时不再内联完整 content，前端据此显示「已截断」提示。
 	_, has_inline_content := tool_end["content"]
 	testing.expect(t, !has_inline_content)
-	content_preview, preview_ok := json_string_field(tool_end, "content_preview")
+	content_preview, preview_ok := protocol.json_string_field(tool_end, "content_preview")
 	testing.expect(t, preview_ok)
 	testing.expect(t, strings.contains(content_preview, "line-199\n"))
 	testing.expect(t, !strings.contains(content_preview, "line-200\n"))
@@ -508,7 +510,7 @@ history_event :: proc(events: []json.Value, typ: string) -> (json.Object, bool) 
 		if !is_object {
 			continue
 		}
-		if value, has := json_string_field(obj, "type"); has && value == typ {
+		if value, has := protocol.json_string_field(obj, "type"); has && value == typ {
 			return obj, true
 		}
 	}

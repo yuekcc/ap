@@ -1,5 +1,6 @@
 package main
 
+import client "../ap/client"
 import protocol "../ap/protocol"
 import "base:runtime"
 import "core:fmt"
@@ -43,7 +44,7 @@ Session_Runtime :: struct {
 	cwd:        string, // 该 session 所属 project 的根目录（工作目录）
 	running:    bool,
 	turn:       Maybe(int), // 最近一次 turn_start/turn_end 的 turn 号
-	cancel:     Agent_Cancel_Token,
+	cancel:     client.Cancel_Token,
 	// 已结束但还没回收的 turn 线程句柄。同一 session 下一轮开始前或关停时
 	// join + destroy，否则每轮都会泄漏 Thread 结构体与平台线程句柄。
 	thread:     ^thread.Thread,
@@ -63,7 +64,7 @@ Turn_Job :: struct {
 	app:          ^App,
 	key:          string, // Session_Runtime.key（owner）
 	session_id:   string, // 当前已知的真实 session id（owner，session_start 后更新）
-	options:      Turn_Options,
+	options:      client.Turn_Options,
 	prompt:       string,
 	stop_reason:  string, // 最后一条 turn_end.stop_reason
 	session_end:  string, // 最后一条 session_end.reason（turn_end 缺失时兜底）
@@ -407,7 +408,7 @@ runner_cancel :: proc(app: ^App, key := "") -> bool {
 	if rt == nil || !rt.running {
 		return false
 	}
-	agent_cancel_token_cancel(&rt.cancel)
+	client.cancel_token_cancel(&rt.cancel)
 	return true
 }
 
@@ -417,7 +418,7 @@ runner_shutdown :: proc(app: ^App) {
 	app.runner.exiting = true
 	for rt in app.runner.sessions {
 		if rt.running {
-			agent_cancel_token_cancel(&rt.cancel)
+			client.cancel_token_cancel(&rt.cancel)
 		}
 	}
 	sync.mutex_unlock(&app.runner.mu)
@@ -495,7 +496,7 @@ free_job :: proc(job: ^Turn_Job) {
 
 // 每个 stdout 事件：原始行按 session 广播 + 记录 session 指针与 turn_done
 // 需要的信息。
-runner_on_event_line :: proc(user: rawptr, ev: Event, line: string) {
+runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: string) {
 	job := (^Turn_Job)(user)
 	app := job.app
 
@@ -564,11 +565,11 @@ runner_thread :: proc(user: rawptr) {
 	job := (^Turn_Job)(user)
 	app := job.app
 
-	callbacks := Turn_Callbacks {
+	callbacks := client.Turn_Callbacks {
 		user          = rawptr(job),
 		on_event_line = runner_on_event_line,
 	}
-	result := pump_agent(&job.options, job.prompt, callbacks)
+	result := client.turn_run(&job.options, job.prompt, callbacks)
 
 	// session 指针已在每条 session_start 回调里更新；这里不再覆盖，
 	// 否则用户 turn 中调 /api/session/new 清掉的指针会被重新写回。

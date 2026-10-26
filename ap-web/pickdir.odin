@@ -1,5 +1,7 @@
 package main
 
+import client "../ap/client"
+
 import "base:runtime"
 import "core:fmt"
 import "core:os"
@@ -107,7 +109,7 @@ app_cwd :: proc(app: ^App) -> string {
 	return app.cwd
 }
 
-app_project :: proc(app: ^App) -> Project {
+app_project :: proc(app: ^App) -> client.Project {
 	sync.mutex_lock(&app.cwd_mu)
 	defer sync.mutex_unlock(&app.cwd_mu)
 	return app.project
@@ -137,8 +139,8 @@ api_cwd_pick :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respo
 
 	switch result.status {
 	case .Ok:
-		canonical, canonical_err := canonicalize_path(result.path, true)
-		if !is_ok(canonical_err) {
+		canonical, canonical_err := client.canonicalize_path(result.path, true)
+		if !client.is_ok(canonical_err) {
 			api_error(response, 500, "cwd_failed", canonical_err.message)
 			return
 		}

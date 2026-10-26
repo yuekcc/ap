@@ -1,40 +1,31 @@
-package main
+package client
 
-import protocol "../ap/protocol"
+import "../protocol"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
-Usage :: protocol.Usage
-Tool_Call_Delta :: protocol.Tool_Call_Delta
-Delta :: protocol.Delta
-
-// stream-json 的 transcript/stream 事件在客户端里共用一个宽松结构。
-Event :: protocol.Stream_Event
-
-parse_event_line :: protocol.parse_stream_event
-json_string_field :: protocol.json_string_field
-content_string :: protocol.content_string
+// 前端历史富化用的事件 / blob 辅助。纯展示逻辑，不参与 agent 运行。
 
 event_text_block :: proc(block: json.Object, project: ^Project) -> (string, bool) {
-	if typ, ok := json_string_field(block, "type"); !ok || typ != "text" {
+	if typ, ok := protocol.json_string_field(block, "type"); !ok || typ != "text" {
 		return "", false
 	}
-	if text, ok := json_string_field(block, "text"); ok {
+	if text, ok := protocol.json_string_field(block, "text"); ok {
 		return text, true
 	}
-	if ref, ok := json_string_field(block, "text_ref"); ok && project != nil {
+	if ref, ok := protocol.json_string_field(block, "text_ref"); ok && project != nil {
 		if data, err := blob_read(project^, ref, context.temp_allocator); is_ok(err) {
 			return string(data), true
 		}
 	}
-	if preview, ok := json_string_field(block, "text_preview"); ok {
+	if preview, ok := protocol.json_string_field(block, "text_preview"); ok {
 		return preview, true
 	}
 	return "", false
 }
 
-message_texts :: proc(ev: Event, project: ^Project) -> []string {
+message_texts :: proc(ev: protocol.Stream_Event, project: ^Project) -> []string {
 	out := make([dynamic]string, 0, 4, context.temp_allocator)
 	blocks, ok := ev.content.(json.Array)
 	if !ok {
@@ -52,8 +43,8 @@ message_texts :: proc(ev: Event, project: ^Project) -> []string {
 	return out[:]
 }
 
-user_message_text :: proc(ev: Event) -> string {
-	text, _ := content_string(ev.content)
+user_message_text :: proc(ev: protocol.Stream_Event) -> string {
+	text, _ := protocol.content_string(ev.content)
 	return text
 }
 
@@ -155,7 +146,7 @@ format_args :: proc(value: json.Value, project: ^Project) -> string {
 }
 
 // 工具参数超过阈值时会落 blob。这里只需要展示用，优先 inline args，其次 blob。
-tool_args_text :: proc(ev: Event, project: ^Project) -> string {
+tool_args_text :: proc(ev: protocol.Stream_Event, project: ^Project) -> string {
 	if ref, ok := ev.args_ref.?; ok && project != nil {
 		if data, err := blob_read(project^, ref, context.temp_allocator); is_ok(err) {
 			out, _ := truncate_utf8(string(data), 240)
@@ -169,13 +160,13 @@ tool_args_text :: proc(ev: Event, project: ^Project) -> string {
 	return single_line(format_args(ev.args, project))
 }
 
-tool_result_text :: proc(ev: Event, project: ^Project) -> (string, bool) {
+tool_result_text :: proc(ev: protocol.Stream_Event, project: ^Project) -> (string, bool) {
 	if ref, ok := ev.content_ref.?; ok && project != nil {
 		if data, err := blob_read(project^, ref, context.temp_allocator); is_ok(err) {
 			return string(data), true
 		}
 	}
-	if text, ok := content_string(ev.content); ok {
+	if text, ok := protocol.content_string(ev.content); ok {
 		return text, true
 	}
 	if preview, ok := ev.content_preview.?; ok {

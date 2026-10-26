@@ -1,5 +1,8 @@
 package tui
 
+import client "../ap/client"
+import protocol "../ap/protocol"
+
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -20,7 +23,7 @@ Event_Mode :: enum {
 Renderer :: struct {
 	out:                   ^os.File,
 	color:                 bool,
-	project:               ^Project,
+	project:               ^client.Project,
 	at_line_start:         bool,
 	assistant_active:      bool,
 	message_had_text_delta: bool,
@@ -32,7 +35,7 @@ write_text :: proc(r: ^Renderer, text: string) {
 	if len(text) == 0 {
 		return
 	}
-	_ = write_all(r.out, transmute([]byte)text)
+	_ = client.write_all(r.out, transmute([]byte)text)
 	r.at_line_start = text[len(text) - 1] == '\n'
 }
 
@@ -40,7 +43,7 @@ write_escape :: proc(r: ^Renderer, code: string) {
 	if !r.color || len(code) == 0 {
 		return
 	}
-	_ = write_all(r.out, transmute([]byte)code)
+	_ = client.write_all(r.out, transmute([]byte)code)
 }
 
 paint :: proc(r: ^Renderer, code, text: string) {
@@ -152,7 +155,7 @@ tool_end :: proc(
 	}
 
 	if ok && !r.tool_had_update && has_content && len(content) > 0 {
-		preview, truncated := preview_content(content)
+		preview, truncated := client.preview_content(content)
 		write_indented_dim(r, preview)
 		if truncated {
 			write_indented_dim(r, "… (truncated; full content is in the transcript)\n")
@@ -211,11 +214,11 @@ render_turn_end :: proc(r: ^Renderer, stop_reason: string) {
 	ensure_line_start(r)
 }
 
-render_event :: proc(r: ^Renderer, ev: Event, mode: Event_Mode) {
+render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) {
 	switch ev.type {
 	case "user_message":
 		if mode == .History {
-			user_message(r, user_message_text(ev))
+			user_message(r, client.user_message_text(ev))
 		}
 	case "message_start":
 		if mode == .Live {
@@ -232,20 +235,20 @@ render_event :: proc(r: ^Renderer, ev: Event, mode: Event_Mode) {
 		}
 	case "message_end":
 		if mode == .History || !r.message_had_text_delta {
-			for text in message_texts(ev, r.project) {
+			for text in client.message_texts(ev, r.project) {
 				assistant_text(r, text)
 			}
 		}
 		finish_assistant(r)
 		r.message_had_text_delta = false
 	case "tool_execution_start":
-		tool_start(r, ev.name, tool_args_text(ev, r.project))
+		tool_start(r, ev.name, client.tool_args_text(ev, r.project))
 	case "tool_execution_update":
 		if mode == .Live {
 			tool_update(r, ev.chunk)
 		}
 	case "tool_execution_end":
-		content, has_content := tool_result_text(ev, r.project)
+		content, has_content := client.tool_result_text(ev, r.project)
 		err := ""
 		if e, ok := ev.error.?; ok {
 			err = e
