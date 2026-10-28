@@ -188,7 +188,7 @@ Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 
 
 ## 实现约束（Odin）
 
-以下是在 Odin `dev-2026-09-nightly` 上核实过的约束，实现前必须按此规划：
+以下是在 Odin `dev-2026-10-nightly` 上核实过的约束，实现前必须按此规划：
 
 1. **HTTP/TLS**：`core:net` 只有 socket，没有 HTTP 客户端，也没有 TLS 包。统一走 `vendor:curl`：
    - Windows 使用随 Odin 分发的静态 `lib/libcurl.lib`（8.17.0，Schannel，系统 CA），可保持单 exe

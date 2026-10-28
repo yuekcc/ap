@@ -18,7 +18,7 @@ v1 已实现：
 
 ## 环境
 
-- Odin nightly。开发与验证使用 `dev-2026-09-nightly:a2fb372`；nightly 的 stdlib 会变，升级 Odin 后请重新跑测试。
+- Odin nightly。开发与验证使用 `dev-2026-10-nightly:84bc3fc`；nightly 的 stdlib 会变，升级 Odin 后请重新跑测试。
 - Windows 需要 Git for Windows（提供 `bash.exe`）。ap 会跳过 `C:\Windows\System32` 下的 WSL `bash.exe`，优先使用 PATH 或常见 Git 安装位置；也可以用 `AP_BASH` 指定绝对路径。
 - Windows 通过 `vendor:curl` 静态链接随 Odin 分发的 libcurl，产物是单个 exe。
 - Linux / macOS 链接系统 libcurl（`system:curl`）；构建和运行需要系统已安装 libcurl 开发包。
