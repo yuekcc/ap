@@ -1,4 +1,4 @@
-package ap
+package apcore
 
 import "engine"
 import "platform"

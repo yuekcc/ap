@@ -6,7 +6,7 @@ import "core:strings"
 
 // 定位并拼装 ap 子进程。每轮 turn 都启动一个新的 ap 进程。
 
-// 目录 ap/ 与 Unix 二进制 ap 同名；查找 agent 时必须排除目录。
+// 查找 agent 时只接受普通文件：同名路径可能是目录，不能当成可执行文件。
 is_regular_file :: proc(path: string) -> bool {
 	info, err := os.stat(path, context.temp_allocator)
 	return err == nil && info.type == .Regular

@@ -1,6 +1,6 @@
-package tui
+package aptui
 
-import client "../ap/client"
+import client "../ap-core/client"
 
 import "core:bufio"
 import "core:fmt"
@@ -126,43 +126,43 @@ run_input_loop :: proc(app: ^App) {
 	}
 }
 
-main :: proc() {
+run :: proc(args: []string) -> int {
 	client.setup_console()
-	args := client.normalize_args(os.args)
-	opts, oerr := parse_args(args)
+	argv := client.normalize_args(args)
+	opts, oerr := parse_args(argv)
 	if !client.is_ok(oerr) {
 		fmt.eprintln("ap-tui: ", oerr.message)
 		fmt.eprintln("hint: run ap-tui --help for usage")
-		os.exit(2)
+		return 2
 	}
 	if opts.help {
 		print_usage()
-		return
+		return 0
 	}
 	if opts.version {
 		fmt.printfln("ap-tui %s", TUI_VERSION)
-		return
+		return 0
 	}
 
 	config_dir, cerr := client.default_config_dir(opts.config_dir)
 	if !client.is_ok(cerr) {
 		fmt.eprintln("ap-tui: ", cerr.message)
-		os.exit(2)
+		return 2
 	}
 	cwd, cwderr := client.canonicalize_path(".", true)
 	if !client.is_ok(cwderr) {
 		fmt.eprintln("ap-tui: ", cwderr.message)
-		os.exit(2)
+		return 2
 	}
 	project, perr := client.locate_project(config_dir, cwd)
 	if !client.is_ok(perr) {
 		fmt.eprintln("ap-tui: ", perr.message)
-		os.exit(2)
+		return 2
 	}
 	agent_bin, aerr := client.resolve_agent_bin(opts.agent_bin)
 	if !client.is_ok(aerr) {
 		fmt.eprintln("ap-tui: ", aerr.message)
-		os.exit(2)
+		return 2
 	}
 
 	color := !opts.no_color &&
@@ -189,7 +189,7 @@ main :: proc() {
 				project.hash,
 				client.session_file(project, id),
 			)
-			os.exit(2)
+			return 2
 		}
 		remember_session(&app, id)
 	} else if opts.continue_session {
@@ -211,4 +211,5 @@ main :: proc() {
 	}
 
 	run_input_loop(&app)
+	return 0
 }

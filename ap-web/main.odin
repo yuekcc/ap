@@ -1,6 +1,6 @@
-package main
+package apweb
 
-import client "../ap/client"
+import client "../ap-core/client"
 
 import "base:runtime"
 import "core:fmt"
@@ -367,24 +367,24 @@ shutdown_watcher_start :: proc() {
 	_ = thread.create_and_start(shutdown_watch_thread, self_cleanup = true, name = "shutdown-watch")
 }
 
-main :: proc() {
+run :: proc(args: []string) -> int {
 	// 必须在任何窗口/COM 对话框出现前设置：原生目录选择框按显示器 DPI 渲染。
 	setup_dpi_awareness()
 	client.setup_console()
-	args := client.normalize_args(os.args)
-	opts, oerr := parse_args(args)
+	argv := client.normalize_args(args)
+	opts, oerr := parse_args(argv)
 	if !client.is_ok(oerr) {
 		fmt.eprintln("ap-web: ", oerr.message)
 		fmt.eprintln("hint: run ap-web --help for usage")
-		os.exit(2)
+		return 2
 	}
 	if opts.help {
 		print_usage()
-		return
+		return 0
 	}
 	if opts.version {
 		fmt.printfln("ap-web %s", WEB_VERSION)
-		return
+		return 0
 	}
 
 	web_root := ""
@@ -394,7 +394,7 @@ main :: proc() {
 	assets, asset_err := make_assets(web_root)
 	if len(asset_err) > 0 {
 		fmt.eprintln("ap-web: ", asset_err)
-		os.exit(2)
+		return 2
 	}
 
 	// 进程级 cwd：--cwd 决定的目录同时是 ap 子进程的工作目录与项目身份来源。
@@ -405,29 +405,29 @@ main :: proc() {
 	cwd, cwd_err := client.canonicalize_path(cwd_input, true)
 	if !client.is_ok(cwd_err) {
 		fmt.eprintln("ap-web: ", cwd_err.message)
-		os.exit(2)
+		return 2
 	}
 	if _, has_cwd := opts.cwd.?; has_cwd {
 		if chdir_err := os.chdir(cwd); chdir_err != nil {
 			fmt.eprintf("ap-web: cannot change directory to %s: %v\n", cwd, chdir_err)
-			os.exit(2)
+			return 2
 		}
 	}
 
 	config_dir, config_err := client.default_config_dir(opts.config_dir)
 	if !client.is_ok(config_err) {
 		fmt.eprintln("ap-web: ", config_err.message)
-		os.exit(2)
+		return 2
 	}
 	project, project_err := client.locate_project(config_dir, cwd)
 	if !client.is_ok(project_err) {
 		fmt.eprintln("ap-web: ", project_err.message)
-		os.exit(2)
+		return 2
 	}
 	agent_bin, agent_err := client.resolve_agent_bin(opts.agent_bin)
 	if !client.is_ok(agent_err) {
 		fmt.eprintln("ap-web: ", agent_err.message)
-		os.exit(2)
+		return 2
 	}
 
 	app := App {
@@ -446,7 +446,7 @@ main :: proc() {
 	if id, has_session := opts.session_id.?; has_session {
 		if !os.exists(client.session_file(project, id)) {
 			fmt.eprintf("ap-web: session %q not found in project %s\n", id, project.hash)
-			os.exit(2)
+			return 2
 		}
 		_ = runner_session_resume(&app, id, cwd)
 	} else if opts.continue_session {
@@ -472,12 +472,12 @@ main :: proc() {
 	endpoint, resolve_err := resolve_endpoint(opts.host, opts.port)
 	if len(resolve_err) > 0 {
 		fmt.eprintln("ap-web: ", resolve_err)
-		os.exit(1)
+		return 1
 	}
 	listener, listen_err := open_listener(endpoint)
 	if len(listen_err) > 0 {
 		fmt.eprintln("ap-web: ", listen_err)
-		os.exit(1)
+		return 1
 	}
 	defer close_listener(&listener)
 
@@ -508,4 +508,5 @@ main :: proc() {
 			free(ctx)
 		}
 	}
+	return 0
 }

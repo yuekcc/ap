@@ -1,10 +1,10 @@
-package main
+package apweb
 
 import "core:testing"
 import "core:strings"
 import "core:thread"
 
-import protocol "../ap/protocol"
+import protocol "../ap-core/protocol"
 
 // SSE 帧是逐字节的协议：测试直接断言完整输出，不用 contains 之类宽松匹配。
 @(test)

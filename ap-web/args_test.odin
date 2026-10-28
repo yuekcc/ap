@@ -1,6 +1,6 @@
-package main
+package apweb
 
-import client "../ap/client"
+import client "../ap-core/client"
 
 import "core:testing"
 

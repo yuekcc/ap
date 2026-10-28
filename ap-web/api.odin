@@ -1,7 +1,7 @@
-package main
+package apweb
 
-import client "../ap/client"
-import protocol "../ap/protocol"
+import client "../ap-core/client"
+import protocol "../ap-core/protocol"
 
 import "base:runtime"
 import "core:encoding/json"

@@ -1,11 +1,11 @@
-package ap
+package apcore
 
 import "engine"
 import "platform"
 import "core:fmt"
 
 // CLI adapter：参数、配置入口、输出格式、退出码、信号。
-// agent 实现全部在 ap/engine；这里只做编排。
+// agent 实现全部在 ap-core/engine；这里只做编排。
 
 run :: proc(args: []string) -> int {
 	platform.setup_console()

@@ -1,7 +1,7 @@
-package tui
+package aptui
 
-import client "../ap/client"
-import protocol "../ap/protocol"
+import client "../ap-core/client"
+import protocol "../ap-core/protocol"
 
 import "core:fmt"
 import "core:os"

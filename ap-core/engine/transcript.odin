@@ -10,7 +10,7 @@ import "core:time"
 
 PREVIEW_BYTES :: 8192
 
-// 事件类型与公共信封定义在 ap/protocol；这里保留别名让引擎代码保持简洁。
+// 事件类型与公共信封定义在 ap-core/protocol；这里保留别名让引擎代码保持简洁。
 Usage :: protocol.Usage
 Event_Header :: protocol.Event_Header
 Event :: protocol.Transcript_Event

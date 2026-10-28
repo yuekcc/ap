@@ -1,6 +1,6 @@
-package tui
+package aptui
 
-import client "../ap/client"
+import client "../ap-core/client"
 
 import "core:fmt"
 import "core:strconv"

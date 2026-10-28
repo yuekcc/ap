@@ -1,6 +1,6 @@
-package main
+package apweb
 
-import protocol "../ap/protocol"
+import protocol "../ap-core/protocol"
 import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"

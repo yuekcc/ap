@@ -30,11 +30,11 @@ Set-Location $out
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-& odin build ../ap-tui -out:ap-tui.exe -vet
+& odin build ../cmd/ap-tui -out:ap-tui.exe -vet
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-& odin build ../ap-web -out:ap-web.exe -vet
+& odin build ../cmd/ap-web -out:ap-web.exe -vet
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

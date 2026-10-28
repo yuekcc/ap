@@ -1,8 +1,8 @@
 package main
 
 import "core:os"
-import ap "../../ap"
+import apcore "../../ap-core"
 
 main :: proc() {
-	os.exit(ap.run(os.args))
+	os.exit(apcore.run(os.args))
 }

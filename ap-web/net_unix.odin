@@ -1,7 +1,7 @@
 #+build !windows
-package main
+package apweb
 
-import client "../ap/client"
+import client "../ap-core/client"
 import "core:fmt"
 import "core:net"
 import "core:sys/posix"

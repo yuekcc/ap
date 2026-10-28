@@ -1,4 +1,4 @@
-package main
+package apweb
 
 import "core:fmt"
 import "core:os"

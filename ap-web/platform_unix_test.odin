@@ -1,5 +1,5 @@
 #+build !windows
-package main
+package apweb
 
 import "core:testing"
 

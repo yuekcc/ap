@@ -36,7 +36,7 @@ System_Prompt_Options :: struct {
 	skill_section: string,
 }
 
-// 固定指令与输出要求在编译期从 ap/prompts/system.md 内嵌进二进制。
+// 固定指令与输出要求在编译期从 ap-core/engine/prompts/system.md 内嵌进二进制。
 // 编辑提示词直接改那个 markdown 文件即可；运行时不依赖 prompts/ 目录。
 SYSTEM_PROMPT :: #load("prompts/system.md", string)
 

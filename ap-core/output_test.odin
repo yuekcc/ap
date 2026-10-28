@@ -1,4 +1,4 @@
-package ap
+package apcore
 
 import "platform"
 import "core:encoding/json"
