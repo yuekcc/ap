@@ -49,11 +49,11 @@
 .\build.ps1
 ```
 
-只构建 ap-web：
+只构建 ap-web（入口 `cmd/ap-web`）：
 
 ```sh
 mkdir -p bin
-odin build ap-web -out:bin/ap-web -vet
+odin build cmd/ap-web -out:bin/ap-web -vet
 ```
 
 `build.sh` / `build.ps1` 检测到 `npx` 时会先刷新 `ap-web/dist`，否则直接使用仓库里已提交的产物。`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，所以该目录必须存在。
@@ -169,7 +169,7 @@ npm --prefix ap-web test           # 前端单元测试
 
 ```
 ap-web/
-├── main.odin            # 参数解析、监听、accept 循环
+├── main.odin            # run：参数解析、监听、accept 循环（入口在 cmd/ap-web/main.odin）
 ├── server.odin          # HTTP/1.1 解析、响应、keep-alive
 ├── api.odin             # 路由与 JSON 编解码
 ├── sse.odin             # SSE 帧编码、hub、心跳
@@ -196,7 +196,7 @@ odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 npm --prefix ap-web test
 ```
 
-仓库根目录的 `./test.sh` / `.\test.ps1` 会依次测试 `ap`、`ap-tui`、`ap-web` 和前端。
+仓库根目录的 `./test.sh` / `.\test.ps1` 会依次测试 `ap-core`、`ap-tui`、`ap-web` 和前端。
 
 ## 安全与限制
 

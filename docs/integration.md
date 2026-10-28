@@ -19,11 +19,11 @@
 1. **ap 是一次性 CLI**：一条提示词进，一个 turn 出，进程退出。没有 REPL、没有交互命令、没有进程内 API。
 2. **每个 turn 一个新进程**。不要复用上一条 turn 的进程；需要继续对话时用 `-s <session_id>` 恢复。
 3. **transcript 是唯一事实来源**。实时增量只用于展示；刷新、重连、重启后一律从 transcript 重建画面。
-4. **前端不 import ap，也不重复实现 agent 逻辑**。依赖方向见 [architecture.md](architecture.md)：前端只 import `ap/client` + `ap/protocol`，不 import `ap` / `ap/engine` / `ap/platform` / `ap-tui`。
+4. **前端不 import `apcore`，也不重复实现 agent 逻辑**。依赖方向见 [architecture.md](architecture.md)：前端只 import `ap-core/client` + `ap-core/protocol`，不 import `apcore` / `ap-core/engine` / `ap-core/platform` / `ap-tui`。
 5. **只通过参数、stdin、stdout、stderr 交互**。不读 ap 的内存、不改 transcript、不代写事件。
 6. **传输层自由**：终端可以直接写 stdout；Web 可以把事件转成 SSE；编辑器插件可以转成自己的消息总线。事件 schema 不变。
 
-同仓库的前端复用 `ap/client`（路径、project hash、session 发现、blob 读取、spawn/泵）与 `ap/protocol`（事件解析、行分帧）。外部仓库的实现必须逐字节复刻第 5.5 节的路径规则，否则找不到 transcript。
+同仓库的前端复用 `ap-core/client`（路径、project hash、session 发现、blob 读取、spawn/泵）与 `ap-core/protocol`（事件解析、行分帧）。外部仓库的实现必须逐字节复刻第 5.5 节的路径规则，否则找不到 transcript。
 
 ## 2. 进程启动
 
@@ -39,7 +39,7 @@
 细节：
 
 - `--agent-bin` 的值含路径分隔符时按路径解析并规范化；否则当作命令名查 `PATH`。显式路径必须存在。
-- 查找时必须确认是**普通文件**：仓库里还有源码目录 `ap/`，只判断存在会把目录当成可执行文件。
+- 查找时必须确认是**普通文件**：仓库里还有源码目录 `ap-core/`，只判断存在会把目录当成可执行文件。
 - Windows 上候选名带 `.exe`，`PATH` 查找也先试无扩展名、再试 `.exe`。
 - 找不到时前端自行报错并以非 0 退出（参考实现用退出码 2）；不要让 ap 在错误路径上启动。
 
@@ -113,7 +113,7 @@ Windows 上 `os.pipe` 两端默认都可继承。启动子进程前必须清掉*
 - stdout 管道的**读端**
 - stderr 管道的**读端**
 
-否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF；或者前端读不到 EOF，turn 结束后仍然挂着。参考实现见 `ap/client/turn.odin` 与 `ap/platform/process_windows.odin` 的 `mark_non_inheritable`。外部语言实现要使用等价机制（`SetHandleInformation(HANDLE_FLAG_INHERIT)` 清除继承位，或显式 `bInheritHandles=false` + 只把子进程需要的三端设为可继承）。
+否则 ap 会继承 stdin 写端，读 stdin 时永远等不到 EOF；或者前端读不到 EOF，turn 结束后仍然挂着。参考实现见 `ap-core/client/turn.odin` 与 `ap-core/platform/process_windows.odin` 的 `mark_non_inheritable`。外部语言实现要使用等价机制（`SetHandleInformation(HANDLE_FLAG_INHERIT)` 清除继承位，或显式 `bInheritHandles=false` + 只把子进程需要的三端设为可继承）。
 
 ## 3. 一轮 turn 的生命周期
 
@@ -332,16 +332,16 @@ project 识别规则（必须与 ap 完全一致）：
 
 | 关注点 | ap-tui | ap-web |
 | --- | --- | --- |
-| 可执行文件查找 | `ap/client/spawn.odin` `resolve_agent_bin` | 同左 |
-| 命令行构造 | `ap/client/spawn.odin` `build_agent_command` | 同左 |
-| 管道 + 行读取 + 事件泵 | `ap/client/turn.odin` `turn_run` | 同左 |
-| 事件结构与解析 | `ap/protocol` `parse_stream_event` | 同左 |
+| 可执行文件查找 | `ap-core/client/spawn.odin` `resolve_agent_bin` | 同左 |
+| 命令行构造 | `ap-core/client/spawn.odin` `build_agent_command` | 同左 |
+| 管道 + 行读取 + 事件泵 | `ap-core/client/turn.odin` `turn_run` | 同左 |
+| 事件结构与解析 | `ap-core/protocol` `parse_stream_event` | 同左 |
 | 渲染 | `render.odin` | `frontend/render.js` + `frontend/store.js` |
 | 历史重放 | `ap-tui/agent.odin` `replay_session` + `render.odin` `.History` | `api.odin` `api_history` + `frontend/store.js` `ingestHistory` |
-| 路径 / project / blob | `ap/client/store.odin` | 同左 |
+| 路径 / project / blob | `ap-core/client/store.odin` | 同左 |
 | session 指针 | `main.odin` `App.session_id` | `runner.odin` `Session_Runtime` |
 | 传输层 | 直接写 stdout | `server.odin` + `sse.odin` + `api.odin` |
-| 取消 | 依赖终端 Ctrl+C | `runner_cancel` + `DELETE /api/turn` + `ap/client/turn.odin` |
+| 取消 | 依赖终端 Ctrl+C | `runner_cancel` + `DELETE /api/turn` + `ap-core/client/turn.odin` |
 | 单飞 / 并发 | 单活动 session，天然串行 | `runner.odin` 按 session 锁 |
 | 工作目录选择 | 启动目录 | `pickdir.odin`（Windows IFileDialog，Unix 501） |
 
@@ -355,7 +355,7 @@ project 识别规则（必须与 ap 完全一致）：
 
 ## 8. 非 Odin 实现的注意事项
 
-外部语言没有 `ap/client` 可用，以下规则必须自己复刻：
+外部语言没有 `ap-core/client` 可用，以下规则必须自己复刻：
 
 1. **路径**：绝对化 → 清理 → 解析链接 → 反斜杠转 `/` → 去尾斜杠 → Windows 小写 → FNV-1a 32 位 hex。任何一步不同都会落到不同 project 目录。
 2. **配置目录**：`--config-dir` 优先，其次 `AP_CONFIG`，最后 `~/.ap`；只用于定位 transcript，前端不需要读 `settings.json`。
@@ -392,7 +392,7 @@ project 识别规则（必须与 ap 完全一致）：
 
 最小实现完成后，至少覆盖以下测试：
 
-1. **假 agent**：写一个只按提示词输出固定 stream-json 的测试可执行文件（参考 `ap/client/testdata/fake_agent/main.odin`），验证 spawn、参数、stdin/EOF、逐行解析、退出码、stderr 缓存。
+1. **假 agent**：写一个只按提示词输出固定 stream-json 的测试可执行文件（参考 `ap-core/client/testdata/fake_agent/main.odin`），验证 spawn、参数、stdin/EOF、逐行解析、退出码、stderr 缓存。
 2. **新会话**：第一轮无 `-s`，从 `session_start` 捕获 id，第二轮带 `-s` 且落到同一 transcript。
 3. **单飞与并发**：同一 session 第二个请求被拒；不同 session 同时跑；取消只影响目标 session。
 4. **取消**：Unix 验证收尾事件齐全；Windows 验证进程树被杀、前端合成 `cancelled`。

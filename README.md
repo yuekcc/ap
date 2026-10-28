@@ -28,17 +28,19 @@ v1 已实现：
 ## 源码结构
 
 ```
-ap/            CLI adapter：参数、输出格式、退出码、信号
-ap/engine/     agent：loop / provider / tools / context / skills / transcript / session
-ap/platform/   路径、project/session、blob、JSON/文本、进程树、取消 token
-ap/protocol/   事件 schema、宽松解析、行分帧（只依赖 core）
-ap/client/     前端 kit：spawn ap、逐行泵事件、只读 session 访问
-cmd/ap/        可执行入口
-ap-tui/        终端前端
-ap-web/        HTTP/SSE 前端
+ap-core/            package apcore：CLI adapter（参数、输出格式、退出码、信号）
+ap-core/engine/     agent：loop / provider / tools / context / skills / transcript / session
+ap-core/platform/   路径、project/session、blob、JSON/文本、进程树、取消 token
+ap-core/protocol/   事件 schema、宽松解析、行分帧（只依赖 `core:`）
+ap-core/client/     前端 kit：spawn ap、逐行泵事件、只读 session 访问
+ap-tui/             package aptui：终端前端库
+ap-web/             package apweb：HTTP/SSE 前端库
+cmd/ap/             ap 入口：os.exit(apcore.run(os.args))
+cmd/ap-tui/         ap-tui 入口：os.exit(aptui.run(os.args))
+cmd/ap-web/         ap-web 入口：os.exit(apweb.run(os.args))
 ```
 
-前端只允许 import `ap/client` 与 `ap/protocol`，由 `tools/check-deps` 在测试/构建时强制。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
+前端只允许 import `ap-core/client` 与 `ap-core/protocol`，由 `tools/check-deps` 在测试/构建时强制；`cmd/*` 只放薄入口，只允许 import 对应的库包。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
 
 ## 构建
 
@@ -49,8 +51,8 @@ Windows：
 # 或
 mkdir bin
 odin build cmd/ap -out:bin/ap.exe -vet
-odin build ap-tui -out:bin/ap-tui.exe -vet
-odin build ap-web -out:bin/ap-web.exe -vet
+odin build cmd/ap-tui -out:bin/ap-tui.exe -vet
+odin build cmd/ap-web -out:bin/ap-web.exe -vet
 ```
 
 Linux / macOS：
@@ -60,11 +62,11 @@ Linux / macOS：
 # 或
 mkdir -p bin
 odin build cmd/ap -out:bin/ap -vet
-odin build ap-tui -out:bin/ap-tui -vet
-odin build ap-web -out:bin/ap-web -vet
+odin build cmd/ap-tui -out:bin/ap-tui -vet
+odin build cmd/ap-web -out:bin/ap-web -vet
 ```
 
-构建产物统一放在 `bin/`。CLI 入口在 `cmd/ap`，因此源码目录 `ap/` 与二进制 `ap` 不再同名。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。`build.sh` / `build.ps1` 会在检测到 `npx` 时先刷新 `ap-web/dist`，否则使用仓库里已提交的前端产物。
+构建产物统一放在 `bin/`。三个二进制入口都在 `cmd/`（`cmd/ap`、`cmd/ap-tui`、`cmd/ap-web`），前端目录只提供 `run`；库目录 `ap-core/` 与二进制 `ap` 不同名。把 `bin/` 加入 `PATH`，或直接使用 `./bin/ap`（Windows 为 `.\bin\ap.exe`）。`build.sh` / `build.ps1` 会在检测到 `npx` 时先刷新 `ap-web/dist`，否则使用仓库里已提交的前端产物。
 
 ## 配置
 
@@ -127,7 +129,7 @@ ap --list-skills
 
 ## 交互式 TUI
 
-`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑；路径、project hash、session 发现、blob 读取与子进程泵共用 `ap/client` + `ap/protocol`。
+`ap-tui` 是独立可执行文件，内部按轮启动 `ap`，自己不实现 agent 逻辑；路径、project hash、session 发现、blob 读取与子进程泵共用 `ap-core/client` + `ap-core/protocol`。
 
 ```sh
 # 新 session
@@ -189,7 +191,7 @@ transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整
 ```powershell
 .\test.ps1
 # 或
-odin test ap -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-core -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 npm --prefix ap-web test

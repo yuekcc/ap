@@ -100,7 +100,7 @@ ReAct Loop（react-loop-and-session.md）
   └── Transcript Store ──────────────► <session_id>.jsonl + blobs/
 ```
 
-ap、ap-tui 与 ap-web 共用 `ap/platform` 的路径、project、session、blob 与平台原语；前端通过 `ap/client` + `ap/protocol` 使用，见 [architecture.md](architecture.md) 与 [dependencies.md](dependencies.md)。
+ap、ap-tui 与 ap-web 共用 `ap-core/platform` 的路径、project、session、blob 与平台原语；前端通过 `ap-core/client` + `ap-core/protocol` 使用，见 [architecture.md](architecture.md) 与 [dependencies.md](dependencies.md)。
 
 ## 文档地图
 
