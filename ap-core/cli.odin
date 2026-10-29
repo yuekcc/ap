@@ -110,7 +110,7 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			}
 			opts.input_file = value
 			i = n
-		case "--print":
+		case "-p", "--print":
 			value, n, err := option_value(args, i, inline, has_inline, name)
 			if !is_ok(err) {
 				return opts, err

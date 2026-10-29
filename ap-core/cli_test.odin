@@ -14,6 +14,15 @@ test_cli_defaults :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_cli_print_short_alias :: proc(t: ^testing.T) {
+	opts, err := parse_args([]string{"ap", "-p", "hello"})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	prompt, ok := opts.print_prompt.?
+	testing.expect(t, ok)
+	testing.expect_value(t, prompt, "hello")
+}
+
+@(test)
 test_cli_inline_values :: proc(t: ^testing.T) {
 	opts, err := parse_args(
 		[]string{"ap", "--print=do it", "--output-format=stream-json", "--max-steps=3", "--session=abc"},

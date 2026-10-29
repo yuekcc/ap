@@ -21,7 +21,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 | `--fork-session` | — | 与 `-s` / `-c` 连用：复制历史到新 session，不污染原记录 |
 | `--agent <name>` | agent 名 | 指定 agent。`$AP_CONFIG/agents/<name>.md` 存在时使用该定义；否则只接受内置 `general` |
 | `--input-file <path>` | 文件路径 | 从文件读取提示词（UTF-8） |
-| `--print <prompt>` | 提示词 | 直接指定提示词 |
+| `-p, --print <prompt>` | 提示词 | 直接指定提示词 |
 | `--print0` | — | 从 fd 0（stdin）读取整条提示词，直到 EOF |
 | `--config-dir <path>` | 目录 | 设置 `$AP_CONFIG`，默认 `~/.ap`；`--workspace` 保留为别名 |
 | `--model <id>` | model_id | 覆盖配置文件中的 model；恢复 session 时只警告，不生效 |

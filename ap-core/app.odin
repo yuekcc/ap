@@ -55,7 +55,7 @@ write_stderr :: proc(data: []byte) -> bool {
 USAGE_TEXT :: `ap - 一次性命令行 coding agent
 
 用法:
-  ap --print <提示词> [选项]
+  ap --print <提示词> [选项]   # -p 为 --print 的别名
   ap --input-file <文件> [选项]
   ap --print0 [选项]          # 0 = stdin，读取到 EOF
   ap [选项]                    # stdin 不是 TTY 时读取 stdin
