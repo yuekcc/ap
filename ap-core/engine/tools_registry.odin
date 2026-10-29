@@ -39,7 +39,7 @@ TOOL_INFOS := [5]Tool_Info {
 	},
 	{
 		name = "bash",
-		description = "执行 bash -c <command>；每次独立进程，不保留 cwd/环境变量，stdin 为 NUL，stdout/stderr 合并返回。",
+		description = "使用 bash -c <command> 执行命令；Bash/POSIX 语法；每次独立进程，不保留 cwd/环境变量，stdin 为 NUL，stdout/stderr 合并返回。",
 		parameters = `{"type":"object","properties":{"command":{"type":"string","description":"POSIX shell 命令，最多 8000 字符"},"timeout_ms":{"type":"integer","minimum":1,"maximum":600000,"description":"超时毫秒数，默认取配置"}},"required":["command"],"additionalProperties":false}`,
 	},
 	{
