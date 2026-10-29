@@ -43,6 +43,7 @@ print_banner :: proc(app: ^App) {
 	renderer_note(app, "commands: /help · /new · /session · /quit")
 }
 
+// 仅用于非 TTY / raw mode 不可用的回退路径；TTY 下由 editor_view 画 `› `。
 write_prompt :: proc(app: ^App) {
 	ensure_line_start(&app.renderer)
 	paint(&app.renderer, BOLD + CYAN, "> ")
@@ -91,25 +92,45 @@ handle_command :: proc(app: ^App, line: string) -> Command_Result {
 	return .Not_Command
 }
 
-run_input_loop :: proc(app: ^App) {
-	reader: bufio.Reader
-	bufio.reader_init(&reader, io.to_reader(os.to_reader(os.stdin)), 8192, context.allocator)
-	defer bufio.reader_destroy(&reader)
-	stdin_tty := terminal.is_terminal(os.stdin)
+run_input_loop :: proc(app: ^App, term: ^Term) {
+	input := Input {
+		term      = term,
+		stdin_tty = terminal.is_terminal(os.stdin),
+	}
+	bufio.reader_init(&input.reader, io.to_reader(os.to_reader(os.stdin)), 8192, context.allocator)
+	defer bufio.reader_destroy(&input.reader)
 
 	for {
-		write_prompt(app)
-		line, eof := read_line(&reader)
-		// TTY 下回车已经由终端换行；管道输入没有回显，需要自己补一个换行。
-		if stdin_tty {
-			app.renderer.at_line_start = true
-		} else {
-			ensure_line_start(&app.renderer)
+		if input.term != nil {
+			if !term_enter(input.term) {
+				// raw mode 进不去（非常规 console）：退回 bufio 行输入。
+				input.term = nil
+			} else if input.term.probed && !input.term.kitty && !input.term.warned {
+				input.term.warned = true
+				// raw 下换行不再是 CRLF，先把终端交还内核再打印提示。
+				term_leave(input.term)
+				renderer_note(
+					app,
+					"terminal does not report kitty keyboard protocol: Ctrl+Enter unavailable",
+				)
+				if !term_enter(input.term) {
+					input.term = nil
+				}
+			}
 		}
+
+		text, eof := read_prompt(app, &input)
+
+		// 每轮 turn 前后离开 raw，让 Ctrl+C 在 turn 期间仍然是内核 SIGINT，
+		// 也让 turn 期间的按键留在终端缓冲里。
+		if input.term != nil {
+			term_leave(input.term)
+		}
+
 		if eof {
 			return
 		}
-		trimmed := strings.trim_space(line)
+		trimmed := strings.trim_space(text)
 		if len(trimmed) == 0 {
 			continue
 		}
@@ -121,7 +142,7 @@ run_input_loop :: proc(app: ^App) {
 			continue
 		case .Not_Command:
 		}
-		run_agent_turn(app, line)
+		run_agent_turn(app, text)
 		free_all(context.temp_allocator)
 	}
 }
@@ -210,6 +231,14 @@ run :: proc(args: []string) -> int {
 		}
 	}
 
-	run_input_loop(&app)
+	term: Term
+	term_ptr: ^Term
+	if terminal.is_terminal(os.stdin) && terminal.is_terminal(os.stdout) {
+		term_init(&term, os.stdin, os.stdout)
+		term_ptr = &term
+	}
+	defer term_leave(&term)
+
+	run_input_loop(&app, term_ptr)
 	return 0
 }

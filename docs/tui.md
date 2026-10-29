@@ -9,7 +9,7 @@
           │◄──── stderr: 日志 ───────┤
           │────── stdin: 提示词 ────►
           ▼
-    滚动输出 + 简单行输入
+    滚动输出 + raw 多行输入框
 ```
 
 ## 为什么是独立进程
@@ -76,15 +76,35 @@ TUI 与 ap 共用 `ap-core/platform` 的 project 识别规则（绝对路径 →
 ## 渲染
 
 - 普通终端滚动区，**不使用 alternate screen**，输出保留在 scrollback 里
-- 每轮结束回到 `> ` 行输入；phase 1 使用终端 cooked 模式，只依赖系统自带的行编辑（退格、左右移动），没有方向键历史和自定义光标
+- 每轮结束回到 `› ` 行输入；`› ` 同时用于输入框和 History 重放，提交后无需重画（非 TTY 回退路径仍打印 `> `，保持管道行为不变）
 - turn 运行时 TUI 不读 stdin；这期间的按键由终端留在输入缓冲里，turn 结束后会被当成下一条提示词
-- phase 1 不拦截 Ctrl+C：它同时发给 ap-tui 与 ap，TUI 退出，ap 自行取消并写 `session_end`；下次用 `-c` 继续
 - ANSI 颜色在 stdout 不是 TTY、`NO_COLOR` 或 `--no-color` 时关闭
 - assistant 文本按 delta 实时输出；`message_end` 只在没有 delta 时补文本，避免重复
 - 工具调用显示名称和参数；`bash` 的增量输出按两格缩进暗色实时显示；工具结束时显示 `✓/✗`、耗时和退出码
 - 非流式工具结果（以及历史重放里的工具结果）最多展示 200 行 / 20000 字节，超出提示完整内容在 transcript；实时 `bash` 流不截断
 - reasoning delta 在 phase 1 不展示
 - 异常终止（`max_steps` / `max_tokens` / `cancelled` / `context_too_long`）会打印 `turn ended: ...`
+
+## 输入（raw mode 编辑框）
+
+stdin 与 stdout 都是 TTY 时，每轮 turn 前进入 raw mode，用自绘的多行编辑框读取提示词；提交后、turn 开始前离开 raw，把终端交还内核。非 TTY（管道、测试）或 raw mode 进入失败时保留 `bufio` 行输入路径，行为不变。
+
+- 提交：Enter；Ctrl+Enter 插入换行；缓冲区 trim 后为空时不提交，只重绘空提示符
+- 移动：←→ 按 rune，↑↓ 按可视行并尽量保持列号，Home/End 与 Ctrl+A/E 到当前逻辑行首尾，Delete/Backspace 删前/后一个 rune（跨行时合并行）
+- 删除：Ctrl+K 到逻辑行尾，Ctrl+U 到逻辑行首，Ctrl+W 删前一个空白分隔的词（`a/b` 算一个词）
+- Ctrl+C：缓冲区非空时清空并重绘；缓冲区为空时退出 ap-tui。turn 期间 raw 已关闭，Ctrl+C 仍是内核 SIGINT，同时终止 ap-tui 与 ap（下次用 `-c` 继续）
+- Esc：清空缓冲区
+- 粘贴：bracketed paste，内容原样插入（`\r` 删除、`\n` 保留），不当作按键；整段粘贴只触发一次重绘；超过 1 MiB 截断并插入提示
+
+按键解码优先识别 Kitty keyboard protocol（`CSI u`）。启动时写 `CSI > 1 u` push flags、再写 `CSI ? u` 探测；120ms 内收到 `CSI ? <flags> u` 且 flags & 1 才算支持。探测失败时留在 raw：方向键、Home/End、Delete 与 legacy 控制字节仍可用，但拿不到 Ctrl+Enter，启动时提示一次 `terminal does not report kitty keyboard protocol: Ctrl+Enter unavailable`。legacy 下孤立的 ESC 用 ~20ms 超时消歧。
+
+长行按显示宽度硬折行（`unicode.normalized_east_asian_width`：CJK/全角 2 列，组合字符 0 列），逻辑行内的 `\n` 强制换行。首行前缀 `› `（加粗青色），续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示；不进入滚动区（DECSTBM）。
+
+已知限制：
+
+- 终端 reflow（窗口缩放、重新布局已画内容）可能让编辑块错位；编辑块会在下一次按键重绘时按新尺寸重新 layout，空闲时不主动重绘，也不修复终端已改写的 scrollback
+- emoji 的 ZWJ 序列与变体选择符按 1 列处理，光标可能视觉偏移
+- 粘贴内容中的控制字符（如 ESC）会原样进入缓冲区并显示；不要粘贴不可信内容
 
 ## 交互命令
 
@@ -128,14 +148,13 @@ Windows：
 odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
-覆盖：事件解析、参数格式化、工具输出截断、live/history 渲染、project hash、最近根 session 定位、transcript 重放与 blob 解析。
+覆盖：事件解析、参数格式化、工具输出截断、live/history 渲染、project hash、最近根 session 定位、transcript 重放与 blob 解析；输入层另有按键解码（Kitty / legacy / 分片 / 粘贴 / 非法 UTF-8）、编辑模型（插入删除、跨行、↑↓ 保列、Ctrl 键、1 MiB 上限）、折行排版（CJK 双宽、空行、折行点）与重绘输出。真实终端行为（Windows Terminal / Ghostty）靠手动验收。
 
 ## Phase 2 待做
 
-1. raw mode 行编辑：方向键历史、Ctrl-A/E、单词移动、粘贴处理
-2. 运行中显示输入框 / 排队下一条提示词（当前 turn 进行时不能输入）
-3. Ctrl+C 的 TUI 侧处理：取消当前 turn 后回到输入框，而不是退出 ap-tui
-4. 更好的工具展示：可折叠、按工具类型定制、diff 着色
-5. `/resume` 列表、`/fork`、session 删除/清理
-6. reasoning 展示开关、token/usage 状态行
-7. 宽度感知的换行与长行处理
+1. 运行中显示输入框 / 排队下一条提示词（当前 turn 进行时不能输入）
+2. Ctrl+C 的 TUI 侧处理：取消当前 turn 后回到输入框，而不是退出 ap-tui
+3. 更好的工具展示：可折叠、按工具类型定制、diff 着色
+4. `/resume` 列表、`/fork`、session 删除/清理
+5. reasoning 展示开关、token/usage 状态行
+6. 输入框增强：方向键 history、选中/撤销、鼠标、组合输入法预编辑
