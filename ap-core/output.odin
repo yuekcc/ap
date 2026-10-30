@@ -8,6 +8,11 @@ import "core:time"
 
 Output_State :: struct {
 	format: Output_Format,
+	// stderr 的 markdown 排版状态：块与块之间恰好一个空行。
+	stderr_wrote:     bool, // 已向 stderr 写过内容
+	stderr_line_open: bool, // 上一行还没换行
+	stderr_spaced:    bool, // 上一个块已用空行收尾
+	stderr_in_block:  bool, // 正处在工具输出的原始块中
 }
 
 output_write_json :: proc(obj: json.Object) {
@@ -101,6 +106,73 @@ output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string
 	output_write_json(make_tool_delta_event(index, id, name, args_delta))
 }
 
+// stderr 按 markdown 排版：每个块前留一个空行，必要时先给上一行收尾。
+stderr_begin_block :: proc(out: ^Output_State) {
+	if !out.stderr_wrote {
+		return
+	}
+	if out.stderr_line_open {
+		stderr_write_string("\n")
+		out.stderr_line_open = false
+	}
+	if !out.stderr_spaced {
+		stderr_write_string("\n")
+	}
+	out.stderr_spaced = false
+}
+
+// 开始一个原始块（工具输出等）：块首留空行，块内不再干预。
+stderr_begin_raw :: proc(out: ^Output_State) {
+	if out.stderr_in_block {
+		return
+	}
+	stderr_begin_block(out)
+	out.stderr_in_block = true
+}
+
+// 独立块：标题行、状态行，单独成段并空行收尾。
+output_block :: proc(out: ^Output_State, line: string) {
+	if len(line) == 0 {
+		return
+	}
+	stderr_begin_block(out)
+	stderr_write_string(line)
+	stderr_write_string("\n")
+	stderr_write_string("\n")
+	out.stderr_wrote = true
+	out.stderr_line_open = false
+	out.stderr_spaced = true
+	out.stderr_in_block = false
+}
+
+// 流式内容：块内原样透传，不做换行干预。
+output_raw :: proc(out: ^Output_State, chunk: string) {
+	if len(chunk) == 0 {
+		return
+	}
+	stderr_begin_raw(out)
+	stderr_write_string(chunk)
+	out.stderr_wrote = true
+	out.stderr_line_open = chunk[len(chunk) - 1] != '\n'
+	out.stderr_spaced = false
+}
+
+// 行式内容：子代理输出等逐行文本，同一块内连续追加。
+output_line :: proc(out: ^Output_State, line: string) {
+	if len(line) == 0 {
+		return
+	}
+	stderr_begin_raw(out)
+	if out.stderr_line_open {
+		stderr_write_string("\n")
+	}
+	stderr_write_string(line)
+	stderr_write_string("\n")
+	out.stderr_wrote = true
+	out.stderr_line_open = false
+	out.stderr_spaced = false
+}
+
 output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 	out := (^Output_State)(user)
 	if out.format == .Stream_Json {
@@ -111,13 +183,18 @@ output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 		obj["chunk"] = json.String(platform.sanitize_utf8(transmute([]byte)chunk))
 		output_write_json(obj)
 	} else {
-		write_stderr(transmute([]byte)chunk)
+		output_raw(out, chunk)
 	}
 }
 
-output_progress :: proc(user: rawptr, line: string) {
-	write_stderr(transmute([]byte)line)
-	write_stderr(transmute([]byte)string("\n"))
+output_progress :: proc(user: rawptr, style: engine.Progress_Style, line: string) {
+	out := (^Output_State)(user)
+	switch style {
+	case .Block:
+		output_block(out, line)
+	case .Line:
+		output_line(out, line)
+	}
 }
 
 make_loop_emitter :: proc(out: ^Output_State) -> engine.Emitter {

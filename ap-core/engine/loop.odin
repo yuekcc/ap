@@ -10,6 +10,13 @@ import uuid "core:encoding/uuid"
 
 MAX_LLM_RETRIES :: 5
 
+// 进度输出的排版提示：Block 是独立的 markdown 块（标题行、状态行），
+// 输出端在块之间插入空行；Line 与上文同属一块，逐行追加。
+Progress_Style :: enum {
+	Block,
+	Line,
+}
+
 Emitter :: struct {
 	user:              rawptr,
 	on_transcript:     proc(user: rawptr, event: Event),
@@ -17,7 +24,7 @@ Emitter :: struct {
 	on_reasoning_delta: proc(user: rawptr, message_id, text: string),
 	on_tool_delta:     proc(user: rawptr, index: int, id, name, args_delta: string),
 	on_tool_update:    proc(user: rawptr, tool_call_id, chunk: string),
-	on_progress:       proc(user: rawptr, line: string),
+	on_progress:       proc(user: rawptr, style: Progress_Style, line: string),
 }
 
 Loop_Result :: struct {
@@ -171,9 +178,9 @@ loop_append :: proc(l: ^Loop, event: any, header: Event_Header) -> Error {
 	return ok_error()
 }
 
-progress :: proc(l: ^Loop, format: string, args: ..any) {
+progress :: proc(l: ^Loop, style: Progress_Style, format: string, args: ..any) {
 	if l.emitter.on_progress != nil {
-		l.emitter.on_progress(l.emitter.user, fmt.tprintf(format, ..args))
+		l.emitter.on_progress(l.emitter.user, style, fmt.tprintf(format, ..args))
 	}
 }
 
@@ -439,7 +446,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		if aerr := loop_append(l, start_ev, h); !is_ok(aerr) {
 			return false, aerr, .Internal
 		}
-		progress(l, "[tool] %s", call.name)
+		progress(l, .Block, "### %s", call.name)
 
 		tool_ctx := Tool_Context {
 			cwd = l.project.root,
@@ -503,7 +510,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		if aerr := loop_append(l, end_ev, h2); !is_ok(aerr) {
 			return false, aerr, .Internal
 		}
-		progress(l, "[tool] %s %s (%dms)", call.name, "ok" if end_ev.ok else "failed", res.duration_ms)
+		progress(l, .Block, "_%s %s (%dms)_", call.name, "ok" if end_ev.ok else "failed", res.duration_ms)
 		if was_cancelled {
 			_ = loop_write_turn_end(l, "cancelled")
 			return true, ok_error(), .None
@@ -577,7 +584,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			result.num_steps = step
 			return result
 		}
-		progress(l, "[step %d] calling model", step)
+		progress(l, .Block, "## Step %d", step)
 
 		system_prompt, messages, cerr := context_build(l.project, l.events[:])
 		if !is_ok(cerr) {
@@ -652,9 +659,9 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 					// 指数退避加一点抖动，避免多实例同时重试。
 					delay += int(time.time_to_unix_nano(time.now()) % 251)
 				}
-				progress(l, "[retry] %s (attempt %d, %dms)", perr.message, attempt, delay)
+				progress(l, .Line, "[retry] %s (attempt %d, %dms)", perr.message, attempt, delay)
 				if l.attempt_had_text {
-					progress(l, "[retry] 上一次尝试已展示的文本作废")
+					progress(l, .Line, "[retry] 上一次尝试已展示的文本作废")
 				}
 				l.sleep_fn(delay)
 				attempt += 1

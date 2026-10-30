@@ -178,7 +178,7 @@ run :: proc(args: []string) -> int {
 	}
 	// turn 结束后进程即退出；给出可直接复制的续聊命令。
 	if len(normalized) > 0 {
-		fmt.eprintf("继续对话，请执行：%s -s %s\n", normalized[0], session.session_id)
+		fmt.eprintf("\n继续对话，请执行：%s -s %s\n", normalized[0], session.session_id)
 	}
 	return exit_code
 }

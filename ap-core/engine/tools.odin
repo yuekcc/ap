@@ -32,7 +32,7 @@ Tool_Context :: struct {
 	max_steps:         int,
 	on_update:         proc(user: rawptr, chunk: string),
 	update_user:       rawptr,
-	on_progress:       proc(user: rawptr, line: string),
+	on_progress:       proc(user: rawptr, style: Progress_Style, line: string),
 	progress_user:     rawptr,
 }
 

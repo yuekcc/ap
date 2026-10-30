@@ -19,7 +19,7 @@ Task_State :: struct {
 	project:             Project,
 	pending_stdout:      [dynamic]byte,
 	pending_stderr:      [dynamic]byte,
-	on_progress:         proc(user: rawptr, line: string),
+	on_progress:         proc(user: rawptr, style: Progress_Style, line: string),
 	progress_user:       rawptr,
 }
 
@@ -75,7 +75,7 @@ task_flush_lines :: proc(state: ^Task_State, buf: ^[dynamic]byte, prefix: string
 			return
 		}
 		line := strings.trim_right(string(buf[:idx]), "\r")
-		state.on_progress(state.progress_user, fmt.tprintf("%s%s", prefix, line))
+		state.on_progress(state.progress_user, .Line, fmt.tprintf("%s%s", prefix, line))
 		remaining := len(buf) - (idx + 1)
 		copy(buf[:], buf[idx + 1:])
 		resize(buf, remaining)
@@ -88,11 +88,11 @@ task_flush_pending :: proc(state: ^Task_State) {
 	}
 	if len(state.pending_stdout) > 0 {
 		line := strings.trim_right(string(state.pending_stdout[:]), "\r")
-		state.on_progress(state.progress_user, fmt.tprintf("[subagent] %s", line))
+		state.on_progress(state.progress_user, .Line, fmt.tprintf("[subagent] %s", line))
 		clear(&state.pending_stdout)
 	}
 	if len(state.pending_stderr) > 0 {
-		state.on_progress(state.progress_user, strings.trim_right(string(state.pending_stderr[:]), "\r"))
+		state.on_progress(state.progress_user, .Line, strings.trim_right(string(state.pending_stderr[:]), "\r"))
 		clear(&state.pending_stderr)
 	}
 }

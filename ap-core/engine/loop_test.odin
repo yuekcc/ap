@@ -381,3 +381,45 @@ test_loop_cancel_mid_stream :: proc(t: ^testing.T) {
 	testing.expect_value(t, last.type, "turn_end")
 	loop_test_finish(&loop, dir)
 }
+
+Progress_Capture :: struct {
+	styles: [dynamic]Progress_Style,
+	lines:  [dynamic]string,
+}
+
+capture_progress :: proc(user: rawptr, style: Progress_Style, line: string) {
+	capture := (^Progress_Capture)(user)
+	append(&capture.styles, style)
+	append(&capture.lines, line)
+}
+
+@(test)
+test_loop_progress_uses_markdown_headings :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-progress")
+	args := make(json.Object)
+	args["command"] = json.String("echo hi")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{tool_name = "bash", tool_id = "call_prog", tool_input = args, stop = .Tool_Use},
+			{text = "done", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	capture := Progress_Capture{}
+	loop.emitter = Emitter{user = &capture, on_progress = capture_progress}
+	result := loop_run_turn(&loop, "run echo")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+
+	// step 用二级标题，tool 用三级标题，工具耗时单独成块。
+	testing.expect_value(t, len(capture.lines), 4)
+	testing.expect_value(t, capture.lines[0], "## Step 1")
+	testing.expect_value(t, capture.lines[1], "### bash")
+	testing.expect(t, strings.has_prefix(capture.lines[2], "_bash ok ("))
+	testing.expect_value(t, capture.lines[3], "## Step 2")
+	for style in capture.styles {
+		testing.expect_value(t, style, Progress_Style.Block)
+	}
+	delete(capture.styles)
+	delete(capture.lines)
+	loop_test_finish(&loop, dir)
+}
