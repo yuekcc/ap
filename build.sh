@@ -14,7 +14,7 @@ else
 fi
 
 ext=""
-out="bin"
+out="build"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) ext=".exe" ;;
 esac
