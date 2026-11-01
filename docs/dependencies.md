@@ -6,10 +6,11 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 
 | 路径 | package | 职责 |
 | --- | --- | --- |
-| `cmd/ap/` | `main` | 入口：`os.exit(apcore.run(os.args))` |
+| `cmd/ap/` | `main` | 入口：`os.exit(apcli.run(os.args))` |
 | `cmd/ap-tui/` | `main` | 入口：`os.exit(aptui.run(os.args))` |
 | `cmd/ap-web/` | `main` | 入口：`os.exit(apweb.run(os.args))` |
-| `ap-core/` | `apcore` | CLI adapter：参数、配置入口、输出格式、退出码、信号 |
+| `ap-cli/` | `apcli` | CLI adapter：参数、usage、输出格式、退出码、信号 |
+| `ap-core/` | `apcore` | SDK 门面：`env_open`、`Session_Request` 组装、会话生命周期 |
 | `ap-core/protocol/` | `protocol` | 事件 schema、宽松解析、`Line_Reader`、usage 计算 |
 | `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON/文本、平台原语、进程树、取消 token |
 | `ap-core/engine/` | `engine` | agent：errors/config/session/loop/provider/sse/skills/transcript/process/tools |
@@ -17,29 +18,30 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `ap-tui/` | `aptui` | 终端前端库（`run` + 渲染/参数/agent） |
 | `ap-web/` | `apweb` | HTTP/SSE 前端库（`run` + server/api/sse/runner/assets） |
 
-同目录 = 同包。`ap-core/*.odin` 只有 CLI adapter；`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
+同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter；`ap-core/*.odin` 是 SDK 门面，不读 argv、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
 
 ## 允许的边
 
 | 源 | 允许 | 禁止 |
 | --- | --- | --- |
-| `cmd/ap` | `ap-core` | 其他一切 |
+| `cmd/ap` | `ap-cli` | 其他一切 |
 | `cmd/ap-tui` | `ap-tui` | 其他一切 |
 | `cmd/ap-web` | `ap-web` | 其他一切 |
-| `ap-web` / `ap-tui` | `ap-core/client`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/platform`、`apcore` 根包、彼此 |
+| `ap-cli` | `apcore`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/client`、`ap-web`、`ap-tui` |
+| `ap-web` / `ap-tui` | `ap-core/client`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/platform`、`apcore` 根包、`ap-cli`、彼此 |
 | `ap-core/client` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`apcore` 根包 |
-| `apcore` | `ap-core/engine`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-web`、`ap-tui` |
-| `ap-core/engine` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-core/client`、`ap-web`、`ap-tui` |
+| `apcore` | `ap-core/engine`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-cli`、`ap-web`、`ap-tui`、`ap-core/client` |
+| `ap-core/engine` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-cli`、`ap-core/client`、`ap-web`、`ap-tui` |
 | `ap-core/platform` | `core:`/`vendor:` | 所有本地包 |
 | `ap-core/protocol` | `core:` | 所有本地包 |
 
-`apcore` 根包不得定义 `main`，否则前端 import 它时会把入口链进来。
+`apcore` 根包不得定义 `main`，否则 `apcli` 或前端 import 它时会把入口链进来。`ap-cli` 不得直接 import `ap-core/engine`：engine 只能经 `apcore` 门面访问，这是「core 可被宿主嵌入」的边界保证。
 
 ## 检查器
 
 `tools/check-deps.ps1` / `tools/check-deps.sh`：
 
-1. **import 扫描**：逐行检查上表的源目录，只允许白名单路径；`cmd/*` 只允许 import 对应的库包。
+1. **import 扫描**：逐行检查上表的源目录，只允许白名单路径；`cmd/*` 只允许 import 对应的库包；`ap-cli` 只允许 `apcore` 与 platform/protocol，禁止直接 import `engine`。
 2. **编译文件清单**：对 `cmd/ap-web` / `cmd/ap-tui` 各跑一次
    ```
    odin build <dir> -out:<tmp> -export-dependencies:json -export-dependencies-file:<tmp>/deps.json

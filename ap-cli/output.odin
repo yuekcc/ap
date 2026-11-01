@@ -1,8 +1,8 @@
-package apcore
+package apcli
 
-import "engine"
-import "platform"
-import "protocol"
+import apcore "../ap-core"
+import platform "../ap-core/platform"
+import protocol "../ap-core/protocol"
 import "core:encoding/json"
 import "core:time"
 
@@ -187,7 +187,7 @@ output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 	}
 }
 
-output_progress :: proc(user: rawptr, style: engine.Progress_Style, line: string) {
+output_progress :: proc(user: rawptr, style: apcore.Progress_Style, line: string) {
 	out := (^Output_State)(user)
 	switch style {
 	case .Block:
@@ -197,7 +197,7 @@ output_progress :: proc(user: rawptr, style: engine.Progress_Style, line: string
 	}
 }
 
-make_loop_emitter :: proc(out: ^Output_State) -> engine.Emitter {
+make_loop_emitter :: proc(out: ^Output_State) -> apcore.Emitter {
 	return {
 		user = out,
 		on_transcript = output_transcript,
@@ -217,7 +217,7 @@ Final_Json :: struct {
 	usage:       protocol.Usage,
 }
 
-output_final :: proc(out: ^Output_State, session_id: string, result: engine.Turn_Result) {
+output_final :: proc(out: ^Output_State, session_id: string, result: apcore.Turn_Result) {
 	switch out.format {
 	case .Text:
 		if len(result.result_text) == 0 {

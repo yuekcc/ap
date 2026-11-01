@@ -1,18 +1,18 @@
-package apcore
+package apcli
 
-import "engine"
-import "platform"
+import apcore "../ap-core"
+import platform "../ap-core/platform"
 import "core:fmt"
 
-// CLI adapter：参数、配置入口、输出格式、退出码、信号。
-// agent 实现全部在 ap-core/engine；这里只做编排。
+// CLI 适配层：参数、输出格式、退出码、信号。
+// 配置解析与 agent 编排在 apcore（SDK）；这里只做宿主侧的工作。
 
 run :: proc(args: []string) -> int {
 	platform.setup_console()
 	normalized := platform.normalize_args(args)
 	opts, perr := parse_args(normalized)
 	if !is_ok(perr) {
-		log_error(perr.message)
+		apcore.log_error("%s", perr.message)
 		fmt.eprintln("hint: run ap --help for usage")
 		return int(Exit_Code.Usage)
 	}
@@ -31,53 +31,29 @@ run :: proc(args: []string) -> int {
 		return list_tools(opts)
 	}
 	if opts.debug {
-		engine.log_set_level(.Debug)
+		apcore.log_set_level(.Debug)
 	} else if opts.verbose {
-		engine.log_set_level(.Info)
+		apcore.log_set_level(.Info)
 	} else {
-		engine.log_set_level(.Warn)
+		apcore.log_set_level(.Warn)
 	}
 
-	config_dir, cerr := platform.default_config_dir(opts.config_dir)
-	if !platform.is_ok(cerr) {
-		log_error(cerr.message)
-		return int(Exit_Code.Usage)
+	env, eerr := apcore.env_open({config_dir = opts.config_dir})
+	if !apcore.is_ok(eerr) {
+		apcore.log_error("%s", eerr.message)
+		return exit_code_for(eerr.kind)
 	}
-	if err := platform.ensure_writable_dir(config_dir); !platform.is_ok(err) {
-		log_error(err.message)
-		return int(Exit_Code.Usage)
-	}
-	settings, serr := engine.load_settings(config_dir)
-	if !engine.is_ok(serr) {
-		engine.log_error(serr.message)
-		return exit_code_for(serr.kind)
-	}
-
-	cwd, cwderr := platform.canonicalize_path(".", true)
-	if !platform.is_ok(cwderr) {
-		log_error(cwderr.message)
-		return int(Exit_Code.Usage)
-	}
-	project, jerr := platform.open_project(config_dir, cwd)
-	if !platform.is_ok(jerr) {
-		log_error(jerr.message)
-		return int(Exit_Code.Usage)
-	}
-	bash_path, berr := platform.find_bash()
-	if !platform.is_ok(berr) {
-		log_error(berr.message)
-		return int(Exit_Code.Usage)
-	}
-	self_exe := platform.resolve_self_exe()
+	// 提示词文件与 --base-system-prompt-file 的相对路径按启动目录解析。
+	cwd := env.cwd
 
 	base_prompt, bperr := read_base_system_prompt(opts, cwd)
 	if !is_ok(bperr) {
-		log_error(bperr.message)
+		apcore.log_error("%s", bperr.message)
 		return int(Exit_Code.Usage)
 	}
 	append_prompt, aperr := read_append_system_prompt(opts)
 	if !is_ok(aperr) {
-		log_error(aperr.message)
+		apcore.log_error("%s", aperr.message)
 		return int(Exit_Code.Usage)
 	}
 
@@ -85,13 +61,13 @@ run :: proc(args: []string) -> int {
 	if !opts.print_system_prompt {
 		value, prerr := read_prompt(opts, cwd)
 		if !is_ok(prerr) {
-			log_error(prerr.message)
+			apcore.log_error("%s", prerr.message)
 			return int(Exit_Code.Usage)
 		}
 		prompt = value
 	}
 
-	kind := engine.Session_Kind.New
+	kind := apcore.Session_Kind.New
 	if opts.session_id != nil || opts.continue_session {
 		kind = .Fork if opts.fork_session else .Resume
 	}
@@ -99,14 +75,8 @@ run :: proc(args: []string) -> int {
 	if value, ok := opts.session_id.?; ok {
 		source_id = value
 	}
-	req := engine.Session_Request {
+	session_opts := apcore.Session_Options {
 		kind                 = kind,
-		project              = project,
-		settings             = &settings,
-		config_dir           = config_dir,
-		cwd                  = cwd,
-		self_exe             = self_exe,
-		bash_path            = bash_path,
 		source_session_id    = source_id,
 		model                = opts.model,
 		agent                = opts.agent,
@@ -124,28 +94,28 @@ run :: proc(args: []string) -> int {
 	}
 
 	if opts.print_system_prompt {
-		info, ierr := engine.preview_prompt(req)
-		if !engine.is_ok(ierr) {
-			engine.log_error(ierr.message)
+		info, ierr := apcore.preview_prompt(&env, session_opts)
+		if !apcore.is_ok(ierr) {
+			apcore.log_error("%s", ierr.message)
 			return exit_code_for(ierr.kind)
 		}
 		for warning in info.warnings {
-			engine.log_warn("%s", warning)
+			apcore.log_warn("%s", warning)
 		}
 		print_system_prompt_text(info.system_prompt)
 		return int(Exit_Code.OK)
 	}
 
-	session, info, oerr := engine.session_open(req)
-	if !engine.is_ok(oerr) {
-		engine.log_error(oerr.message)
+	session, info, oerr := apcore.session_open(&env, session_opts)
+	if !apcore.is_ok(oerr) {
+		apcore.log_error("%s", oerr.message)
 		return exit_code_for(oerr.kind)
 	}
 	for warning in info.warnings {
-		engine.log_warn("%s", warning)
+		apcore.log_warn("%s", warning)
 	}
 
-	cancel: platform.Cancel_Token
+	cancel: apcore.Cancel_Token
 	install_signal_handlers(&cancel)
 	out := Output_State{format = opts.output_format}
 	if out.format == .Stream_Json && len(info.initial_line) > 0 {
@@ -153,10 +123,10 @@ run :: proc(args: []string) -> int {
 		write_stdout(transmute([]byte)string("\n"))
 	}
 	emitter := make_loop_emitter(&out)
-	result, terr := engine.turn_run(&session, prompt, &cancel, emitter)
-	if !engine.is_ok(terr) {
-		engine.log_error(terr.message)
-		err_end_line, _ := engine.session_close(&session, {reason = "error", usage = {}})
+	result, terr := apcore.turn_run(&session, prompt, &cancel, emitter)
+	if !apcore.is_ok(terr) {
+		apcore.log_error("%s", terr.message)
+		err_end_line, _ := apcore.session_close(&session, {reason = "error", usage = {}})
 		if out.format == .Stream_Json {
 			write_stdout(transmute([]byte)err_end_line)
 			write_stdout(transmute([]byte)string("\n"))
@@ -175,7 +145,7 @@ run :: proc(args: []string) -> int {
 	} else if result.error_kind != .None {
 		reason = "error"
 	}
-	end_line, end_err := engine.session_close(
+	end_line, end_err := apcore.session_close(
 		&session,
 		{
 			cancelled = result.cancelled,
@@ -183,8 +153,8 @@ run :: proc(args: []string) -> int {
 			usage = result.session_usage,
 		},
 	)
-	if !engine.is_ok(end_err) {
-		engine.log_error(end_err.message)
+	if !apcore.is_ok(end_err) {
+		apcore.log_error("%s", end_err.message)
 		return int(Exit_Code.Internal)
 	}
 	if out.format == .Stream_Json {
@@ -206,12 +176,11 @@ run :: proc(args: []string) -> int {
 }
 
 list_skills :: proc() -> int {
-	cwd, cerr := platform.canonicalize_path(".", true)
-	if !platform.is_ok(cerr) {
-		log_error(cerr.message)
-		return int(Exit_Code.Usage)
+	text, err := apcore.list_skills_text(".")
+	if !apcore.is_ok(err) {
+		apcore.log_error("%s", err.message)
+		return exit_code_for(err.kind)
 	}
-	text := engine.skills_brief(engine.discover_skills(cwd))
 	write_stdout(transmute([]byte)text)
 	return int(Exit_Code.OK)
 }
@@ -219,27 +188,16 @@ list_skills :: proc() -> int {
 // 只列出 agent 定义 + --tools 覆盖后的声明工具集；不读 settings.json、
 // 不需要 API key、不创建 session。task 的深度移除是运行期行为，这里不体现。
 list_tools :: proc(opts: Options) -> int {
-	config_dir, cerr := platform.default_config_dir(opts.config_dir)
-	if !platform.is_ok(cerr) {
-		log_error(cerr.message)
-		return int(Exit_Code.Usage)
+	text, err := apcore.list_tools_text(
+		opts.config_dir,
+		opts.agent,
+		opts.tools_set,
+		opts.tools,
+	)
+	if !apcore.is_ok(err) {
+		apcore.log_error("%s", err.message)
+		return exit_code_for(err.kind)
 	}
-	agent_name := "general"
-	if value, ok := opts.agent.?; ok {
-		agent_name = value
-	}
-	agent, aerr := engine.load_agent(config_dir, agent_name)
-	if !engine.is_ok(aerr) {
-		engine.log_error(aerr.message)
-		return exit_code_for(aerr.kind)
-	}
-	if opts.tools_set {
-		if terr := engine.apply_tool_override(&agent, opts.tools); !engine.is_ok(terr) {
-			engine.log_error(terr.message)
-			return exit_code_for(terr.kind)
-		}
-	}
-	text := engine.tools_brief(agent.tools)
 	write_stdout(transmute([]byte)text)
 	return int(Exit_Code.OK)
 }
@@ -252,7 +210,7 @@ print_system_prompt_text :: proc(text: string) {
 	}
 }
 
-exit_code_for :: proc(kind: engine.Error_Kind) -> int {
+exit_code_for :: proc(kind: apcore.Error_Kind) -> int {
 	switch kind {
 	case .None:
 		return 0

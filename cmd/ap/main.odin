@@ -1,8 +1,8 @@
 package main
 
 import "core:os"
-import apcore "../../ap-core"
+import apcli "../../ap-cli"
 
 main :: proc() {
-	os.exit(apcore.run(os.args))
+	os.exit(apcli.run(os.args))
 }

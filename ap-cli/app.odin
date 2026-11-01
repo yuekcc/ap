@@ -1,11 +1,11 @@
-package apcore
+package apcli
 
-import "platform"
-import "protocol"
+import apcore "../ap-core"
+import platform "../ap-core/platform"
 import "core:fmt"
 import "core:os"
 
-VERSION :: protocol.VERSION
+VERSION :: apcore.VERSION
 
 Exit_Code :: enum int {
 	OK       = 0,
@@ -32,12 +32,6 @@ make_error :: proc(code: Exit_Code, format: string, args: ..any) -> Error {
 
 is_ok :: proc(err: Error) -> bool {
 	return err.code == .OK
-}
-
-log_error :: proc(format: string, args: ..any) {
-	fmt.eprintf("ap: error: ")
-	fmt.eprintf(format, ..args)
-	fmt.eprintln()
 }
 
 write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {

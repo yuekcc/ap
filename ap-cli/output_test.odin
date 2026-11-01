@@ -1,6 +1,6 @@
-package apcore
+package apcli
 
-import "platform"
+import platform "../ap-core/platform"
 import "core:encoding/json"
 import "core:strings"
 import "core:testing"

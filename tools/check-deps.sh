@@ -61,6 +61,27 @@ check_imports() {
 		done <"$f"
 	done
 
+	for f in ap-cli/*.odin; do
+		[ -f "$f" ] || continue
+		while IFS= read -r line; do
+			t=${line#"${line%%[![:space:]]*}"}
+			case "$t" in
+			import\ *)
+				rest=${t#*\"}
+				[ "$rest" = "$t" ] && continue
+				path=${rest%%\"*}
+				case "$path" in
+				core:* | base:* | vendor:* | ../ap-core | ../ap-core/platform | ../ap-core/protocol) ;;
+				*)
+					echo "check-deps: $f: ap-cli 不允许 import \"$path\"（只允许 apcore、platform、protocol）"
+					fail=1
+					;;
+				esac
+				;;
+			esac
+		done <"$f"
+	done
+
 	for f in ap-core/engine/*.odin; do
 		[ -f "$f" ] || continue
 		while IFS= read -r line; do
@@ -132,9 +153,15 @@ check_imports() {
 		;;
 	esac
 
-	# cmd/* 是薄入口：只能 import 对应的库包与 apcore。
+	# cmd/* 是薄入口：每个入口只允许 import 自己对应的库包。
 	for f in cmd/*/*.odin; do
 		[ -f "$f" ] || continue
+		entry=${f#cmd/}
+		entry=${entry%%/*}
+		case "$entry" in
+		ap) own="../../ap-cli" ;;
+		*) own="../../$entry" ;;
+		esac
 		while IFS= read -r line; do
 			t=${line#"${line%%[![:space:]]*}"}
 			case "$t" in
@@ -143,9 +170,9 @@ check_imports() {
 				[ "$rest" = "$t" ] && continue
 				path=${rest%%\"*}
 				case "$path" in
-				core:* | base:* | vendor:* | ../../ap-core | ../../ap-tui | ../../ap-web) ;;
+				core:* | base:* | vendor:* | "$own") ;;
 				*)
-					echo "check-deps: $f: cmd 入口只允许 import \"../../ap-core\"、\"../../ap-tui\"、\"../../ap-web\""
+					echo "check-deps: $f: cmd/$entry 入口只允许 import \"$own\""
 					fail=1
 					;;
 				esac
@@ -193,6 +220,15 @@ if $self_test; then
 	if check_imports >/dev/null 2>&1; then
 		rm -f "$probe"
 		echo "check-deps: self-test 失败：cmd 入口的禁止 import 没有被检出"
+		exit 1
+	fi
+	rm -f "$probe"
+
+	probe=ap-cli/__check_deps_probe.odin
+	printf '%s\n' 'package apcli' '' 'import "../ap-core/engine"' >"$probe"
+	if check_imports >/dev/null 2>&1; then
+		rm -f "$probe"
+		echo "check-deps: self-test 失败：ap-cli 直接 import engine 没有被检出"
 		exit 1
 	fi
 	rm -f "$probe"

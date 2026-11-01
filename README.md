@@ -29,19 +29,20 @@ v1 已实现：
 ## 源码结构
 
 ```
-ap-core/            package apcore：CLI adapter（参数、输出格式、退出码、信号）
+ap-cli/             package apcli：CLI adapter（参数、输出格式、退出码、信号）
+ap-core/            package apcore：SDK 门面（配置解析、Session_Request、会话生命周期）
 ap-core/engine/     agent：loop / provider / tools / context / skills / transcript / session
 ap-core/platform/   路径、project/session、blob、JSON/文本、进程树、取消 token
 ap-core/protocol/   事件 schema、宽松解析、行分帧（只依赖 `core:`）
 ap-core/client/     前端 kit：spawn ap、逐行泵事件、只读 session 访问
 ap-tui/             package aptui：终端前端库
 ap-web/             package apweb：HTTP/SSE 前端库
-cmd/ap/             ap 入口：os.exit(apcore.run(os.args))
+cmd/ap/             ap 入口：os.exit(apcli.run(os.args))
 cmd/ap-tui/         ap-tui 入口：os.exit(aptui.run(os.args))
 cmd/ap-web/         ap-web 入口：os.exit(apweb.run(os.args))
 ```
 
-前端只允许 import `ap-core/client` 与 `ap-core/protocol`，由 `tools/check-deps` 在测试/构建时强制；`cmd/*` 只放薄入口，只允许 import 对应的库包。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
+`ap-cli` 只 import `apcore` 与 platform/protocol，不直接 import `engine`；前端只允许 import `ap-core/client` 与 `ap-core/protocol`。这些边界由 `tools/check-deps` 在测试/构建时强制；`cmd/*` 只放薄入口，只允许 import 对应的库包。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
 
 ## 构建
 
@@ -203,6 +204,7 @@ transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整
 .\test.ps1
 # 或
 odin test ap-core -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 npm --prefix ap-web test

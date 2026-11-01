@@ -45,6 +45,18 @@ function Test-ImportRules {
         }
     }
 
+    Get-ChildItem "ap-cli/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core$|\.\./ap-core/platform$|\.\./ap-core/protocol$)') {
+                    Fail-Check ('{0}: ap-cli 不允许 import "{1}"（只允许 apcore、platform、protocol）' -f $file, $path)
+                }
+            }
+        }
+    }
+
     Get-ChildItem "ap-core/engine/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
         $file = $_.FullName
         Get-Content $file | ForEach-Object {
@@ -90,14 +102,17 @@ function Test-ImportRules {
         Fail-Check "apcore 根包不允许定义 main（入口在 cmd/ap）"
     }
 
-    # cmd/* 是薄入口：只能 import 对应的库包与 apcore。
+    # cmd/* 是薄入口：每个入口只允许 import 自己对应的库包。
     Get-ChildItem "cmd/*/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
         $file = $_.FullName
+        $entry = $_.Directory.Name
+        $own = if ($entry -eq "ap") { "../../ap-cli" } else { "../../$entry" }
         Get-Content $file | ForEach-Object {
             if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
                 $path = $Matches[1]
-                if ($path -notmatch '^(core:|base:|vendor:|\.\./\.\./ap-core$|\.\./\.\./ap-tui$|\.\./\.\./ap-web$)') {
-                    Fail-Check ('{0}: cmd 入口只允许 import "../../ap-core"、"../../ap-tui"、"../../ap-web"' -f $file)
+                $expected = '^(core:|base:|vendor:|' + [regex]::Escape($own) + '$)'
+                if ($path -notmatch $expected) {
+                    Fail-Check ('{0}: cmd/{1} 入口只允许 import "{2}"' -f $file, $entry, $own)
                 }
             }
         }
@@ -126,6 +141,15 @@ if ($SelfTest) {
     Remove-Item $probe -Force
     if ($ok) {
         Write-Host "check-deps: self-test 失败：cmd 入口的禁止 import 没有被检出" -ForegroundColor Red
+        exit 1
+    }
+
+    $probe = "ap-cli/__check_deps_probe.odin"
+    Set-Content -Path $probe -Value "package apcli`n`nimport `"../ap-core/engine`"" -Encoding utf8
+    $ok = Test-ImportRules-Bool
+    Remove-Item $probe -Force
+    if ($ok) {
+        Write-Host "check-deps: self-test 失败：ap-cli 直接 import engine 没有被检出" -ForegroundColor Red
         exit 1
     }
     Write-Host "check-deps: self-test 通过"

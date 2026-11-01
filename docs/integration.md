@@ -16,10 +16,10 @@
 
 ## 1. 不可变契约
 
-1. **ap 是一次性 CLI**：一条提示词进，一个 turn 出，进程退出。没有 REPL、没有交互命令、没有进程内 API。
+1. **ap 是一次性 CLI**：一条提示词进，一个 turn 出，进程退出。没有 REPL、没有交互命令。`apcore` 只是同仓库 Odin 宿主可用的进程内门面（`ap-cli` 是它的唯一消费者）；对外集成契约仍然只有进程边界。
 2. **每个 turn 一个新进程**。不要复用上一条 turn 的进程；需要继续对话时用 `-s <session_id>` 恢复。
 3. **transcript 是唯一事实来源**。实时增量只用于展示；刷新、重连、重启后一律从 transcript 重建画面。
-4. **前端不 import `apcore`，也不重复实现 agent 逻辑**。依赖方向见 [architecture.md](architecture.md)：前端只 import `ap-core/client` + `ap-core/protocol`，不 import `apcore` / `ap-core/engine` / `ap-core/platform` / `ap-tui`。
+4. **前端不 import `apcore` / `ap-cli`，也不重复实现 agent 逻辑**。依赖方向见 [architecture.md](architecture.md)：前端只 import `ap-core/client` + `ap-core/protocol`，不 import `apcore` / `ap-cli` / `ap-core/engine` / `ap-core/platform` / `ap-tui`。
 5. **只通过参数、stdin、stdout、stderr 交互**。不读 ap 的内存、不改 transcript、不代写事件。
 6. **传输层自由**：终端可以直接写 stdout；Web 可以把事件转成 SSE；编辑器插件可以转成自己的消息总线。事件 schema 不变。
 

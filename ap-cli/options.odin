@@ -1,7 +1,7 @@
-package apcore
+package apcli
 
-import "engine"
-import "platform"
+import apcore "../ap-core"
+import platform "../ap-core/platform"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -355,7 +355,7 @@ parse_tool_list :: proc(value: string) -> ([]string, Error) {
 			}
 			special = name
 		case:
-			if !engine.tool_name_known(name) {
+			if !apcore.tool_name_known(name) {
 				return nil, make_error(
 					.Usage,
 					"unknown tool %q (expected read_file, write_file, edit_file, bash, task, all or none)",
@@ -375,9 +375,10 @@ parse_tool_list :: proc(value: string) -> ([]string, Error) {
 		if special == "none" {
 			return make([]string, 0), ok_error()
 		}
-		return engine.select_tools(engine.ALL_TOOL_NAMES[:]), ok_error()
+		all := apcore.all_tool_names()
+		return apcore.select_tools(all[:]), ok_error()
 	}
-	return engine.select_tools(names[:]), ok_error()
+	return apcore.select_tools(names[:]), ok_error()
 }
 
 // CRLF / 单独 CR → LF；去首尾空白；内部空行与缩进保持不变。

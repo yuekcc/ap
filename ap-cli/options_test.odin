@@ -1,4 +1,4 @@
-package apcore
+package apcli
 
 import "core:fmt"
 import "core:os"
