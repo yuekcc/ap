@@ -207,7 +207,7 @@ hint: run ap from the directory where the session was created
 
 ## 配置文件
 
-配置文件固定为 `$AP_CONFIG/settings.json`，由 `--config-dir` / `AP_CONFIG` 决定。
+配置文件固定为 `$AP_CONFIG/settings.json`，由 `--config-dir` / `AP_CONFIG` 决定。文件只由 `ap` 进程（`ap-cli`）读取与校验；`ap-core` 的 SDK 门面只接收解析后的 `Settings`，不打开这个文件，也不读 `AP_*` 环境变量。
 
 ```jsonc
 {

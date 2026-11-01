@@ -38,7 +38,28 @@ run :: proc(args: []string) -> int {
 		apcore.log_set_level(.Warn)
 	}
 
-	env, eerr := apcore.env_open({config_dir = opts.config_dir})
+	config_dir, cerr := platform.default_config_dir(opts.config_dir)
+	if !platform.is_ok(cerr) {
+		apcore.log_error("%s", cerr.message)
+		return int(Exit_Code.Usage)
+	}
+	// settings.json 只由 CLI 读取；SDK 只接收解析后的 Settings。
+	settings, serr := load_settings(config_dir)
+	if !apcore.is_ok(serr) {
+		apcore.log_error("%s", serr.message)
+		return exit_code_for(serr.kind)
+	}
+	bash_path, berr := platform.find_bash()
+	if !platform.is_ok(berr) {
+		apcore.log_error("%s", berr.message)
+		return int(Exit_Code.Usage)
+	}
+
+	env, eerr := apcore.env_open({
+		config_dir = config_dir,
+		bash_path  = bash_path,
+		settings   = settings,
+	})
 	if !apcore.is_ok(eerr) {
 		apcore.log_error("%s", eerr.message)
 		return exit_code_for(eerr.kind)
@@ -188,8 +209,13 @@ list_skills :: proc() -> int {
 // 只列出 agent 定义 + --tools 覆盖后的声明工具集；不读 settings.json、
 // 不需要 API key、不创建 session。task 的深度移除是运行期行为，这里不体现。
 list_tools :: proc(opts: Options) -> int {
+	config_dir, cerr := platform.default_config_dir(opts.config_dir)
+	if !platform.is_ok(cerr) {
+		apcore.log_error("%s", cerr.message)
+		return int(Exit_Code.Usage)
+	}
 	text, err := apcore.list_tools_text(
-		opts.config_dir,
+		config_dir,
 		opts.agent,
 		opts.tools_set,
 		opts.tools,

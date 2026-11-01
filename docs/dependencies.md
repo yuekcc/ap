@@ -9,8 +9,8 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `cmd/ap/` | `main` | 入口：`os.exit(apcli.run(os.args))` |
 | `cmd/ap-tui/` | `main` | 入口：`os.exit(aptui.run(os.args))` |
 | `cmd/ap-web/` | `main` | 入口：`os.exit(apweb.run(os.args))` |
-| `ap-cli/` | `apcli` | CLI adapter：参数、usage、输出格式、退出码、信号 |
-| `ap-core/` | `apcore` | SDK 门面：`env_open`、`Session_Request` 组装、会话生命周期 |
+| `ap-cli/` | `apcli` | CLI adapter：参数、加载 `settings.json`、定位 bash、usage、输出格式、退出码、信号 |
+| `ap-core/` | `apcore` | SDK 门面：接收 `config_dir` / `settings` / `bash_path`，`env_open`、`Session_Request` 组装、会话生命周期 |
 | `ap-core/protocol/` | `protocol` | 事件 schema、宽松解析、`Line_Reader`、usage 计算 |
 | `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON/文本、平台原语、进程树、取消 token |
 | `ap-core/engine/` | `engine` | agent：errors/config/session/loop/provider/sse/skills/transcript/process/tools |
@@ -18,7 +18,7 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `ap-tui/` | `aptui` | 终端前端库（`run` + 渲染/参数/agent） |
 | `ap-web/` | `apweb` | HTTP/SSE 前端库（`run` + server/api/sse/runner/assets） |
 
-同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter；`ap-core/*.odin` 是 SDK 门面，不读 argv、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
+同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter，也是唯一读 `settings.json`、读 `AP_*` 环境变量、定位 bash 的地方；`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
 
 ## 允许的边
 

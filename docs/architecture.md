@@ -8,8 +8,8 @@
 
 | 模块 | 负责 | 明确不做 |
 | --- | --- | --- |
-| CLI adapter（`ap-cli`，package `apcli`） | 参数解析、输出格式、退出码、信号安装、stdout/stderr | 不组装消息，不碰 provider/loop/transcript，不直接 import `engine` |
-| SDK 门面（`ap-core`，package `apcore`） | 解析 `$AP_CONFIG` 与 settings、定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不写 stdout/stderr、不装信号、不决定退出码 |
+| CLI adapter（`ap-cli`，package `apcli`） | 参数解析、读取 `settings.json`、定位 bash、输出格式、退出码、信号安装、stdout/stderr | 不组装消息，不碰 provider/loop/transcript，不直接 import `engine` |
+| SDK 门面（`ap-core`，package `apcore`） | 接收宿主传入的 `config_dir` / `settings` / `bash_path`，定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不读环境变量、不打开 `settings.json`、不写 stdout/stderr、不装信号、不决定退出码 |
 | Session（`ap-core/engine/session.odin`） | 新会话/恢复/fork 解析、system prompt 预览、`session_start`/`session_end` 写入 | 不决定退出码与输出格式 |
 | Loop | turn/step 状态机、事件编排、重试决策、中断处理 | 不解析 SSE，不实现工具 |
 | Context | transcript → messages 投影、system prompt 组装、blob 解析 | 不发请求，不写 transcript |
@@ -125,13 +125,15 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 
 ### SDK 门面（`apcore`）
 
-宿主（当前的 `ap-cli`）只 import `apcore` 与 platform/protocol 的路径与事件原语，不直接 import `engine`。门面负责把「解析配置 → 定位 project → 组装 `Session_Request`」这段样板收进去：
+宿主（当前的 `ap-cli`）只 import `apcore` 与 platform/protocol 的路径与事件原语，不直接 import `engine`。门面的输入全部是显式数据：配置目录、`Settings`、bash 路径、子代理可执行文件都由宿主解析好后传入，SDK 不打开任何配置文件、也不读环境变量。
 
 ```
 Config :: struct {
-    config_dir:      Maybe(string), // 空 = AP_CONFIG / 默认目录
-    cwd:             string,        // 空 = 当前目录
-    child_agent_bin: string,        // task 子代理要拉起的 ap；空 = 当前可执行文件
+    config_dir:      string,   // 已解析：--config-dir / AP_CONFIG / ~/.ap
+    cwd:             string,   // 空 = 当前目录
+    bash_path:       string,   // 宿主定位，例如 platform.find_bash
+    child_agent_bin: string,   // task 子代理要拉起的 ap；空 = 当前可执行文件
+    settings:        Settings, // 宿主读 settings.json 并校验后的结果
 }
 
 Env :: struct {
@@ -150,12 +152,12 @@ turn_run :: proc(s: ^Session, prompt: string, cancel: ^Cancel_Token, sink: Emitt
 session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error)
 
 list_skills_text :: proc(cwd: string) -> (string, Error)
-list_tools_text :: proc(config_dir: Maybe(string), agent: Maybe(string), tools_set: bool, tools: []string) -> (string, Error)
+list_tools_text :: proc(config_dir: string, agent: Maybe(string), tools_set: bool, tools: []string) -> (string, Error)
 ```
 
-另有 `is_ok`、`log_set_level` / `log_warn` / `log_error`（诊断写 stderr）、`select_tools` / `tool_name_known` / `all_tool_names` 的薄转发，以及给宿主用的 `Error`、`Session`、`Emitter` 等类型别名。
+另有 `settings_defaults`（只给默认值，不读文件）、`is_ok` / `errorf`、`log_set_level` / `log_warn` / `log_error`（诊断写 stderr）、`select_tools` / `tool_name_known` / `all_tool_names` 的薄转发，以及给宿主用的 `Error` / `Settings` / `Session` / `Emitter` 等类型别名。
 
-`env_open` 不做 `setup_console`、不装信号、不写 stdout；`child_agent_bin` 空时回退到当前可执行文件（`ap-cli` 这类宿主），内嵌到别的宿主时必须显式给，因为 `os.get_executable_path()` 会指向宿主而不是 `ap`。`env_open` 本身不读 argv，argv 回退只发生在这个默认值里。`list_skills_text` / `list_tools_text` 只算文本，打印属于 CLI 层。
+`settings.json` 只由 `ap-cli` 读取与校验（`ap-cli/settings.odin`），SDK 只接收最终的 `Settings`。`env_open` 不做 `setup_console`、不装信号、不写 stdout；`child_agent_bin` 空时回退到当前可执行文件（`ap-cli` 这类宿主），内嵌到别的宿主时必须显式给，因为 `os.get_executable_path()` 会指向宿主而不是 `ap`。`env_open` 本身不读 argv，argv 回退只发生在这个默认值里。`list_skills_text` / `list_tools_text` 只算文本，打印属于 CLI 层。
 
 ## 契约要点
 
@@ -165,7 +167,7 @@ list_tools_text :: proc(config_dir: Maybe(string), agent: Maybe(string), tools_s
 4. `transcript_append_line` 成功返回即意味着该行已写入并 flush；进程崩溃最多丢失最后一行。blob 必须在引用它的事件之前写完并 fsync。
 5. `transcript_read_all` 按文件行序读取；遇到未知事件类型跳过；遇到 `v` 大于支持版本、且类型已知时返回错误，避免误读。
 6. 任何模块都不得绕过 Loop 直接写 transcript 事件（Transcript Store 只提供追加原语）。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行，不写修复事件。
-7. SDK 门面（`apcore`）不得读 `os.args` / `os.stdin`、不得写 `os.stdout`、不得装信号、不得 `os.exit`。退出码映射、输出格式、控制台初始化只属于 `ap-cli`。唯一的 argv 触点是 `child_agent_bin` 为空时 `resolve_self_exe` 的回退。
+7. SDK 门面（`apcore`）不得读 `os.args` / `os.stdin`、不得写 `os.stdout`、不得装信号、不得 `os.exit`，也不得打开 `settings.json` 或读 `AP_CONFIG` / `AP_API_KEY` / `AP_BASH`：配置加载与环境发现属于 `ap-cli`，SDK 只接收 `Config.settings` / `config_dir` / `bash_path`。退出码映射、输出格式、控制台初始化同样只属于 `ap-cli`。唯一的 argv 触点是 `child_agent_bin` 为空时 `resolve_self_exe` 的回退。
 
 ## 进程与生命周期
 
@@ -177,7 +179,7 @@ list_tools_text :: proc(config_dir: Maybe(string), agent: Maybe(string), tools_s
    - Unix 的递归扫描不是运行期登记表：正常返回后 ap 不会在退出时再次清理后台后代
 4. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
 5. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
-6. 启动顺序：解析参数 → 确定 `$AP_CONFIG` → 加载配置 → 解析 agent → 计算 project hash → （恢复）打开并读取 transcript，取最后一个 `session_start` / （新 session）发现技能并组装 system prompt → 打开/创建 transcript 用于追加 → 写 `session_start` → 进入 Loop
+6. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json` → 定位 bash → 把 `config_dir` / `settings` / `bash_path` 交给 `apcore.env_open` → 解析 agent → 计算 project hash → （恢复）打开并读取 transcript，取最后一个 `session_start` / （新 session）发现技能并组装 system prompt → 打开/创建 transcript 用于追加 → 写 `session_start` → 进入 Loop
 7. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件
 8. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
 

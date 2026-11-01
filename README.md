@@ -29,8 +29,8 @@ v1 已实现：
 ## 源码结构
 
 ```
-ap-cli/             package apcli：CLI adapter（参数、输出格式、退出码、信号）
-ap-core/            package apcore：SDK 门面（配置解析、Session_Request、会话生命周期）
+ap-cli/             package apcli：CLI adapter（参数、settings.json、输出格式、退出码、信号）
+ap-core/            package apcore：SDK 门面（显式 Config、Session_Request、会话生命周期）
 ap-core/engine/     agent：loop / provider / tools / context / skills / transcript / session
 ap-core/platform/   路径、project/session、blob、JSON/文本、进程树、取消 token
 ap-core/protocol/   事件 schema、宽松解析、行分帧（只依赖 `core:`）

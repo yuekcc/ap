@@ -22,32 +22,6 @@ sdk_temp_dir :: proc(name: string) -> string {
 	return dir
 }
 
-sdk_write_settings :: proc(config_dir: string) {
-	path := fmt.tprintf("%s/settings.json", config_dir)
-	data := `{"model":"test-model","api_key":"test-key"}`
-	if err := os.write_entire_file_from_bytes(path, transmute([]byte)data); err != nil {
-		panic("cannot write settings.json")
-	}
-}
-
-sdk_restore_env :: proc(name, previous: string) {
-	if len(previous) == 0 {
-		_ = os.unset_env(name)
-	} else {
-		_ = os.set_env(name, previous)
-	}
-}
-
-// env_open 需要一个可执行的 bash；用 AP_BASH 指向临时文件，避免依赖机器环境。
-// 返回的 previous 交给调用方在结束时还原。
-sdk_set_fake_bash :: proc(dir: string) -> (path, previous: string) {
-	path = fmt.tprintf("%s/bash", dir)
-	_ = os.write_entire_file_from_bytes(path, []byte{})
-	previous = os.get_env("AP_BASH", context.allocator)
-	_ = os.set_env("AP_BASH", path)
-	return path, previous
-}
-
 @(test)
 test_sdk_session_request_fills_env :: proc(t: ^testing.T) {
 	env := Env {
@@ -80,27 +54,34 @@ test_sdk_session_request_fills_env :: proc(t: ^testing.T) {
 	testing.expect(t, req.settings == &env.settings)
 }
 
+// SDK 不读 settings.json：目录里没有这个文件也必须成功，设置完全来自入参。
 @(test)
-test_sdk_env_open_success :: proc(t: ^testing.T) {
-	dir := sdk_temp_dir("env")
+test_sdk_env_open_does_not_read_settings_json :: proc(t: ^testing.T) {
+	dir := sdk_temp_dir("no-settings-file")
 	defer os.remove_all(dir)
-	sdk_write_settings(dir)
+
+	settings := settings_defaults()
+	settings.model = "injected-model"
+	settings.api_key = "injected-key"
 
 	work := fmt.tprintf("%s/work", dir)
 	_ = os.make_directory_all(work)
-	fake_bash, previous := sdk_set_fake_bash(dir)
-	defer sdk_restore_env("AP_BASH", previous)
 
-	env, err := env_open({config_dir = dir, cwd = work, child_agent_bin = "/explicit/ap"})
+	env, err := env_open({
+		config_dir      = dir,
+		cwd             = work,
+		bash_path       = "/injected/bash",
+		child_agent_bin = "/explicit/ap",
+		settings        = settings,
+	})
 	defer delete(env.config_dir)
 	defer delete(env.cwd)
-	defer delete(env.bash_path)
 	if !testing.expect_value(t, err.kind, Error_Kind.None) {
 		return
 	}
-	testing.expect(t, strings.contains(strings.to_lower(env.config_dir), "ap-sdk-test-env"))
-	testing.expect_value(t, env.settings.model, "test-model")
-	testing.expect_value(t, env.bash_path, fake_bash)
+	testing.expect_value(t, env.settings.model, "injected-model")
+	testing.expect_value(t, env.settings.api_key, "injected-key")
+	testing.expect_value(t, env.bash_path, "/injected/bash")
 	testing.expect_value(t, env.child_agent_bin, "/explicit/ap")
 	testing.expect(t, strings.contains(env.cwd, "work"))
 }
@@ -109,28 +90,19 @@ test_sdk_env_open_success :: proc(t: ^testing.T) {
 test_sdk_env_open_falls_back_to_self_exe :: proc(t: ^testing.T) {
 	dir := sdk_temp_dir("self-exe")
 	defer os.remove_all(dir)
-	sdk_write_settings(dir)
-	_, previous := sdk_set_fake_bash(dir)
-	defer sdk_restore_env("AP_BASH", previous)
 
-	env, err := env_open({config_dir = dir, cwd = dir})
+	env, err := env_open({
+		config_dir = dir,
+		cwd        = dir,
+		bash_path  = "/injected/bash",
+		settings   = settings_defaults(),
+	})
 	defer delete(env.config_dir)
 	defer delete(env.cwd)
-	defer delete(env.bash_path)
 	if !testing.expect_value(t, err.kind, Error_Kind.None) {
 		return
 	}
 	testing.expect_value(t, env.child_agent_bin, platform.resolve_self_exe())
-}
-
-@(test)
-test_sdk_env_open_reports_missing_settings :: proc(t: ^testing.T) {
-	dir := sdk_temp_dir("no-settings")
-	defer os.remove_all(dir)
-
-	_, err := env_open({config_dir = dir, cwd = dir})
-	testing.expect_value(t, err.kind, Error_Kind.Usage)
-	testing.expect(t, strings.contains(err.message, "settings.json"))
 }
 
 @(test)
