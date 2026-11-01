@@ -112,6 +112,13 @@ test_cli_rejects_invalid_utf8_print_prompt :: proc(t: ^testing.T) {
 	testing.expect_value(t, err.code, Exit_Code.Usage)
 }
 
+@(test)
+test_cli_requires_prompt_source :: proc(t: ^testing.T) {
+	_, err := read_prompt(Options{}, ".")
+	testing.expect_value(t, err.code, Exit_Code.Usage)
+	testing.expect_value(t, err.message, "no prompt given; use --print, --input-file, or --print0")
+}
+
 cli_temp_dir :: proc(t: ^testing.T, name: string) -> string {
 	base := os.get_env("TEMP", context.allocator)
 	if len(base) == 0 {
@@ -129,122 +136,61 @@ cli_temp_dir :: proc(t: ^testing.T, name: string) -> string {
 test_cli_new_context_flags_defaults :: proc(t: ^testing.T) {
 	opts, err := parse_args([]string{"ap", "--print", "x"})
 	testing.expect_value(t, err.code, Exit_Code.OK)
-	testing.expect_value(t, opts.base_system_prompt, Maybe(string)(nil))
-	testing.expect_value(t, opts.base_system_prompt_file, Maybe(string)(nil))
 	testing.expect(t, !opts.no_agents_md)
 	testing.expect(t, !opts.no_skills)
-	testing.expect(t, !opts.tools_set)
-	testing.expect(t, !opts.list_tools)
 }
 
 @(test)
-test_cli_base_prompt_and_append_coexist :: proc(t: ^testing.T) {
-	opts, err := parse_args(
-		[]string{"ap", "--base-system-prompt=base", "--append-system-prompt", "append", "--print", "x"},
-	)
-	testing.expect_value(t, err.code, Exit_Code.OK)
-	testing.expect_value(t, opts.base_system_prompt.?, "base")
-	testing.expect_value(t, opts.append_system_prompt.?, "append")
+test_cli_removed_context_flags_rejected :: proc(t: ^testing.T) {
+	for flag in ([]string {
+		"--base-system-prompt",
+		"--base-system-prompt-file",
+		"--append-system-prompt",
+		"--tools",
+		"--list-tools",
+	}) {
+		_, err := parse_args([]string{"ap", flag})
+		testing.expect_value(t, err.code, Exit_Code.Usage)
+	}
 
-	_, err2 := parse_args([]string{"ap", "--base-system-prompt", "a", "--base-system-prompt-file", "f"})
-	testing.expect_value(t, err2.code, Exit_Code.Usage)
-}
-
-@(test)
-test_cli_base_prompt_rejects_empty :: proc(t: ^testing.T) {
-	_, err := parse_args([]string{"ap", "--base-system-prompt", ""})
+	_, err := parse_args([]string{"ap", "--tools=read_file"})
 	testing.expect_value(t, err.code, Exit_Code.Usage)
-	_, err2 := parse_args([]string{"ap", "--base-system-prompt", "   \r\n\t"})
+	_, err2 := parse_args([]string{"ap", "--list-tools=1"})
 	testing.expect_value(t, err2.code, Exit_Code.Usage)
-	_, err3 := parse_args([]string{"ap", "--base-system-prompt-file="})
-	testing.expect_value(t, err3.code, Exit_Code.Usage)
 }
 
 @(test)
-test_cli_normalize_prompt_block :: proc(t: ^testing.T) {
-	text, err := normalize_prompt_block(" \r\nline1\r\n\r\n  line2\r  ", true)
+test_cli_normalize_system_prompt :: proc(t: ^testing.T) {
+	text, err := normalize_system_prompt(" \r\nline1\r\n\r\n  line2\r  ")
 	testing.expect_value(t, err.code, Exit_Code.OK)
 	testing.expect_value(t, text, "line1\n\n  line2\n")
 
-	text2, err2 := normalize_prompt_block("  a  ", false)
-	testing.expect_value(t, err2.code, Exit_Code.OK)
-	testing.expect_value(t, text2, "a")
-
-	_, err3 := normalize_prompt_block(" \r\n\t ", true)
-	testing.expect_value(t, err3.code, Exit_Code.Usage)
+	_, err2 := normalize_system_prompt(" \r\n\t ")
+	testing.expect_value(t, err2.code, Exit_Code.Usage)
 }
 
 @(test)
-test_cli_read_base_system_prompt_file :: proc(t: ^testing.T) {
-	dir := cli_temp_dir(t, "base-file")
+test_cli_read_system_prompt :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "system-md")
 	defer os.remove_all(dir)
 
-	path := fmt.tprintf("%s/base.txt", dir)
-	_ = os.write_entire_file_from_bytes(path, transmute([]byte)string("  hello\r\nworld  "))
-	opts := Options {
-		base_system_prompt_file = "base.txt",
-	}
-	value, err := read_base_system_prompt(opts, dir)
-	testing.expect_value(t, err.code, Exit_Code.OK)
-	testing.expect_value(t, value.?, "hello\nworld\n")
-
-	empty_path := fmt.tprintf("%s/empty.txt", dir)
-	_ = os.write_entire_file_from_bytes(empty_path, []byte{})
-	_, err2 := read_base_system_prompt(Options{base_system_prompt_file = empty_path}, dir)
-	testing.expect_value(t, err2.code, Exit_Code.Usage)
-
-	bad_path := fmt.tprintf("%s/bad.txt", dir)
-	_ = os.write_entire_file_from_bytes(bad_path, []byte{0xff, 0xfe, 0x00})
-	_, err3 := read_base_system_prompt(Options{base_system_prompt_file = bad_path}, dir)
-	testing.expect_value(t, err3.code, Exit_Code.Usage)
-
-	_, err4 := read_base_system_prompt(Options{base_system_prompt_file = "missing.txt"}, dir)
-	testing.expect_value(t, err4.code, Exit_Code.Usage)
-}
-
-@(test)
-test_cli_append_prompt_empty_is_unset :: proc(t: ^testing.T) {
-	value, err := read_append_system_prompt(Options{append_system_prompt = "  \r\n "})
+	value, err := read_system_prompt_override(dir)
 	testing.expect_value(t, err.code, Exit_Code.OK)
 	testing.expect_value(t, value, Maybe(string)(nil))
 
-	value2, err2 := read_append_system_prompt(Options{append_system_prompt = " \r\nX  "})
+	path := fmt.tprintf("%s/SYSTEM.md", dir)
+	_ = os.write_entire_file_from_bytes(path, transmute([]byte)string("  hello\r\nworld  "))
+	value2, err2 := read_system_prompt_override(dir)
 	testing.expect_value(t, err2.code, Exit_Code.OK)
-	testing.expect_value(t, value2.?, "X")
-}
+	testing.expect_value(t, value2.?, "hello\nworld\n")
 
-@(test)
-test_cli_tools_list :: proc(t: ^testing.T) {
-	opts, err := parse_args([]string{"ap", "--tools", " bash, read_file, ,bash "})
-	testing.expect_value(t, err.code, Exit_Code.OK)
-	testing.expect(t, opts.tools_set)
-	testing.expect_value(t, strings.join(opts.tools, ","), "read_file,bash")
-
-	all, err2 := parse_tool_list("all")
-	testing.expect_value(t, err2.code, Exit_Code.OK)
-	testing.expect_value(t, len(all), 5)
-
-	none, err3 := parse_tool_list("none")
-	testing.expect_value(t, err3.code, Exit_Code.OK)
-	testing.expect_value(t, len(none), 0)
-}
-
-@(test)
-test_cli_tools_list_errors :: proc(t: ^testing.T) {
-	_, err := parse_tool_list("all,read_file")
-	testing.expect_value(t, err.code, Exit_Code.Usage)
-	_, err2 := parse_tool_list("")
-	testing.expect_value(t, err2.code, Exit_Code.Usage)
-	_, err3 := parse_tool_list(" , ")
+	_ = os.write_entire_file_from_bytes(path, []byte{})
+	_, err3 := read_system_prompt_override(dir)
 	testing.expect_value(t, err3.code, Exit_Code.Usage)
-	_, err4 := parse_tool_list("grep")
+
+	_ = os.write_entire_file_from_bytes(path, []byte{0xff, 0xfe, 0x00})
+	_, err4 := read_system_prompt_override(dir)
 	testing.expect_value(t, err4.code, Exit_Code.Usage)
-	_, err5 := parse_args([]string{"ap", "--tools="})
-	testing.expect_value(t, err5.code, Exit_Code.Usage)
-	_, err6 := parse_tool_list("all,all")
-	testing.expect_value(t, err6.code, Exit_Code.Usage)
-	_, err7 := parse_tool_list("none,none")
-	testing.expect_value(t, err7.code, Exit_Code.Usage)
 }
 
 @(test)
@@ -253,19 +199,6 @@ test_cli_context_switches_reject_inline_values :: proc(t: ^testing.T) {
 	testing.expect_value(t, err.code, Exit_Code.Usage)
 	_, err2 := parse_args([]string{"ap", "--no-skills=1"})
 	testing.expect_value(t, err2.code, Exit_Code.Usage)
-	_, err3 := parse_args([]string{"ap", "--list-tools=1"})
-	testing.expect_value(t, err3.code, Exit_Code.Usage)
-}
-
-@(test)
-test_cli_list_tools_conflicts_and_precedence :: proc(t: ^testing.T) {
-	_, err := parse_args([]string{"ap", "--list-skills", "--list-tools"})
-	testing.expect_value(t, err.code, Exit_Code.Usage)
-
-	opts, err2 := parse_args([]string{"ap", "--list-tools", "--print-system-prompt"})
-	testing.expect_value(t, err2.code, Exit_Code.OK)
-	testing.expect(t, opts.list_tools)
-	testing.expect(t, opts.print_system_prompt)
 }
 
 @(test)
@@ -277,14 +210,32 @@ test_cli_workspace_removed :: proc(t: ^testing.T) {
 @(test)
 test_cli_help_lists_new_flags :: proc(t: ^testing.T) {
 	for flag in ([]string {
-		"--base-system-prompt",
-		"--base-system-prompt-file",
 		"--no-agents-md",
 		"--no-skills",
-		"--tools",
-		"--list-tools",
+		"--list-skills",
+		"--print-system-prompt",
 	}) {
 		testing.expect(t, strings.contains(USAGE_TEXT, flag))
 	}
+	for flag in ([]string {
+		"--base-system-prompt",
+		"--base-system-prompt-file",
+		"--append-system-prompt",
+		"--tools",
+		"--list-tools",
+	}) {
+		testing.expect(t, !strings.contains(USAGE_TEXT, flag))
+	}
+	testing.expect(t, strings.contains(USAGE_TEXT, "SYSTEM.md"))
 	testing.expect(t, !strings.contains(USAGE_TEXT, "--workspace"))
+}
+
+@(test)
+test_cli_help_requires_explicit_prompt_source :: proc(t: ^testing.T) {
+	for flag in ([]string{"--print", "--input-file", "--print0"}) {
+		testing.expect(t, strings.contains(USAGE_TEXT, flag))
+	}
+	testing.expect(t, strings.contains(USAGE_TEXT, "不会隐式读取 stdin"))
+	testing.expect(t, !strings.contains(USAGE_TEXT, "stdin 不是 TTY"))
+	testing.expect(t, !strings.contains(USAGE_TEXT, "ap [选项]"))
 }

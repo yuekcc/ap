@@ -30,8 +30,6 @@ Tool_Context :: struct {
 	bash_path:         string,
 	model:             string,
 	max_steps:         int,
-	tools_set:         bool,
-	tools_override:    []string,
 	no_agents_md:      bool,
 	no_skills:         bool,
 	on_update:         proc(user: rawptr, chunk: string),

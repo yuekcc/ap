@@ -31,15 +31,10 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 | `--parent-session-id <id>` | session_id | 标记当前进程是某个 session 的子代理；父 transcript 必须存在 |
 | `--parent-tool-call-id <id>` | tool_call_id | 父进程中对应的 `task` 调用；必须与 `--parent-session-id` 同时使用 |
 | `--agent-depth <n>` | 非负整数 | 当前 agent 深度；默认 0，子代理为父 + 1；恢复时以记录为准 |
-| `--append-system-prompt <text>` | 文本 | 追加到 system prompt 末尾；恢复 session 时只警告，不生效 |
-| `--base-system-prompt <text>` | 文本 | 替换内置固定指令段，保留工具/环境/技能/记忆/agent/追加部分；恢复时只警告 |
-| `--base-system-prompt-file <path>` | 文件路径 | 从 UTF-8 文件读取并替换内置固定指令段；与 `--base-system-prompt` 互斥 |
-| `--no-agents-md` | — | 不注入 `$AP_CONFIG/AGENTS.md` 与项目 `AGENTS.md`；恢复时只警告 |
+| `--no-agents-md` | — | 不注入 `~/.agents/AGENTS.md` 与项目 `AGENTS.md`；恢复时只警告 |
 | `--no-skills` | — | 不扫描、不注入技能清单；不影响 `--list-skills`；恢复时只警告 |
-| `--tools <list>` | 逗号分隔列表 | 覆盖 agent 定义中的工具白名单；支持 `all` / `none`；恢复时只警告 |
 | `--verbose` / `--debug` | — | 日志级别，输出到 stderr |
 | `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
-| `--list-tools` | — | 列出本次声明生效的工具后退出；不读配置、不需要 API key |
 | `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型 |
 | `--help` / `--version` | — | 用法与版本 |
 
@@ -47,70 +42,41 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 
 ### 提示词来源
 
-`--print`、`--input-file`、`--print0` **互斥**，同时出现时退出码 2。`-s` 与 `-c` 也互斥；`--fork-session` 必须与其中之一连用。
+`--print`、`--input-file`、`--print0` **三选一**：正常运行必须且只能给一个，同时出现或都没给都退出码 2。不需要提示词的检查命令（`--help`、`--version`、`--list-skills`、`--print-system-prompt`）不受此限制。`-s` 与 `-c` 也互斥；`--fork-session` 必须与其中之一连用。
 
 - `--print`：参数即提示词；空字符串视为用法错误。提示词必须是合法 UTF-8；Windows 上若系统 ANSI 代码页不是 UTF-8，ap 会先按宽字符命令行重建参数并转成 UTF-8，转换不了的参数会直接报用法错误，而不是把乱码写进 transcript
 - `--input-file`：文件必须存在、可读、UTF-8；内容为空视为用法错误
 - `--print0`：读 fd 0 直到 EOF；帮助文本里明确写「0 = stdin」，避免被误认为 NUL 分隔
-- 三者都没给时：stdin 不是 TTY → 读 stdin 作为提示词；stdin 是 TTY → 退出码 2，并提示如何传入提示词
+- 三者都没给时：退出码 2，并提示可用的三个来源。ap **不再**根据 stdin 是否为 TTY 隐式读取；需要从 stdin 取提示词时必须显式传 `--print0`
+- 内嵌/集成场景统一用 `--print0` + stdin：写完提示词后关闭写端，EOF 就是输入结束信号
 
 一次运行只处理一条提示词，因此一次运行最多一个 user turn。
 
-### system prompt 片段与上下文开关
+### system prompt 约定与上下文开关
 
-`--base-system-prompt` / `--base-system-prompt-file`：
+`$AP_CONFIG/SYSTEM.md`：
 
-1. 两者互斥，同时出现退出 2
-2. 只替换 system prompt 的第 1 段（内置固定指令）；工具说明、环境、技能、记忆、agent 定义、追加指令仍按规则拼接
-3. `--base-system-prompt-file` 的相对路径相对启动目录，支持 `~/...`；文件必须存在、可读、非空且是合法 UTF-8
-4. 文本统一规范化：CRLF / 单独 CR → LF，去掉首尾空白，结尾保证恰好一个 `\n`；内部空行与缩进保持不变；规范化后为空退出 2
-5. 可以与 `--append-system-prompt` 同时使用：base 在最前，append 在最后；也可以与 `--no-agents-md` / `--no-skills` / `--tools` 组合
-6. 不存在“完全裸 prompt”模式：环境与工具说明等自动小节始终保留
+1. 存在时替换 system prompt 的第 1 段（内置固定指令）；工具说明、环境、技能、记忆、agent 定义仍按规则拼接
+2. 文件必须可读、非空且是合法 UTF-8；否则退出 2
+3. 文本统一规范化：CRLF / 单独 CR → LF，去掉首尾空白，结尾保证恰好一个 `\n`；内部空行与缩进保持不变
+4. 只影响新 session；恢复 / fork 使用 `session_start` 中冻结的 prompt
+5. 不存在“完全裸 prompt”模式：环境与工具说明等自动小节始终保留
 
-`--append-system-prompt` 同样做 CRLF→LF 与首尾 trim，但不自行补结尾换行；trim 后为空视为未提供，不报错。
+需要追加提示词时，写入 `~/.agents/AGENTS.md`（全局）或项目 `AGENTS.md`，不提供 `--append-system-prompt`。
 
-`--no-agents-md`：不读取 `$AP_CONFIG/AGENTS.md`，也不从 cwd 向上发现项目 `AGENTS.md`；system prompt 中不会出现「全局记忆」「项目记忆」小节。不改变 `AGENTS.md` 文件本身，也不改变文件工具的读取能力。
+`--no-agents-md`：不读取 `~/.agents/AGENTS.md`，也不从 cwd 向上发现项目 `AGENTS.md`；system prompt 中不会出现「全局记忆」「项目记忆」小节。不改变 `AGENTS.md` 文件本身，也不改变文件工具的读取能力。
 
 `--no-skills`：只关闭“扫描技能并注入清单”；prompt 中不出现 `<available_skills>`，`--list-skills` 仍正常列出。它不是安全边界，模型仍可用 `bash` / `read_file` 读 `SKILL.md`。
-
-`--tools`：
-
-1. 优先级：CLI `--tools` > agent 定义中的 `tools:` > 全部五个工具
-2. 按 `,` 分割，逐项 trim，忽略空项，重复项去重；最终顺序固定按 `read_file, write_file, edit_file, bash, task`
-3. `all` 展开为五个工具；`none` 表示零个工具；两者必须是唯一 token，不能与其它工具名混写
-4. 未知工具名、空值（`--tools=` 或 `--tools ""`）退出 2；要零工具请用 `--tools none`
-5. `--tools none` 时 provider 请求不发送 `tools` 字段，system prompt 工具节写「（本次没有可用工具）」
-6. `task` 是否实际可用仍由 `max_agent_depth` 决定；即使白名单包含 `task`，达到深度上限时也会被移除
-7. 它不是权限系统：只限制注册给模型的工具；`bash` 仍拥有完整进程权限
 
 ### 查看技能
 
 `--list-skills` 在加载配置之前处理，列出 `~/.agents/skills` 与 `<启动目录>/.agents/skills` 中的有效技能后退出（退出码 0）。它不需要 `settings.json` 或 API key，`--config-dir` 对它没有影响；`--help` / `--version` 的优先级更高。`--no-skills` 只影响新 session 的提示词注入，不影响该命令。格式与发现规则见 [skills.md](skills.md)。
 
-### 查看工具
-
-`--list-tools` 在加载配置之前处理，列出 `--agent` 与 `--tools` 组合后的**声明工具白名单**后退出（退出码 0），一行一个：
-
-```text
-1. read_file: 按行读取 UTF-8 文本文件；...
-2. bash: 使用 bash -c <command> 执行 Bash/POSIX 命令；...
-```
-
-规则：
-
-1. 不加载 `settings.json`、不需要 API key、不创建 session、不写 transcript、不调用模型
-2. 受 `--config-dir` / `AP_CONFIG`（agent 定义位置）、`--agent`、`--tools` 影响
-3. 空工具集输出 `No tool found`
-4. 只反映声明工具集；`task` 在运行期仍会按 `max_agent_depth` 移除，`--list-tools` 无法预知这一点
-5. 与 `--list-skills` 互斥；同时出现退出 2
-6. 与 `--print-system-prompt` 同时出现时，`--list-tools` 优先
-7. 命令优先级：`--help` / `--version` > `--list-skills` / `--list-tools` > `--print-system-prompt` > 正常运行
-
 ### 查看 system prompt
 
-`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词。它会正常加载配置与 agent，因此需要可用的 `settings.json`；受 `--config-dir`、`--agent`、`--base-system-prompt` / `--base-system-prompt-file`、`--append-system-prompt`、`--no-agents-md`、`--no-skills`、`--tools` 影响。
+`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词。它会正常加载配置与 agent，因此需要可用的 `settings.json`；受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。
 
-新 session 按 [context-management.md](context-management.md) 的规则现场组装（技能清单、记忆文件、agent 定义都会重新扫描）。给了 base 替换参数时，打印的是**完整组装结果**，不是只打印 base 文本。与 `-s` / `-c` 连用时打印该 session 在 `session_start` 中冻结的 prompt，恢复期无效参数不会生效；这些参数的 warning 会写到 stderr。输出不受 `--output-format` 影响，始终是纯文本，末尾保证有换行。
+新 session 按 [context-management.md](context-management.md) 的规则现场组装（技能清单、记忆文件、agent 定义都会重新扫描）。存在 `SYSTEM.md` 时，打印的是**完整组装结果**，不是只打印 base 文本。与 `-s` / `-c` 连用时打印该 session 在 `session_start` 中冻结的 prompt。输出不受 `--output-format` 影响，始终是纯文本，末尾保证有换行。
 
 ### 输出格式
 
@@ -150,29 +116,22 @@ turn 结束、进程退出前，还会向 stderr 打印一行 `<可执行文件>
 
 ### 恢复时的参数处理
 
-恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集不再重算。以下参数与冻结值冲突时**在 stderr 打 warning 并忽略**，退出码不受影响：
+恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集不再重算。`$AP_CONFIG/SYSTEM.md` 只在新 session 生效；恢复时不会重新读取。以下参数与冻结值冲突时**在 stderr 打 warning 并忽略**，退出码不受影响：
 
 - `--model`（与记录不同值时）
 - `--agent`（与记录不同值时）
-- `--append-system-prompt`（非空时）
-- `--base-system-prompt` / `--base-system-prompt-file`
 - `--no-agents-md`
 - `--no-skills`
-- `--tools`
 - `--parent-session-id` / `--parent-tool-call-id` / `--agent-depth`
 
-建议的 warning 文案：
+warning 文案：
 
 ```text
---base-system-prompt ignored on restore: session is frozen to its recorded prompt
 --no-agents-md ignored on restore: session prompt is frozen
 --no-skills ignored on restore: session prompt is frozen
---tools ignored on restore: session is frozen to its recorded tool set
 ```
 
-这些参数的值仍先按通用规则校验：未知工具名、缺失或空的 `--base-system-prompt-file`、同时给 base 与 base-file 等，仍以退出码 2 失败；校验通过后才进入 warning + 忽略。
-
-恢复后的工具集以 `session_start.tools` 为准：改 `agents/<name>.md` 中的 `tools:` 不再影响已有 session。旧 transcript 没有 `tools` 字段时，回退到当前 agent 定义的 `tools:`。恢复期被忽略的开关也不会再传播给 `task` 子代理。
+恢复后的工具集以 `session_start.tools` 为准：改 `agents/<name>.md` 中的 `tools:` 不再影响已有 session。旧 transcript 没有 `tools` 字段时，回退到当前 agent 定义的 `tools:`。
 
 以下参数在恢复时照常生效：
 
@@ -248,7 +207,7 @@ hint: run ap from the directory where the session was created
 ```
 $AP_CONFIG/
   settings.json
-  AGENTS.md                          # 全局记忆
+  SYSTEM.md                          # 存在时替换内置固定指令段
   agents/
     <name>.md                        # 子代理定义
   projects/
@@ -257,6 +216,9 @@ $AP_CONFIG/
       blobs/
         <sha256>                     # 内容寻址的大块数据，用户自行清理
       <session_id>.jsonl             # transcript，一行一个事件
+
+~/.agents/
+  AGENTS.md                          # 全局记忆 / 追加提示词
 ```
 
 transcript 一行一个事件，完整事件只追加；恢复时若发现崩溃留下的不完整尾行，会先截掉它再追加新事件。blob 由用户自行清理。

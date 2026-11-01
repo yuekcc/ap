@@ -59,6 +59,8 @@ Config :: struct {
 	config_dir:      string,
 	// 空 = 当前目录；相对路径按进程启动目录解析。
 	cwd:             string,
+	// 用户主目录；宿主解析。空 = 不注入全局 AGENTS.md。
+	home_dir:        string,
 	// bash 可执行文件；由宿主定位（如 platform.find_bash）。
 	bash_path:       string,
 	// task 工具拉起子代理时用的 ap 可执行文件。空 = 当前可执行文件，
@@ -72,6 +74,7 @@ Config :: struct {
 Env :: struct {
 	config_dir:      string,
 	cwd:             string,
+	home_dir:        string,
 	project:         Project,
 	bash_path:       string,
 	child_agent_bin: string,
@@ -111,6 +114,7 @@ resolve_cwd :: proc(input: string) -> (string, platform.Error) {
 env_open :: proc(cfg: Config) -> (Env, Error) {
 	env := Env {
 		config_dir      = cfg.config_dir,
+		home_dir        = cfg.home_dir,
 		bash_path       = cfg.bash_path,
 		child_agent_bin = cfg.child_agent_bin,
 		settings        = cfg.settings,
@@ -150,6 +154,7 @@ session_request :: proc(env: ^Env, opts: Session_Options) -> Session_Request {
 		settings = &env.settings,
 		config_dir = env.config_dir,
 		cwd = env.cwd,
+		home_dir = env.home_dir,
 		self_exe = env.child_agent_bin,
 		bash_path = env.bash_path,
 		source_session_id = opts.source_session_id,

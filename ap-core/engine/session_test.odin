@@ -130,7 +130,7 @@ test_resolve_restore_warns_and_uses_frozen_tools :: proc(t: ^testing.T) {
 	testing.expect(t, test_contains(warnings, "--base-system-prompt ignored on restore"))
 	testing.expect(t, test_contains(warnings, "--no-agents-md ignored on restore"))
 	testing.expect(t, test_contains(warnings, "--no-skills ignored on restore"))
-	testing.expect(t, test_contains(warnings, "--tools ignored on restore"))
+	testing.expect(t, test_contains(warnings, "tool override ignored on restore"))
 	testing.expect(t, test_contains(warnings, "--append-system-prompt ignored on restore"))
 }
 
@@ -288,9 +288,7 @@ test_restore_does_not_propagate_ignored_switches :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, is_ok(err))
 	transcript_close(&session.store)
-	testing.expect(t, !session.tools_set)
 	testing.expect(t, !session.no_agents_md)
 	testing.expect(t, !session.no_skills)
-	testing.expect_value(t, len(session.tools_override), 0)
 	testing.expect_value(t, strings.join(session.agent.tools, ","), "read_file")
 }

@@ -131,13 +131,14 @@ tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def
 Config :: struct {
     config_dir:      string,   // 已解析：--config-dir / AP_CONFIG / ~/.ap
     cwd:             string,   // 空 = 当前目录
+    home_dir:        string,   // 宿主解析的用户主目录；空 = 不注入全局 AGENTS.md
     bash_path:       string,   // 宿主定位，例如 platform.find_bash
     child_agent_bin: string,   // task 子代理要拉起的 ap；空 = 当前可执行文件
     settings:        Settings, // 宿主读 settings.json 并校验后的结果
 }
 
 Env :: struct {
-    config_dir, cwd, bash_path, child_agent_bin: string,
+    config_dir, cwd, home_dir, bash_path, child_agent_bin: string,
     project:  Project,
     settings: Settings,
 }

@@ -356,20 +356,14 @@ test_task_child_args_propagates_context_switches :: proc(t: ^testing.T) {
 	testing.expect(t, !has_arg(base, "--no-agents-md"))
 	testing.expect(t, !has_arg(base, "--no-skills"))
 
-	ctx.tools_set = true
-	ctx.tools_override = []string{"read_file", "bash"}
 	ctx.no_agents_md = true
 	ctx.no_skills = true
 	args := task_child_args(&ctx, "scout", ctx.max_steps)
-	testing.expect(t, has_arg_pair_value(args, "--tools", "read_file,bash"))
 	testing.expect(t, has_arg(args, "--no-agents-md"))
 	testing.expect(t, has_arg(args, "--no-skills"))
+	testing.expect(t, !has_arg_pair(args, "--tools"))
 	testing.expect(t, !has_arg_pair(args, "--base-system-prompt"))
 	testing.expect(t, !has_arg_pair(args, "--append-system-prompt"))
-
-	ctx.tools_override = []string{}
-	none_args := task_child_args(&ctx, "scout", ctx.max_steps)
-	testing.expect(t, has_arg_pair_value(none_args, "--tools", "none"))
 }
 
 has_arg :: proc(args: []string, flag: string) -> bool {

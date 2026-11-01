@@ -105,7 +105,7 @@ stdin 与 stdout 都是 TTY 时，每轮 turn 前进入 raw mode，用自绘的�
 - 终端 reflow（窗口缩放、重新布局已画内容）可能让编辑块错位；编辑块会在下一次按键重绘时按新尺寸重新 layout，空闲时不主动重绘，也不修复终端已改写的 scrollback
 - emoji 的 ZWJ 序列与变体选择符按 1 列处理，光标可能视觉偏移
 - 粘贴内容中的控制字符（如 ESC）会原样进入缓冲区并显示；不要粘贴不可信内容
-- 暂不暴露 `--base-system-prompt` / `--no-agents-md` / `--no-skills` / `--tools` 等运行级上下文开关；ap-tui 拉起的 ap 子进程使用默认上下文
+- 暂不暴露 `--no-agents-md` / `--no-skills` 等运行级上下文开关；ap-tui 拉起的 ap 子进程使用默认上下文（`$AP_CONFIG/SYSTEM.md` 仍会自动生效）
 
 ## 交互命令
 

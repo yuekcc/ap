@@ -1,7 +1,7 @@
 package apcli
 
-import apcore "../ap-core"
 import platform "../ap-core/platform"
+import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -28,19 +28,13 @@ Options :: struct {
 	parent_session_id:    Maybe(string),
 	parent_tool_call_id:  Maybe(string),
 	agent_depth:          Maybe(int),
-	append_system_prompt: Maybe(string),
-	base_system_prompt:   Maybe(string),
-	base_system_prompt_file: Maybe(string),
 	no_agents_md:         bool,
 	no_skills:            bool,
-	tools_set:            bool,
-	tools:                []string,
 	verbose:              bool,
 	debug:                bool,
 	help:                 bool,
 	version:              bool,
 	list_skills:          bool,
-	list_tools:           bool,
 	print_system_prompt:  bool,
 }
 
@@ -72,12 +66,6 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 				return opts, make_error(.Usage, "%s does not take a value", name)
 			}
 			opts.list_skills = true
-			i += 1
-		case "--list-tools":
-			if has_inline {
-				return opts, make_error(.Usage, "%s does not take a value", name)
-			}
-			opts.list_tools = true
 			i += 1
 		case "--print-system-prompt":
 			if has_inline {
@@ -217,33 +205,6 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			}
 			opts.agent_depth = parsed
 			i = n
-		case "--append-system-prompt":
-			value, n, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
-				return opts, err
-			}
-			opts.append_system_prompt = value
-			i = n
-		case "--base-system-prompt":
-			value, n, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
-				return opts, err
-			}
-			if len(strings.trim_space(value)) == 0 {
-				return opts, make_error(.Usage, "--base-system-prompt requires non-empty text")
-			}
-			opts.base_system_prompt = value
-			i = n
-		case "--base-system-prompt-file":
-			value, n, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
-				return opts, err
-			}
-			if len(value) == 0 {
-				return opts, make_error(.Usage, "--base-system-prompt-file requires a path")
-			}
-			opts.base_system_prompt_file = value
-			i = n
 		case "--no-agents-md":
 			if has_inline {
 				return opts, make_error(.Usage, "%s does not take a value", name)
@@ -256,18 +217,6 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			}
 			opts.no_skills = true
 			i += 1
-		case "--tools":
-			value, n, err := option_value(args, i, inline, has_inline, name)
-			if !is_ok(err) {
-				return opts, err
-			}
-			parsed, perr := parse_tool_list(value)
-			if !is_ok(perr) {
-				return opts, perr
-			}
-			opts.tools = parsed
-			opts.tools_set = true
-			i = n
 		case "--verbose":
 			if has_inline {
 				return opts, make_error(.Usage, "%s does not take a value", name)
@@ -309,15 +258,6 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 	if prompt_sources > 1 {
 		return opts, make_error(.Usage, "--print, --input-file and --print0 are mutually exclusive")
 	}
-	if opts.base_system_prompt != nil && opts.base_system_prompt_file != nil {
-		return opts, make_error(
-			.Usage,
-			"--base-system-prompt and --base-system-prompt-file are mutually exclusive",
-		)
-	}
-	if opts.list_skills && opts.list_tools {
-		return opts, make_error(.Usage, "--list-skills and --list-tools are mutually exclusive")
-	}
 	if name, ok := opts.agent.?; ok && len(name) == 0 {
 		return opts, make_error(.Usage, "--agent requires a name")
 	}
@@ -336,54 +276,8 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 	return opts, ok_error()
 }
 
-// 解析 --tools 的值：支持 all / none，去重后按 ALL_TOOL_NAMES 的固定顺序返回。
-parse_tool_list :: proc(value: string) -> ([]string, Error) {
-	parts, _ := strings.split(value, ",")
-	names := make([dynamic]string, 0, len(parts))
-	special := ""
-	has_token := false
-	for part in parts {
-		name := strings.trim_space(part)
-		if len(name) == 0 {
-			continue
-		}
-		has_token = true
-		switch name {
-		case "all", "none":
-			if len(special) > 0 {
-				return nil, make_error(.Usage, "--tools: all/none must be the only value")
-			}
-			special = name
-		case:
-			if !apcore.tool_name_known(name) {
-				return nil, make_error(
-					.Usage,
-					"unknown tool %q (expected read_file, write_file, edit_file, bash, task, all or none)",
-					name,
-				)
-			}
-			append(&names, name)
-		}
-	}
-	if !has_token {
-		return nil, make_error(.Usage, "--tools requires a non-empty list; use --tools none for no tools")
-	}
-	if len(special) > 0 {
-		if len(names) > 0 {
-			return nil, make_error(.Usage, "--tools: all/none must be the only value")
-		}
-		if special == "none" {
-			return make([]string, 0), ok_error()
-		}
-		all := apcore.all_tool_names()
-		return apcore.select_tools(all[:]), ok_error()
-	}
-	return apcore.select_tools(names[:]), ok_error()
-}
-
-// CRLF / 单独 CR → LF；去首尾空白；内部空行与缩进保持不变。
-// ensure_trailing_newline 为 true 时保证结尾恰好一个 \n。
-normalize_prompt_block :: proc(text: string, ensure_trailing_newline: bool) -> (string, Error) {
+// CRLF / 单独 CR → LF；去首尾空白；内部空行与缩进保持不变，结尾恰好一个 \n。
+normalize_system_prompt :: proc(text: string) -> (string, Error) {
 	b := strings.builder_make()
 	i := 0
 	for i < len(text) {
@@ -402,58 +296,26 @@ normalize_prompt_block :: proc(text: string, ensure_trailing_newline: bool) -> (
 	if len(trimmed) == 0 {
 		return "", make_error(.Usage, "prompt text must not be empty")
 	}
-	if ensure_trailing_newline {
-		return strings.concatenate([]string{trimmed, "\n"}), ok_error()
-	}
-	return strings.clone(trimmed), ok_error()
+	return strings.concatenate([]string{trimmed, "\n"}), ok_error()
 }
 
-// --base-system-prompt / --base-system-prompt-file：文件读取放在 CLI 层，
-// engine 只接收规范化后的最终文本。
-read_base_system_prompt :: proc(opts: Options, cwd: string) -> (Maybe(string), Error) {
-	if value, ok := opts.base_system_prompt.?; ok {
-		normalized, nerr := normalize_prompt_block(value, true)
-		if !is_ok(nerr) {
-			return nil, nerr
-		}
-		return normalized, ok_error()
-	}
-	if path, ok := opts.base_system_prompt_file.?; ok {
-		resolved, rerr := platform.resolve_tool_path(cwd, path)
-		if !platform.is_ok(rerr) {
-			return nil, make_error(.Usage, "%s", rerr.message)
-		}
-		data, derr := os.read_entire_file_from_path(resolved, context.allocator)
-		if derr != nil {
-			return nil, make_error(.Usage, "cannot read --base-system-prompt-file %s: %v", resolved, derr)
-		}
-		if len(data) == 0 {
-			return nil, make_error(.Usage, "--base-system-prompt-file is empty: %s", resolved)
-		}
-		if !platform.valid_utf8(data) {
-			return nil, make_error(.Usage, "--base-system-prompt-file is not valid UTF-8: %s", resolved)
-		}
-		normalized, nerr := normalize_prompt_block(string(data), true)
-		if !is_ok(nerr) {
-			return nil, make_error(.Usage, "--base-system-prompt-file is empty: %s", resolved)
-		}
-		return normalized, ok_error()
-	}
-	return nil, ok_error()
-}
-
-// --append-system-prompt 只做 CRLF→LF 与首尾 trim；空内容视为未提供。
-read_append_system_prompt :: proc(opts: Options) -> (Maybe(string), Error) {
-	value, ok := opts.append_system_prompt.?
-	if !ok {
+// 约定：$AP_CONFIG/SYSTEM.md 存在时替换内置固定指令段。
+// 文件读取与校验放在 CLI 层，engine 只接收规范化后的最终文本。
+read_system_prompt_override :: proc(config_dir: string) -> (Maybe(string), Error) {
+	path := fmt.tprintf("%s/SYSTEM.md", config_dir)
+	if !os.exists(path) {
 		return nil, ok_error()
 	}
-	if len(strings.trim_space(value)) == 0 {
-		return nil, ok_error()
+	data, derr := os.read_entire_file_from_path(path, context.allocator)
+	if derr != nil {
+		return nil, make_error(.Usage, "cannot read $AP_CONFIG/SYSTEM.md %s: %v", path, derr)
 	}
-	normalized, nerr := normalize_prompt_block(value, false)
+	if !platform.valid_utf8(data) {
+		return nil, make_error(.Usage, "$AP_CONFIG/SYSTEM.md is not valid UTF-8: %s", path)
+	}
+	normalized, nerr := normalize_system_prompt(string(data))
 	if !is_ok(nerr) {
-		return nil, nerr
+		return nil, make_error(.Usage, "$AP_CONFIG/SYSTEM.md is empty: %s", path)
 	}
 	return normalized, ok_error()
 }
@@ -555,20 +417,10 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		}
 		prompt = data
 	case:
-		if os.is_tty(os.stdin) {
-			return "", make_error(
-				.Usage,
-				"no prompt given; use --print, --input-file, --print0, or pipe a prompt on stdin",
-			)
-		}
-		data, derr := read_all_stdin()
-		if !is_ok(derr) {
-			return "", derr
-		}
-		if len(data) == 0 {
-			return "", make_error(.Usage, "empty prompt on stdin")
-		}
-		prompt = data
+		return "", make_error(
+			.Usage,
+			"no prompt given; use --print, --input-file, or --print0",
+		)
 	}
 	return prompt, ok_error()
 }

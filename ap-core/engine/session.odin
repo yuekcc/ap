@@ -22,6 +22,7 @@ Session_Request :: struct {
 	settings:             ^Settings,
 	config_dir:           string,
 	cwd:                  string,
+	home_dir:             string, // 宿主解析；空 = 不注入全局 AGENTS.md
 	self_exe:             string,
 	bash_path:            string,
 	source_session_id:    string, // Resume 且为空时取最近的根 session
@@ -34,7 +35,7 @@ Session_Request :: struct {
 	no_agents_md:         bool,
 	no_skills:            bool,
 	tools_set:            bool,
-	tools:                []string, // tools_set 时有效；--tools none 为空切片
+	tools:                []string, // tools_set 时有效；空切片表示零工具
 	agent_depth:          Maybe(int),
 	parent_session_id:    Maybe(string),
 	parent_tool_call_id:  Maybe(string),
@@ -60,8 +61,6 @@ Session :: struct {
 	self_exe:    string,
 	bash_path:   string,
 	session_id:  string,
-	tools_set:   bool,
-	tools_override: []string,
 	no_agents_md: bool,
 	no_skills:   bool,
 	agent_depth: int,
@@ -184,7 +183,7 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 			append(&resolved.warnings, "--no-skills ignored on restore: session prompt is frozen")
 		}
 		if req.tools_set {
-			append(&resolved.warnings, "--tools ignored on restore: session is frozen to its recorded tool set")
+			append(&resolved.warnings, "tool override ignored on restore: session is frozen to its recorded tool set")
 		}
 		if req.parent_session_id != nil || req.parent_tool_call_id != nil || req.agent_depth != nil {
 			append(&resolved.warnings, "parent/agent-depth arguments ignored on restore")
@@ -261,7 +260,7 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 	resolved.system_prompt = build_system_prompt(
 		{
 			cwd = req.cwd,
-			config_dir = req.config_dir,
+			home_dir = req.home_dir,
 			agent = agent,
 			append_prompt = append_prompt,
 			tool_section = tool_prompt_section(agent, resolved.agent_depth, settings.max_agent_depth),
@@ -302,13 +301,9 @@ make_session :: proc(
 	agent_depth: int,
 	events: []Event,
 ) -> Session {
-	tools_set := false
-	tools_override: []string
 	no_agents_md := false
 	no_skills := false
 	if req.kind == .New {
-		tools_set = req.tools_set
-		tools_override = req.tools
 		no_agents_md = req.no_agents_md
 		no_skills = req.no_skills
 	}
@@ -322,8 +317,6 @@ make_session :: proc(
 		self_exe    = req.self_exe,
 		bash_path   = req.bash_path,
 		session_id  = session_id,
-		tools_set   = tools_set,
-		tools_override = tools_override,
 		no_agents_md = no_agents_md,
 		no_skills   = no_skills,
 		agent_depth = agent_depth,
@@ -474,8 +467,6 @@ turn_run :: proc(
 		cancel,
 		s.events,
 		emitter,
-		s.tools_set,
-		s.tools_override,
 		s.no_agents_md,
 		s.no_skills,
 	)

@@ -27,6 +27,7 @@ test_sdk_session_request_fills_env :: proc(t: ^testing.T) {
 	env := Env {
 		config_dir      = "/cfg",
 		cwd             = "/work",
+		home_dir        = "/home/me",
 		bash_path       = "/bin/bash",
 		child_agent_bin = "/bin/ap-child",
 	}
@@ -43,6 +44,7 @@ test_sdk_session_request_fills_env :: proc(t: ^testing.T) {
 	testing.expect_value(t, req.kind, Session_Kind.Resume)
 	testing.expect_value(t, req.config_dir, "/cfg")
 	testing.expect_value(t, req.cwd, "/work")
+	testing.expect_value(t, req.home_dir, "/home/me")
 	testing.expect_value(t, req.bash_path, "/bin/bash")
 	// self_exe 是 task 子代理要拉起的可执行文件，必须来自 child_agent_bin。
 	testing.expect_value(t, req.self_exe, "/bin/ap-child")
@@ -70,6 +72,7 @@ test_sdk_env_open_does_not_read_settings_json :: proc(t: ^testing.T) {
 	env, err := env_open({
 		config_dir      = dir,
 		cwd             = work,
+		home_dir        = "/injected/home",
 		bash_path       = "/injected/bash",
 		child_agent_bin = "/explicit/ap",
 		settings        = settings,
@@ -81,6 +84,7 @@ test_sdk_env_open_does_not_read_settings_json :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, env.settings.model, "injected-model")
 	testing.expect_value(t, env.settings.api_key, "injected-key")
+	testing.expect_value(t, env.home_dir, "/injected/home")
 	testing.expect_value(t, env.bash_path, "/injected/bash")
 	testing.expect_value(t, env.child_agent_bin, "/explicit/ap")
 	testing.expect(t, strings.contains(env.cwd, "work"))

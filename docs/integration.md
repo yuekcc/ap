@@ -53,12 +53,12 @@ ap --print0 --output-format stream-json [-s <session_id>] \
 
 | 参数 | 何时传 | 说明 |
 | --- | --- | --- |
-| `--print0` | 必传 | 从 fd 0 读取提示词直到 EOF；不要用 `--print` 传长提示词 |
+| `--print0` | 必传 | 从 fd 0 读取提示词直到 EOF；不要用 `--print` 传长提示词。ap 不会隐式读取 stdin，必须显式传这个开关 |
 | `--output-format stream-json` | 必传 | 每行一个事件 |
 | `-s <session_id>` | 已有 session | 新会话第一轮**不要**传；之后每轮都传 |
 | `--config-dir <dir>` | 建议总是传 | 让前端展示/重放的目录与 ap 实际读写的 `$AP_CONFIG` 一致 |
 | `--model` / `--agent` / `--max-steps` / `--max-tokens` | 可选透传 | 前端只做白名单映射；恢复 session 时 model/agent 可能与冻结值冲突并被忽略（见 5.2） |
-| `--tools` / `--no-agents-md` / `--no-skills` / `--base-system-prompt` / `--base-system-prompt-file` | 可选透传 | 只影响新 session 的上下文与工具集；恢复时一律 warning + 忽略（见 5.2） |
+| `--no-agents-md` / `--no-skills` | 可选透传 | 只影响新 session 的上下文；恢复时 warning + 忽略（见 5.2）。`$AP_CONFIG/SYSTEM.md` 由 ap 自动读取，不需要透传 |
 | `--verbose` | 可选 | 让 ap 把更多日志写到 stderr；`ap-tui` 用它实时展示，`ap-web` 不用 |
 | `-c` | 启动时可选 | 让 ap 自己找当前项目最近的根 session；前端也可自行定位后改用 `-s` |
 | `--fork-session` | 可选 | 必须与 `-s` / `-c` 连用；fork 的新 id 从 `session_start` 捕获 |
@@ -67,7 +67,7 @@ ap --print0 --output-format stream-json [-s <session_id>] \
 
 - 参数以**数组**传给 `process_start` / `execve`，不经过 shell，不拼接字符串。
 - `session_key`、`cwd`、UI 状态等前端概念不传给 ap；ap 只认第 2.2 节的 CLI 参数。
-- 提示词只走 stdin；`--print0` 是「0 = stdin」，不是 NUL 分隔。
+- 提示词只走 stdin，且必须显式传 `--print0`（ap 不会隐式读取 stdin）；`--print0` 是「0 = stdin」，不是 NUL 分隔。
 - 恢复时 `-s` / `-c` 互斥；`--fork-session` 必须与其中之一连用。
 
 ### 2.3 工作目录
@@ -248,7 +248,7 @@ at exit: flush remaining bytes as one last line
 
 - `-s <id>`：恢复当前项目内的指定 session；找不到时 ap 退出 2 并打印期望路径。
 - 恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集（`tools`）**不重算**。
-- 以下参数与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--append-system-prompt`、`--base-system-prompt` / `--base-system-prompt-file`、`--no-agents-md`、`--no-skills`、`--tools`、父子关联参数。
+- 以下参数与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--no-agents-md`、`--no-skills`、父子关联参数。`$AP_CONFIG/SYSTEM.md` 只在新 session 读取，恢复时不重新应用。
 - 以下参数恢复时照常生效：`--max-steps`、`--max-tokens`、`--output-format`、`--verbose`、提示词来源、`--fork-session`、`--config-dir`。
 - 恢复后工具集以 `session_start.tools` 为准；旧 transcript 没有该字段时回退到 agent 定义。
 - 前端切换 session 时**不要**因为另一个 session 正在跑而拒绝；单飞约束只在同一 session 上。

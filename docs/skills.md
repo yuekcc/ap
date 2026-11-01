@@ -73,7 +73,7 @@ skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成�
 1. 没有任何可注入技能时（包括全部技能都声明 `disable-model-invocation: true`），整个「可用技能」小节不出现，不留空标题或“暂无技能”之类噪音
 2. `name` / `description` / `location` 做 XML 转义；路径统一用 `/`，避免 Windows 反斜杠在提示词里被当成转义符
 3. 只注入元数据，不注入正文：技能再多也只占清单的 token
-4. `--append-system-prompt` 仍排在技能之后，用户追加的指令优先级更靠后但位置最后
+4. 追加提示词（`~/.agents/AGENTS.md` 或项目 `AGENTS.md`）排在技能之后，位置最后
 5. agent 工具白名单不参与发现；如果 agent 既没有 `read_file` 也没有 `bash`，清单仍会注入，但它无法读取正文。需要技能时给该 agent 加上 `read_file`
 6. 声明 `disable-model-invocation: true` 的技能从清单中剔除，但仍会出现在 `--list-skills` 输出中
 7. `--no-skills` 时完全不扫描技能目录，也不注入「可用技能」小节；该开关只影响新 session 的提示词，不影响 `--list-skills`，也不是安全边界（模型仍可用 `bash` / `read_file` 读 `SKILL.md`）

@@ -12,7 +12,7 @@ v1 已实现：
 - 五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`
 - 独立进程子代理、agent 定义文件、工具白名单
 - 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
-- 上下文与工具可按运行裁剪：`--base-system-prompt` / `--base-system-prompt-file` 替换内置固定指令段，`--no-agents-md` / `--no-skills` 关闭记忆与技能清单，`--tools` 覆盖工具白名单；`--print-system-prompt` / `--list-tools` 用于检查结果
+- 开箱即用的上下文约定：`$AP_CONFIG/SYSTEM.md` 存在时替换内置固定指令段；追加提示词写入 `~/.agents/AGENTS.md` 或项目 `AGENTS.md`；`--no-agents-md` / `--no-skills` 关闭记忆与技能清单，`--print-system-prompt` 用于检查结果
 - 独立的交互式 `ap-tui`：每轮启动一次 ap 子进程，滚动渲染 stream-json，管理单个活动 session
 - 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，侧栏按工作目录分组并支持跨目录切换会话、history 恢复、取消、多标签页/多 project 并发与 Windows 目录选择
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
@@ -103,6 +103,8 @@ JSON 输出（transcript、json/stream-json、provider 请求）保留 UTF-8 原
 
 ## 使用
 
+正常运行必须显式指定一个提示词来源：`--print`、`--input-file` 或 `--print0`；ap 不会隐式读取 stdin。
+
 ```sh
 # 直接提示词
 ap --print "找出 config 加载路径并给出文件与行号"
@@ -123,14 +125,10 @@ ap -c --fork-session --print "..."
 # 指定 agent / 模型 / 上限
 ap --agent scout --model hy3 --max-steps 30 --print "..."
 
-# 裁剪上下文：替换固定指令段、关闭 AGENTS.md 与技能清单
-ap --base-system-prompt-file base.md --no-agents-md --no-skills --print "..."
-ap --base-system-prompt "你是一个只读代码审阅代理" --print "..."
+# 替换固定指令段：把内容写入 $AP_CONFIG/SYSTEM.md（默认 ~/.ap/SYSTEM.md）
+# 追加提示词：写入 ~/.agents/AGENTS.md 或项目 AGENTS.md
 
-# 限定本次运行的工具集；然后用 --list-tools / --print-system-prompt 检查
-ap --tools read_file,bash --print "..."
-ap --tools none --print "..."
-ap --list-tools --agent scout --tools all
+# 关闭 AGENTS.md 与技能清单，检查最终 system prompt
 ap --print-system-prompt --no-agents-md --no-skills
 
 # 查看当前目录可见的技能
@@ -188,12 +186,15 @@ Windows 下产物在 `bin\`，直接使用 `.\bin\ap-tui.exe` 即可。
 ```
 $AP_CONFIG/
   settings.json
-  AGENTS.md
+  SYSTEM.md                       # 存在时替换内置固定指令段
   agents/<name>.md
   projects/<fnv32a(规范化 cwd)>/
     path.txt
     blobs/<sha256>
     <session_id>.jsonl
+
+~/.agents/
+  AGENTS.md                       # 全局记忆 / 追加提示词
 ```
 
 transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整尾行。恢复以 transcript 为准，system prompt / model / agent / cwd / 工具集冻结。blob 不自动回收，删除后引用它的 session 无法完整恢复。

@@ -125,8 +125,6 @@ loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, Tool_Context, str
 		events,
 		{},
 		false,
-		nil,
-		false,
 		false,
 	)
 	loop.provider_call = fake_provider_call

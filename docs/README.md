@@ -59,8 +59,8 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 | 会话存储 | JSONL 只追加 transcripts + 内容寻址 blob | 事件 schema 见 [react-loop-and-session.md](react-loop-and-session.md) |
 | 上下文管理 | 不做压缩、不做 token 预算；超限即终止 | 记录 usage；`context_too_long` 是唯一超限出口 |
 | 会话恢复 | 以 transcripts 为准，system prompt / model / agent 全部冻结 | 只在当前项目内查找 |
-| 记忆文件 | `AGENTS.md` | 全局 `$AP_CONFIG/AGENTS.md` + 项目向上查找 |
-| 上下文注入 | 默认全量；`--base-system-prompt` / `--no-agents-md` / `--no-skills` / `--tools` 可按运行裁剪 | 工具集写入 `session_start.tools` 冻结 |
+| 记忆文件 | `AGENTS.md` | 全局 `~/.agents/AGENTS.md` + 项目向上查找 |
+| 上下文注入 | 默认全量；`$AP_CONFIG/SYSTEM.md` 替换固定指令段，`--no-agents-md` / `--no-skills` 可按运行裁剪 | 工具集写入 `session_start.tools` 冻结 |
 | 技能 | 只发现并注入清单，正文按需读取 | 见 [skills.md](skills.md) |
 | 循环粒度 | user turn = 一条提示词到终止；step = 一次 LLM 调用 | 事件与日志按 step 切分 |
 | 子代理 | 独立进程 + 独立 session，深度默认 1 | 见 [subagents.md](subagents.md) |

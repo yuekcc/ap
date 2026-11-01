@@ -235,13 +235,13 @@ test_system_prompt_layers_and_git_boundary :: proc(t: ^testing.T) {
 	defer test_cleanup(dir)
 	root := fmt.tprintf("%s/repo", dir)
 	sub := fmt.tprintf("%s/sub", root)
-	config := fmt.tprintf("%s/config", dir)
+	home := fmt.tprintf("%s/home", dir)
 	os.make_directory_all(sub)
 	os.make_directory_all(fmt.tprintf("%s/.git", root))
 	test_write_file(fmt.tprintf("%s/AGENTS.md", dir), "outside-memory")
 	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "root-memory")
 	test_write_file(fmt.tprintf("%s/AGENTS.md", sub), "sub-memory")
-	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "global-memory")
+	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "global-memory")
 
 	agent := agent_default_general()
 	agent.body = "AGENT_BODY"
@@ -249,7 +249,7 @@ test_system_prompt_layers_and_git_boundary :: proc(t: ^testing.T) {
 	prompt := build_system_prompt(
 		{
 			cwd = cwd,
-			config_dir = config,
+			home_dir = home,
 			agent = agent,
 			append_prompt = "APPEND_MARKER",
 			tool_section = "TOOL_SECTION",
@@ -352,9 +352,9 @@ test_system_prompt_base_override_keeps_auto_sections :: proc(t: ^testing.T) {
 	dir := test_temp_dir("prompt-base")
 	defer test_cleanup(dir)
 	root := fmt.tprintf("%s/repo", dir)
-	config := fmt.tprintf("%s/config", dir)
+	home := fmt.tprintf("%s/home", dir)
 	_ = os.make_directory_all(root)
-	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "GLOBAL_MEMORY")
+	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "GLOBAL_MEMORY")
 	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "PROJECT_MEMORY")
 
 	agent := agent_default_general()
@@ -362,7 +362,7 @@ test_system_prompt_base_override_keeps_auto_sections :: proc(t: ^testing.T) {
 	prompt := build_system_prompt(
 		{
 			cwd = root,
-			config_dir = config,
+			home_dir = home,
 			agent = agent,
 			append_prompt = "APPEND_MARKER",
 			tool_section = "TOOL_SECTION",
@@ -392,15 +392,15 @@ test_system_prompt_include_memory_false :: proc(t: ^testing.T) {
 	dir := test_temp_dir("prompt-no-memory")
 	defer test_cleanup(dir)
 	root := fmt.tprintf("%s/repo", dir)
-	config := fmt.tprintf("%s/config", dir)
+	home := fmt.tprintf("%s/home", dir)
 	_ = os.make_directory_all(root)
-	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "GLOBAL_MEMORY")
+	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "GLOBAL_MEMORY")
 	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "PROJECT_MEMORY")
 
 	prompt := build_system_prompt(
 		{
 			cwd = root,
-			config_dir = config,
+			home_dir = home,
 			agent = agent_default_general(),
 			tool_section = "TOOL_SECTION",
 			include_memory = false,

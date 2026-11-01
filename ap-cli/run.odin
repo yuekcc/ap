@@ -3,6 +3,7 @@ package apcli
 import apcore "../ap-core"
 import platform "../ap-core/platform"
 import "core:fmt"
+import "core:os"
 
 // CLI 适配层：参数、输出格式、退出码、信号。
 // 配置解析与 agent 编排在 apcore（SDK）；这里只做宿主侧的工作。
@@ -26,9 +27,6 @@ run :: proc(args: []string) -> int {
 	}
 	if opts.list_skills {
 		return list_skills()
-	}
-	if opts.list_tools {
-		return list_tools(opts)
 	}
 	if opts.debug {
 		apcore.log_set_level(.Debug)
@@ -54,9 +52,14 @@ run :: proc(args: []string) -> int {
 		apcore.log_error("%s", berr.message)
 		return int(Exit_Code.Usage)
 	}
+	home_dir := ""
+	if home, herr := os.user_home_dir(context.allocator); herr == nil {
+		home_dir = home
+	}
 
 	env, eerr := apcore.env_open({
 		config_dir = config_dir,
+		home_dir   = home_dir,
 		bash_path  = bash_path,
 		settings   = settings,
 	})
@@ -64,18 +67,16 @@ run :: proc(args: []string) -> int {
 		apcore.log_error("%s", eerr.message)
 		return exit_code_for(eerr.kind)
 	}
-	// 提示词文件与 --base-system-prompt-file 的相对路径按启动目录解析。
+	// 提示词文件的相对路径按启动目录解析。
 	cwd := env.cwd
 
-	base_prompt, bperr := read_base_system_prompt(opts, cwd)
-	if !is_ok(bperr) {
-		apcore.log_error("%s", bperr.message)
-		return int(Exit_Code.Usage)
+	kind := apcore.Session_Kind.New
+	if opts.session_id != nil || opts.continue_session {
+		kind = .Fork if opts.fork_session else .Resume
 	}
-	append_prompt, aperr := read_append_system_prompt(opts)
-	if !is_ok(aperr) {
-		apcore.log_error("%s", aperr.message)
-		return int(Exit_Code.Usage)
+	source_id := ""
+	if value, ok := opts.session_id.?; ok {
+		source_id = value
 	}
 
 	prompt := ""
@@ -88,30 +89,30 @@ run :: proc(args: []string) -> int {
 		prompt = value
 	}
 
-	kind := apcore.Session_Kind.New
-	if opts.session_id != nil || opts.continue_session {
-		kind = .Fork if opts.fork_session else .Resume
+	// $AP_CONFIG/SYSTEM.md 只影响新 session；恢复 / fork 使用冻结的 prompt。
+	base_prompt: Maybe(string)
+	if kind == .New {
+		value, bperr := read_system_prompt_override(config_dir)
+		if !is_ok(bperr) {
+			apcore.log_error("%s", bperr.message)
+			return int(Exit_Code.Usage)
+		}
+		base_prompt = value
 	}
-	source_id := ""
-	if value, ok := opts.session_id.?; ok {
-		source_id = value
-	}
+
 	session_opts := apcore.Session_Options {
-		kind                 = kind,
-		source_session_id    = source_id,
-		model                = opts.model,
-		agent                = opts.agent,
-		max_steps            = opts.max_steps,
-		max_tokens           = opts.max_tokens,
-		append_system_prompt = append_prompt,
-		base_system_prompt   = base_prompt,
-		no_agents_md         = opts.no_agents_md,
-		no_skills            = opts.no_skills,
-		tools_set            = opts.tools_set,
-		tools                = opts.tools,
-		agent_depth          = opts.agent_depth,
-		parent_session_id    = opts.parent_session_id,
-		parent_tool_call_id  = opts.parent_tool_call_id,
+		kind                = kind,
+		source_session_id   = source_id,
+		model               = opts.model,
+		agent               = opts.agent,
+		max_steps           = opts.max_steps,
+		max_tokens          = opts.max_tokens,
+		base_system_prompt  = base_prompt,
+		no_agents_md        = opts.no_agents_md,
+		no_skills           = opts.no_skills,
+		agent_depth         = opts.agent_depth,
+		parent_session_id   = opts.parent_session_id,
+		parent_tool_call_id = opts.parent_tool_call_id,
 	}
 
 	if opts.print_system_prompt {
@@ -198,28 +199,6 @@ run :: proc(args: []string) -> int {
 
 list_skills :: proc() -> int {
 	text, err := apcore.list_skills_text(".")
-	if !apcore.is_ok(err) {
-		apcore.log_error("%s", err.message)
-		return exit_code_for(err.kind)
-	}
-	write_stdout(transmute([]byte)text)
-	return int(Exit_Code.OK)
-}
-
-// 只列出 agent 定义 + --tools 覆盖后的声明工具集；不读 settings.json、
-// 不需要 API key、不创建 session。task 的深度移除是运行期行为，这里不体现。
-list_tools :: proc(opts: Options) -> int {
-	config_dir, cerr := platform.default_config_dir(opts.config_dir)
-	if !platform.is_ok(cerr) {
-		apcore.log_error("%s", cerr.message)
-		return int(Exit_Code.Usage)
-	}
-	text, err := apcore.list_tools_text(
-		config_dir,
-		opts.agent,
-		opts.tools_set,
-		opts.tools,
-	)
 	if !apcore.is_ok(err) {
 		apcore.log_error("%s", err.message)
 		return exit_code_for(err.kind)

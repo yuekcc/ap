@@ -194,8 +194,8 @@ task_stderr_chunk :: proc(user: rawptr, chunk: string) {
 	task_forward_stderr(state, chunk)
 }
 
-// 组装子代理命令行。--tools / --no-agents-md / --no-skills 按父进程状态传播，
-// --base-system-prompt / --append-system-prompt 属于父进程本次运行，不传播。
+// 组装子代理命令行。--no-agents-md / --no-skills 按父进程状态传播，
+// system prompt 覆盖与追加指令属于父进程本次运行，不传播。
 task_child_args :: proc(ctx: ^Tool_Context, agent_name: string, prompt_max_steps: int) -> []string {
 	args := make([dynamic]string, 0, 20)
 	append(
@@ -211,13 +211,6 @@ task_child_args :: proc(ctx: ^Tool_Context, agent_name: string, prompt_max_steps
 		"--model", ctx.model,
 		"--max-steps", fmt.tprintf("%d", prompt_max_steps),
 	)
-	if ctx.tools_set {
-		tools_value := "none"
-		if len(ctx.tools_override) > 0 {
-			tools_value = strings.join(ctx.tools_override, ",")
-		}
-		append(&args, "--tools", tools_value)
-	}
 	if ctx.no_agents_md {
 		append(&args, "--no-agents-md")
 	}

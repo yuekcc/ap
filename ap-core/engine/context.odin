@@ -29,7 +29,8 @@ Chat_Message :: struct {
 
 System_Prompt_Options :: struct {
 	cwd:           string,
-	config_dir:    string,
+	// 全局记忆固定读取 <home_dir>/.agents/AGENTS.md；空则跳过。
+	home_dir:      string,
 	agent:         Agent_Def,
 	append_prompt: string,
 	tool_section:  string,
@@ -65,12 +66,14 @@ build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 		strings.write_string(&b, "\n")
 	}
 
-	global_memory := fmt.tprintf("%s/AGENTS.md", opts.config_dir)
-	if opts.include_memory && os.exists(global_memory) {
-		if data, err := os.read_entire_file_from_path(global_memory, context.allocator); err == nil {
-			strings.write_string(&b, "\n## 全局记忆 (AGENTS.md)\n")
-			strings.write_string(&b, string(data))
-			strings.write_string(&b, "\n")
+	if opts.include_memory && len(opts.home_dir) > 0 {
+		global_memory := fmt.tprintf("%s/.agents/AGENTS.md", opts.home_dir)
+		if os.exists(global_memory) {
+			if data, err := os.read_entire_file_from_path(global_memory, context.allocator); err == nil {
+				strings.write_string(&b, "\n## 全局记忆 (AGENTS.md)\n")
+				strings.write_string(&b, string(data))
+				strings.write_string(&b, "\n")
+			}
 		}
 	}
 

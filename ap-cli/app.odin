@@ -52,7 +52,8 @@ USAGE_TEXT :: `ap - 一次性命令行 coding agent
   ap --print <提示词> [选项]   # -p 为 --print 的别名
   ap --input-file <文件> [选项]
   ap --print0 [选项]          # 0 = stdin，读取到 EOF
-  ap [选项]                    # stdin 不是 TTY 时读取 stdin
+
+必须从以上三种方式中选择一种提供提示词；ap 不会隐式读取 stdin。
 
 会话:
   -s, --session <id>          恢复当前项目内的指定 session
@@ -70,19 +71,14 @@ agent 与模型:
   -p, --print <提示词>        直接指定提示词
       --input-file <path>     从文件读取提示词
       --print0                从 stdin 读取提示词直到 EOF
-      --base-system-prompt <text>
-                              替换内置固定指令段（保留自动拼接内容）
-      --base-system-prompt-file <path>
-                              从文件替换内置固定指令段
-      --append-system-prompt <text>
-                              追加到 system prompt 末尾
       --no-agents-md          不注入 AGENTS.md
       --no-skills             不注入技能清单
       --print-system-prompt   打印本次使用的 system prompt 后退出
 
-工具:
-      --tools <list>          覆盖工具白名单：read_file,bash / all / none
-      --list-tools            列出本次声明生效的工具后退出
+  约定: $AP_CONFIG/SYSTEM.md 存在时替换内置固定指令段；
+        追加提示词写入 ~/.agents/AGENTS.md 或项目 AGENTS.md。
+
+其他:
       --list-skills           列出当前目录可见的技能后退出
 
 输出:

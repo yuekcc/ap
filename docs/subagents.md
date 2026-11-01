@@ -43,7 +43,7 @@ max_steps: 30
 2. 未知工具名 → 启动失败，退出 2
 3. `task` 在 `agent_depth >= max_agent_depth` 时从注册表移除，即使白名单里有
 4. 未知 frontmatter 字段忽略并警告；`name` / `description` 缺失 → 退出 2
-5. 优先级：CLI `--tools` > agent 定义中的 `tools:` > 全部五个工具；`--tools` 会覆盖本文件的设置
+5. 工具集完全由 agent 定义中的 `tools:` 决定；缺省为全部五个工具
 
 ## 内置代理
 
@@ -72,7 +72,6 @@ max_steps: 30
   --config-dir <parent_config_dir> \
   --model <effective_model> \
   --max-steps <effective_max_steps> \
-  [--tools <effective_tools> | --tools none] \
   [--no-agents-md] \
   [--no-skills]
 ```
@@ -90,17 +89,16 @@ max_steps: 30
 9. `--max-steps` 传父进程的生效值；agent 定义里的 `max_steps` 会覆盖它
 10. 子进程的 `session_start` 写入 `parent_session_id` / `parent_tool_call_id` / `agent_depth`
 11. 子 transcript 与父 transcript 落在同一项目目录（cwd 相同）
-12. `--tools` 仅在父进程显式给了 `--tools` 时追加；传父进程生效的**声明工具列表**，覆盖子代理自己的 agent 定义。`--tools none` 传字面量 `none`（零工具）
-13. `--no-agents-md` / `--no-skills` 仅在父进程开启时追加；子代理同样不注入记忆 / 技能清单
-14. `--base-system-prompt` / `--base-system-prompt-file` / `--append-system-prompt` **不传播**：基础段属于子代理自己的 agent 定义，追加指令只属于父进程本次运行
+12. `--no-agents-md` / `--no-skills` 仅在父进程开启时追加；子代理同样不注入记忆 / 技能清单
+13. `$AP_CONFIG/SYSTEM.md` 由子进程按自己的 `--config-dir` 自动读取；基础段属于子代理自己的上下文，不从父进程传播
 
-### 工具集继承
+### 工具集
 
-`--tools` 是整棵进程树的有效工具集：父进程显式限制后，子代理无法通过 `task` 获得白名单之外的额外工具；子代理自己的 agent `tools:` 被覆盖。
+子代理的工具集完全来自它自己的 agent 定义（`$AP_CONFIG/agents/<name>.md` 的 `tools:`，缺省为全部五个工具）。父进程不需要、也不会覆盖它。
 
 深度规则不变：子进程仍按自己的 `agent_depth` 与 `max_agent_depth` 决定是否移除 `task`。
 
-恢复 / fork 时 `--tools` / `--no-agents-md` / `--no-skills` 只 warning + 忽略，不会因为命令行里出现过就传播给子代理。
+恢复 / fork 时 `--no-agents-md` / `--no-skills` 只 warning + 忽略，不会传播给子代理。
 
 ## 输出协议
 

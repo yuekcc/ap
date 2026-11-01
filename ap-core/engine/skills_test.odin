@@ -218,16 +218,16 @@ test_system_prompt_includes_skill_section :: proc(t: ^testing.T) {
 	dir := test_temp_dir("skill-prompt")
 	defer test_cleanup(dir)
 
-	config := fmt.tprintf("%s/config", dir)
+	home := fmt.tprintf("%s/home", dir)
 	root := fmt.tprintf("%s/work", dir)
-	os.make_directory_all(config)
+	os.make_directory_all(home)
 	os.make_directory_all(root)
-	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "GLOBAL_MEMORY")
+	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "GLOBAL_MEMORY")
 
 	prompt := build_system_prompt(
 		{
 			cwd = root,
-			config_dir = config,
+			home_dir = home,
 			agent = agent_default_general(),
 			tool_section = "TOOL_SECTION",
 			skill_section = "SKILL_SECTION",

@@ -6,14 +6,13 @@
 
 按顺序拼接：
 
-1. **固定指令**：ap 的身份与行为约束（工具串行、无审批、必须验证、不要臆造文件内容、大文件用分页读取、大输出用 bash 分段处理）。正文在 `ap-core/engine/prompts/system.md`，构建时由 `#load` 内嵌进二进制；运行时不再读取该文件。**这一段可被 `--base-system-prompt` / `--base-system-prompt-file` 整体替换**
-2. **工具说明**：由 Tool Registry 按生效工具集生成——工具名、参数、关键约束（串行、无沙箱、blob 阈值、硬上限、路径规则）；`--tools` 覆盖后按覆盖结果生成
+1. **固定指令**：ap 的身份与行为约束（工具串行、无审批、必须验证、不要臆造文件内容、大文件用分页读取、大输出用 bash 分段处理）。正文在 `ap-core/engine/prompts/system.md`，构建时由 `#load` 内嵌进二进制；运行时不再读取该文件。**存在 `$AP_CONFIG/SYSTEM.md` 时，用该文件整体替换这一段**
+2. **工具说明**：由 Tool Registry 按 agent 定义的工具集生成——工具名、参数、关键约束（串行、无沙箱、blob 阈值、硬上限、路径规则）
 3. **环境信息**：OS、cwd、当前时间、是否 git 仓库。没有 `--add-dir`，不列可用根目录
 4. **可用技能**：扫描 `~/.agents/skills` 与 `<cwd>/.agents/skills` 后生成的 `<available_skills>` 清单；没有技能时整节省略（见 [skills.md](skills.md)）。`--no-skills` 时整节跳过
-5. **全局记忆**：`$AP_CONFIG/AGENTS.md`（存在才注入）。`--no-agents-md` 时跳过
+5. **全局记忆**：`~/.agents/AGENTS.md`（存在才注入）。`--no-agents-md` 时跳过
 6. **项目记忆**：从 cwd 向上查找 `AGENTS.md`，由远及近拼接；同名冲突时近的优先。`--no-agents-md` 时跳过
 7. **agent 定义正文**：`--agent` 或 `task` 指定时，把定义文件的正文追加到这里；它不替换前面的固定指令、工具说明、环境与记忆
-8. **追加指令**：`--append-system-prompt`
 
 约束：
 
@@ -27,13 +26,14 @@
 
 ### 基础提示词覆盖
 
-给了 `--base-system-prompt` 或 `--base-system-prompt-file` 时：
+存在 `$AP_CONFIG/SYSTEM.md` 时：
 
-1. **只替换第 1 段**，其余七段照常拼接
-2. 文本规范化：CRLF / 单独 CR → LF，去首尾空白，结尾恰好一个 `\n`；内部空行与缩进保留；规范化后为空退出 2
-3. `--no-agents-md` / `--no-skills` / `--tools` / `--append-system-prompt` 仍然生效
+1. **只替换第 1 段**，其余自动小节照常拼接
+2. 文本规范化：CRLF / 单独 CR → LF，去首尾空白，结尾恰好一个 `\n`；内部空行与缩进保留；文件为空或非法 UTF-8 → 退出 2
+3. `--no-agents-md` / `--no-skills` 仍然生效
 4. 仍然加载 `settings.json` 与 agent 定义；agent 文件非法仍退出 2
-5. 没有“完全裸 prompt”模式：环境、工具说明等无法用单个开关一次性清空
+5. 只影响新 session；恢复 / fork 使用冻结的 prompt
+6. 没有“完全裸 prompt”模式：环境、工具说明等无法用单个开关一次性清空
 
 ### 记忆与技能的裁剪
 
@@ -43,16 +43,16 @@
 
 ### 工具集冻结
 
-- 生效工具集在 `session_start.tools` 中冻结；新 session 写入 CLI `--tools` 应用后的**声明工具列表**
+- 生效工具集在 `session_start.tools` 中冻结；新 session 写入 agent 定义中的**声明工具列表**
 - `task` 的深度移除是运行期行为，不参与冻结
 - 恢复 / fork 以冻结值为准；旧 transcript 没有 `tools` 字段时回退到 agent 定义
-- 工具说明（第 2 段）按同一生效工具集生成；`--tools none` 时写「（本次没有可用工具）」，provider 请求不发送 `tools` 字段
+- 工具说明（第 2 段）按同一生效工具集生成；零工具时写「（本次没有可用工具）」，provider 请求不发送 `tools` 字段
 
 ## 记忆文件
 
 ### 全局
 
-`$AP_CONFIG/AGENTS.md`。不存在则跳过。
+`~/.agents/AGENTS.md`。不存在则跳过。与全局技能共用 `~/.agents`。
 
 ### 项目
 
