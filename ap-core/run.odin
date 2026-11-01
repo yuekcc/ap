@@ -27,6 +27,9 @@ run :: proc(args: []string) -> int {
 	if opts.list_skills {
 		return list_skills()
 	}
+	if opts.list_tools {
+		return list_tools(opts)
+	}
 	if opts.debug {
 		engine.log_set_level(.Debug)
 	} else if opts.verbose {
@@ -67,6 +70,17 @@ run :: proc(args: []string) -> int {
 	}
 	self_exe := platform.resolve_self_exe()
 
+	base_prompt, bperr := read_base_system_prompt(opts, cwd)
+	if !is_ok(bperr) {
+		log_error(bperr.message)
+		return int(Exit_Code.Usage)
+	}
+	append_prompt, aperr := read_append_system_prompt(opts)
+	if !is_ok(aperr) {
+		log_error(aperr.message)
+		return int(Exit_Code.Usage)
+	}
+
 	prompt := ""
 	if !opts.print_system_prompt {
 		value, prerr := read_prompt(opts, cwd)
@@ -98,7 +112,12 @@ run :: proc(args: []string) -> int {
 		agent                = opts.agent,
 		max_steps            = opts.max_steps,
 		max_tokens           = opts.max_tokens,
-		append_system_prompt = opts.append_system_prompt,
+		append_system_prompt = append_prompt,
+		base_system_prompt   = base_prompt,
+		no_agents_md         = opts.no_agents_md,
+		no_skills            = opts.no_skills,
+		tools_set            = opts.tools_set,
+		tools                = opts.tools,
 		agent_depth          = opts.agent_depth,
 		parent_session_id    = opts.parent_session_id,
 		parent_tool_call_id  = opts.parent_tool_call_id,
@@ -109,6 +128,9 @@ run :: proc(args: []string) -> int {
 		if !engine.is_ok(ierr) {
 			engine.log_error(ierr.message)
 			return exit_code_for(ierr.kind)
+		}
+		for warning in info.warnings {
+			engine.log_warn("%s", warning)
 		}
 		print_system_prompt_text(info.system_prompt)
 		return int(Exit_Code.OK)
@@ -190,6 +212,34 @@ list_skills :: proc() -> int {
 		return int(Exit_Code.Usage)
 	}
 	text := engine.skills_brief(engine.discover_skills(cwd))
+	write_stdout(transmute([]byte)text)
+	return int(Exit_Code.OK)
+}
+
+// 只列出 agent 定义 + --tools 覆盖后的声明工具集；不读 settings.json、
+// 不需要 API key、不创建 session。task 的深度移除是运行期行为，这里不体现。
+list_tools :: proc(opts: Options) -> int {
+	config_dir, cerr := platform.default_config_dir(opts.config_dir)
+	if !platform.is_ok(cerr) {
+		log_error(cerr.message)
+		return int(Exit_Code.Usage)
+	}
+	agent_name := "general"
+	if value, ok := opts.agent.?; ok {
+		agent_name = value
+	}
+	agent, aerr := engine.load_agent(config_dir, agent_name)
+	if !engine.is_ok(aerr) {
+		engine.log_error(aerr.message)
+		return exit_code_for(aerr.kind)
+	}
+	if opts.tools_set {
+		if terr := engine.apply_tool_override(&agent, opts.tools); !engine.is_ok(terr) {
+			engine.log_error(terr.message)
+			return exit_code_for(terr.kind)
+		}
+	}
+	text := engine.tools_brief(agent.tools)
 	write_stdout(transmute([]byte)text)
 	return int(Exit_Code.OK)
 }

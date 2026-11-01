@@ -76,6 +76,7 @@ skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成�
 4. `--append-system-prompt` 仍排在技能之后，用户追加的指令优先级更靠后但位置最后
 5. agent 工具白名单不参与发现；如果 agent 既没有 `read_file` 也没有 `bash`，清单仍会注入，但它无法读取正文。需要技能时给该 agent 加上 `read_file`
 6. 声明 `disable-model-invocation: true` 的技能从清单中剔除，但仍会出现在 `--list-skills` 输出中
+7. `--no-skills` 时完全不扫描技能目录，也不注入「可用技能」小节；该开关只影响新 session 的提示词，不影响 `--list-skills`，也不是安全边界（模型仍可用 `bash` / `read_file` 读 `SKILL.md`）
 
 ## 查看
 
@@ -90,7 +91,7 @@ ap --list-skills
 2. tdd: Test-driven development...
 ```
 
-没有技能时输出 `No skill found`。该命令不读 `settings.json`、不需要 API key，也不读提示词；`--config-dir` 对它没有影响。
+没有技能时输出 `No skill found`。该命令不读 `settings.json`、不需要 API key，也不读提示词；`--config-dir` 对它没有影响，`--no-skills` 也不会改变它的输出。
 
 ## 参考实现与差异
 

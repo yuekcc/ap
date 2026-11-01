@@ -13,6 +13,7 @@ v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`tas
 7. **路径**：相对路径只相对 ap 启动目录；绝对路径可用；`~` 与 `~/...` 展开为主目录；不展开其它环境变量；Windows 下 `/` 与 `\` 都接受；不接受 MSYS 的 `/z/...` 形式
 8. **编码**：文件工具只支持 UTF-8；文本换行统一为 LF
 9. **无沙箱**：工具没有根目录限制；`--add-dir` 不存在，绝对路径可以指向任何位置
+10. **工具白名单**：agent 定义的 `tools:` 或 CLI `--tools` 只限制注册给模型的工具，不是权限系统；只要 `bash` 还在白名单里，它仍拥有完整进程权限
 
 ## 结果结构
 
@@ -239,10 +240,36 @@ task(prompt="找出 config 加载路径并给出文件与行号", agent_name="ge
 
 ## 工具注册
 
-1. 五个工具始终注册，除非被 agent 白名单排除
+1. 五个工具默认注册；可被 agent 白名单或 CLI `--tools` 排除，CLI 优先
 2. `task` 在 `agent_depth >= max_agent_depth` 时从注册表移除
 3. 白名单里出现未知工具名 → 启动失败，退出 2
 4. 工具 schema 由 Registry 生成，作为 system prompt 的工具说明与 provider 请求的 `tools` 来源
+
+## 查看生效工具
+
+`--list-tools` 在执行前确认 `--agent` 与 `--tools` 组合后的**声明工具集**：
+
+```sh
+ap --list-tools
+ap --list-tools --agent scout
+ap --list-tools --agent scout --tools all
+ap --list-tools --tools none
+```
+
+输出一行一个，顺序固定按 `read_file` / `write_file` / `edit_file` / `bash` / `task`：
+
+```text
+1. read_file: 按行读取 UTF-8 文本文件；...
+2. bash: 使用 bash -c <command> 执行 Bash/POSIX 命令；...
+```
+
+规则：
+
+1. 不加载 `settings.json`、不需要 API key、不创建 session、不写 transcript、不调用模型
+2. 受 `--config-dir` / `AP_CONFIG`（agent 定义位置）、`--agent`、`--tools` 影响
+3. 空工具集输出 `No tool found`
+4. `task` 的“声明存在”与运行期可用性不同：实际运行时仍会按 `max_agent_depth` 移除，`--list-tools` 无法预知这一点
+5. 与 `--list-skills` 互斥；与 `--print-system-prompt` 同时出现时以 `--list-tools` 为准
 
 ## 候选工具（v1 不做）
 

@@ -70,20 +70,33 @@ agent 与模型:
       --model <id>            覆盖配置中的 model（恢复 session 时只警告）
       --max-steps <n>         单个 turn 的最大 step 数
       --max-tokens <n>        单次响应的 max_tokens
+      --config-dir <path>     设置 $AP_CONFIG，默认 ~/.ap
+
+提示词与上下文:
+  -p, --print <提示词>        直接指定提示词
+      --input-file <path>     从文件读取提示词
+      --print0                从 stdin 读取提示词直到 EOF
+      --base-system-prompt <text>
+                              替换内置固定指令段（保留自动拼接内容）
+      --base-system-prompt-file <path>
+                              从文件替换内置固定指令段
       --append-system-prompt <text>
-                              追加到 system prompt（恢复 session 时只警告）
-      --config-dir <path>     设置 $AP_CONFIG，默认 ~/.ap（--workspace 为别名）
+                              追加到 system prompt 末尾
+      --no-agents-md          不注入 AGENTS.md
+      --no-skills             不注入技能清单
+      --print-system-prompt   打印本次使用的 system prompt 后退出
+
+工具:
+      --tools <list>          覆盖工具白名单：read_file,bash / all / none
+      --list-tools            列出本次声明生效的工具后退出
+      --list-skills           列出当前目录可见的技能后退出
 
 输出:
       --output-format <fmt>   text | json | stream-json，默认 text
       --verbose               输出 info 日志到 stderr
       --debug                 输出 debug 日志到 stderr
-      --print-system-prompt   打印本次使用的 system prompt 后退出
       --help                  显示帮助
       --version               显示版本
-
-技能:
-      --list-skills           列出当前目录可见的 skill 后退出（不读配置、不需要 API key）
 
 子代理内部参数:
       --parent-session-id <id>

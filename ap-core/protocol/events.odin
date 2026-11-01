@@ -27,6 +27,7 @@ Session_Start_Event :: struct {
 	parent_session_id:   Maybe(string),
 	parent_tool_call_id: Maybe(string),
 	resumed_from:        Maybe(string),
+	tools:               Maybe([]string) `json:"tools"`,
 	content_ref:         Maybe(string) `json:"content_ref,omitempty"`,
 	content_bytes:       Maybe(int)    `json:"content_bytes,omitempty"`,
 }

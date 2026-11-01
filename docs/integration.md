@@ -58,6 +58,7 @@ ap --print0 --output-format stream-json [-s <session_id>] \
 | `-s <session_id>` | 已有 session | 新会话第一轮**不要**传；之后每轮都传 |
 | `--config-dir <dir>` | 建议总是传 | 让前端展示/重放的目录与 ap 实际读写的 `$AP_CONFIG` 一致 |
 | `--model` / `--agent` / `--max-steps` / `--max-tokens` | 可选透传 | 前端只做白名单映射；恢复 session 时 model/agent 可能与冻结值冲突并被忽略（见 5.2） |
+| `--tools` / `--no-agents-md` / `--no-skills` / `--base-system-prompt` / `--base-system-prompt-file` | 可选透传 | 只影响新 session 的上下文与工具集；恢复时一律 warning + 忽略（见 5.2） |
 | `--verbose` | 可选 | 让 ap 把更多日志写到 stderr；`ap-tui` 用它实时展示，`ap-web` 不用 |
 | `-c` | 启动时可选 | 让 ap 自己找当前项目最近的根 session；前端也可自行定位后改用 `-s` |
 | `--fork-session` | 可选 | 必须与 `-s` / `-c` 连用；fork 的新 id 从 `session_start` 捕获 |
@@ -196,7 +197,7 @@ at exit: flush remaining bytes as one last line
 
 | 事件 | 必须做的事 |
 | --- | --- |
-| `session_start` | 记录 `session_id`（新会话的关键）；历史模式下 `content_ref` 解析 blob，`content` 作为 system prompt，通常不展示 |
+| `session_start` | 记录 `session_id`（新会话的关键）；历史模式下 `content_ref` 解析 blob，`content` 作为 system prompt，通常不展示；`tools` 是冻结的声明工具集，仅用于审计，恢复时不要重算 |
 | `user_message` | 只在历史模式展示（实时模式下提示词由 UI 自己回显，避免重复） |
 | `turn_start` | 标记 running，记录 `turn` |
 | `message_start` | 重置该 `message_id` 的「已收到文本增量」标志 |
@@ -246,9 +247,10 @@ at exit: flush remaining bytes as one last line
 ### 5.2 恢复
 
 - `-s <id>`：恢复当前项目内的指定 session；找不到时 ap 退出 2 并打印期望路径。
-- 恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd **不重算**。
-- 以下参数与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--append-system-prompt`、父子关联参数。
+- 恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集（`tools`）**不重算**。
+- 以下参数与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--append-system-prompt`、`--base-system-prompt` / `--base-system-prompt-file`、`--no-agents-md`、`--no-skills`、`--tools`、父子关联参数。
 - 以下参数恢复时照常生效：`--max-steps`、`--max-tokens`、`--output-format`、`--verbose`、提示词来源、`--fork-session`、`--config-dir`。
+- 恢复后工具集以 `session_start.tools` 为准；旧 transcript 没有该字段时回退到 agent 定义。
 - 前端切换 session 时**不要**因为另一个 session 正在跑而拒绝；单飞约束只在同一 session 上。
 
 ### 5.3 继续

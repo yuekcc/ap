@@ -34,6 +34,10 @@ System_Prompt_Options :: struct {
 	append_prompt: string,
 	tool_section:  string,
 	skill_section: string,
+	// 非空时替换第 1 段内置固定指令；空字符串表示使用 SYSTEM_PROMPT。
+	base_override: string,
+	// false 时跳过全局与项目 AGENTS.md。
+	include_memory: bool,
 }
 
 // 固定指令与输出要求在编译期从 ap-core/engine/prompts/system.md 内嵌进二进制。
@@ -42,7 +46,11 @@ SYSTEM_PROMPT :: #load("prompts/system.md", string)
 
 build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	b := strings.builder_make()
-	strings.write_string(&b, SYSTEM_PROMPT)
+	if len(opts.base_override) > 0 {
+		strings.write_string(&b, opts.base_override)
+	} else {
+		strings.write_string(&b, SYSTEM_PROMPT)
+	}
 	strings.write_string(&b, "\n## 工具\n")
 	strings.write_string(&b, opts.tool_section)
 	strings.write_string(&b, "\n\n## 环境\n")
@@ -58,7 +66,7 @@ build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	}
 
 	global_memory := fmt.tprintf("%s/AGENTS.md", opts.config_dir)
-	if os.exists(global_memory) {
+	if opts.include_memory && os.exists(global_memory) {
 		if data, err := os.read_entire_file_from_path(global_memory, context.allocator); err == nil {
 			strings.write_string(&b, "\n## 全局记忆 (AGENTS.md)\n")
 			strings.write_string(&b, string(data))
@@ -66,12 +74,14 @@ build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 		}
 	}
 
-	project_files := project_memory_files(opts.cwd)
-	for file in project_files {
-		if data, err := os.read_entire_file_from_path(file, context.allocator); err == nil {
-			fmt.sbprintf(&b, "\n## 项目记忆 (%s)\n", file)
-			strings.write_string(&b, string(data))
-			strings.write_string(&b, "\n")
+	if opts.include_memory {
+		project_files := project_memory_files(opts.cwd)
+		for file in project_files {
+			if data, err := os.read_entire_file_from_path(file, context.allocator); err == nil {
+				fmt.sbprintf(&b, "\n## 项目记忆 (%s)\n", file)
+				strings.write_string(&b, string(data))
+				strings.write_string(&b, "\n")
+			}
 		}
 	}
 

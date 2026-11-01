@@ -12,6 +12,7 @@ v1 已实现：
 - 五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`
 - 独立进程子代理、agent 定义文件、工具白名单
 - 技能（skill）：发现 `~/.agents/skills` 与项目 `.agents/skills`，把清单注入 system prompt，由模型按需读取正文；`--list-skills` 查看
+- 上下文与工具可按运行裁剪：`--base-system-prompt` / `--base-system-prompt-file` 替换内置固定指令段，`--no-agents-md` / `--no-skills` 关闭记忆与技能清单，`--tools` 覆盖工具白名单；`--print-system-prompt` / `--list-tools` 用于检查结果
 - 独立的交互式 `ap-tui`：每轮启动一次 ap 子进程，滚动渲染 stream-json，管理单个活动 session
 - 独立的浏览器客户端 `ap-web`：HTTP + SSE 服务器，内置 Alpine.js 单页；每轮启动 ap 子进程，实时渲染消息与工具卡片，侧栏按工作目录分组并支持跨目录切换会话、history 恢复、取消、多标签页/多 project 并发与 Windows 目录选择
 - 跨平台：Windows / Linux / macOS；shell 统一使用 Bash
@@ -121,6 +122,16 @@ ap -c --fork-session --print "..."
 # 指定 agent / 模型 / 上限
 ap --agent scout --model hy3 --max-steps 30 --print "..."
 
+# 裁剪上下文：替换固定指令段、关闭 AGENTS.md 与技能清单
+ap --base-system-prompt-file base.md --no-agents-md --no-skills --print "..."
+ap --base-system-prompt "你是一个只读代码审阅代理" --print "..."
+
+# 限定本次运行的工具集；然后用 --list-tools / --print-system-prompt 检查
+ap --tools read_file,bash --print "..."
+ap --tools none --print "..."
+ap --list-tools --agent scout --tools all
+ap --print-system-prompt --no-agents-md --no-skills
+
 # 查看当前目录可见的技能
 ap --list-skills
 ```
@@ -184,7 +195,7 @@ $AP_CONFIG/
     <session_id>.jsonl
 ```
 
-transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整尾行。恢复以 transcript 为准，system prompt / model / agent / cwd 冻结。blob 不自动回收，删除后引用它的 session 无法完整恢复。
+transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整尾行。恢复以 transcript 为准，system prompt / model / agent / cwd / 工具集冻结。blob 不自动回收，删除后引用它的 session 无法完整恢复。
 
 ## 测试
 

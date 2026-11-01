@@ -2,6 +2,7 @@ package engine
 
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 @(test)
@@ -122,4 +123,44 @@ test_agent_unknown_name :: proc(t: ^testing.T) {
 	defer test_cleanup(dir)
 	_, err := load_agent(dir, "nope")
 	testing.expect_value(t, err.kind, Error_Kind.Usage)
+}
+
+@(test)
+test_apply_tool_override :: proc(t: ^testing.T) {
+	agent := agent_default_general()
+	err := apply_tool_override(&agent, []string{"bash", "read_file", "bash"})
+	testing.expect_value(t, err.kind, Error_Kind.None)
+	testing.expect(t, agent.tools_explicit)
+	testing.expect_value(t, len(agent.tools), 2)
+	testing.expect_value(t, agent.tools[0], "read_file")
+	testing.expect_value(t, agent.tools[1], "bash")
+
+	err2 := apply_tool_override(&agent, []string{"all"})
+	testing.expect(t, !is_ok(err2))
+
+	err3 := apply_tool_override(&agent, []string{"grep"})
+	testing.expect(t, !is_ok(err3))
+}
+
+@(test)
+test_tools_brief_order_and_empty :: proc(t: ^testing.T) {
+	agent := agent_default_general()
+	text := tools_brief(agent.tools)
+	testing.expect(t, test_contains(text, "1. read_file:"))
+	testing.expect(t, test_contains(text, "5. task:"))
+	read_pos := index_of(text, "1. read_file:")
+	task_pos := index_of(text, "5. task:")
+	testing.expect(t, read_pos < task_pos)
+
+	testing.expect_value(t, tools_brief([]string{}), "No tool found\n")
+	testing.expect_value(t, tools_brief([]string{"bash"}), fmt.tprintf("1. bash: %s\n", tool_brief_description("bash")))
+}
+
+index_of :: proc(haystack, needle: string) -> int {
+	return strings.index(haystack, needle)
+}
+
+tool_brief_description :: proc(name: string) -> string {
+	info, _ := tool_info_by_name(name)
+	return info.description
 }

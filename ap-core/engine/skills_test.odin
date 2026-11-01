@@ -232,6 +232,7 @@ test_system_prompt_includes_skill_section :: proc(t: ^testing.T) {
 			tool_section = "TOOL_SECTION",
 			skill_section = "SKILL_SECTION",
 			append_prompt = "APPEND_SECTION",
+			include_memory = true,
 		},
 	)
 	testing.expect(t, test_contains(prompt, "## 可用技能"))

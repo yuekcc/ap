@@ -339,3 +339,74 @@ test_tool_definitions_are_valid :: proc(t: ^testing.T) {
 	defs2, _ := tool_definitions(agent, 1, 1)
 	testing.expect_value(t, len(defs2), 4)
 }
+
+@(test)
+test_task_child_args_propagates_context_switches :: proc(t: ^testing.T) {
+	ctx := Tool_Context {
+		self_exe = "/bin/ap",
+		session_id = "ses_parent",
+		parent_tool_call_id = "call_1",
+		agent_depth = 0,
+		config_dir = "/cfg",
+		model = "m",
+		max_steps = 7,
+	}
+	base := task_child_args(&ctx, "scout", ctx.max_steps)
+	testing.expect(t, !has_arg_pair(base, "--tools"))
+	testing.expect(t, !has_arg(base, "--no-agents-md"))
+	testing.expect(t, !has_arg(base, "--no-skills"))
+
+	ctx.tools_set = true
+	ctx.tools_override = []string{"read_file", "bash"}
+	ctx.no_agents_md = true
+	ctx.no_skills = true
+	args := task_child_args(&ctx, "scout", ctx.max_steps)
+	testing.expect(t, has_arg_pair_value(args, "--tools", "read_file,bash"))
+	testing.expect(t, has_arg(args, "--no-agents-md"))
+	testing.expect(t, has_arg(args, "--no-skills"))
+	testing.expect(t, !has_arg_pair(args, "--base-system-prompt"))
+	testing.expect(t, !has_arg_pair(args, "--append-system-prompt"))
+
+	ctx.tools_override = []string{}
+	none_args := task_child_args(&ctx, "scout", ctx.max_steps)
+	testing.expect(t, has_arg_pair_value(none_args, "--tools", "none"))
+}
+
+has_arg :: proc(args: []string, flag: string) -> bool {
+	for arg in args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
+has_arg_pair :: proc(args: []string, flag: string) -> bool {
+	for i in 0 ..< len(args) - 1 {
+		if args[i] == flag {
+			return true
+		}
+	}
+	return false
+}
+
+has_arg_pair_value :: proc(args: []string, flag, value: string) -> bool {
+	for i in 0 ..< len(args) - 1 {
+		if args[i] == flag && args[i + 1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+@(test)
+test_tools_none_has_no_definitions :: proc(t: ^testing.T) {
+	agent := agent_default_general()
+	err := apply_tool_override(&agent, []string{})
+	testing.expect(t, is_ok(err))
+	defs, derr := tool_definitions(agent, 0, 1)
+	testing.expect_value(t, derr.kind, Error_Kind.None)
+	testing.expect_value(t, len(defs), 0)
+	section := tool_prompt_section(agent, 0, 1)
+	testing.expect_value(t, section, "（本次没有可用工具）")
+}

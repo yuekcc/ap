@@ -154,6 +154,8 @@ ap-web（主进程）
 
 透传：`POST /api/turn` 可带可选 `model` / `agent` / `max_steps` / `max_tokens`，ap-web 原样转成命令行参数——与 ap-tui 透传规则一致；`session_key` 只用于定位运行态，不传给 ap。
 
+ap-web 暂不暴露 `--base-system-prompt` / `--no-agents-md` / `--no-skills` / `--tools` 等运行级上下文开关；它拉起的 ap 子进程使用默认上下文。
+
 ## 工作目录选择
 
 侧栏按工作目录分组；输入框旁有一个「选择目录」入口，点击后：

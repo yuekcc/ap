@@ -115,3 +115,18 @@ tool_prompt_section :: proc(agent: Agent_Def, depth, max_depth: int) -> string {
 	}
 	return strings.to_string(b)
 }
+
+// 列出声明的工具白名单，一行一个；顺序固定按 ALL_TOOL_NAMES。
+tools_brief :: proc(names: []string) -> string {
+	b := strings.builder_make()
+	index := 0
+	for tool in select_tools(names) {
+		info, _ := tool_info_by_name(tool)
+		index += 1
+		fmt.sbprintf(&b, "%d. %s: %s\n", index, info.name, info.description)
+	}
+	if index == 0 {
+		return "No tool found\n"
+	}
+	return strings.to_string(b)
+}

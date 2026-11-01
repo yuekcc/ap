@@ -253,6 +253,7 @@ test_system_prompt_layers_and_git_boundary :: proc(t: ^testing.T) {
 			agent = agent,
 			append_prompt = "APPEND_MARKER",
 			tool_section = "TOOL_SECTION",
+			include_memory = true,
 		},
 	)
 	testing.expect(t, test_contains(prompt, "global-memory"))
@@ -345,3 +346,84 @@ test_available_tools_removes_task_at_max_depth :: proc(t: ^testing.T) {
 	testing.expect(t, found)
 }
 
+
+@(test)
+test_system_prompt_base_override_keeps_auto_sections :: proc(t: ^testing.T) {
+	dir := test_temp_dir("prompt-base")
+	defer test_cleanup(dir)
+	root := fmt.tprintf("%s/repo", dir)
+	config := fmt.tprintf("%s/config", dir)
+	_ = os.make_directory_all(root)
+	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "GLOBAL_MEMORY")
+	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "PROJECT_MEMORY")
+
+	agent := agent_default_general()
+	agent.body = "AGENT_BODY"
+	prompt := build_system_prompt(
+		{
+			cwd = root,
+			config_dir = config,
+			agent = agent,
+			append_prompt = "APPEND_MARKER",
+			tool_section = "TOOL_SECTION",
+			skill_section = "SKILL_SECTION",
+			base_override = "CUSTOM_BASE\n",
+			include_memory = true,
+		},
+	)
+	testing.expect(t, strings.has_prefix(prompt, "CUSTOM_BASE\n"))
+	testing.expect(t, !test_contains(prompt, "你是 AI Assistant"))
+	testing.expect(t, test_contains(prompt, "TOOL_SECTION"))
+	testing.expect(t, test_contains(prompt, "## 环境"))
+	testing.expect(t, test_contains(prompt, "SKILL_SECTION"))
+	testing.expect(t, test_contains(prompt, "GLOBAL_MEMORY"))
+	testing.expect(t, test_contains(prompt, "PROJECT_MEMORY"))
+	testing.expect(t, test_contains(prompt, "AGENT_BODY"))
+	testing.expect(t, test_contains(prompt, "APPEND_MARKER"))
+	testing.expect(t, strings.has_suffix(test_trim_right_space(prompt), "APPEND_MARKER"))
+}
+
+test_trim_right_space :: proc(s: string) -> string {
+	return strings.trim_right(s, " \t\r\n")
+}
+
+@(test)
+test_system_prompt_include_memory_false :: proc(t: ^testing.T) {
+	dir := test_temp_dir("prompt-no-memory")
+	defer test_cleanup(dir)
+	root := fmt.tprintf("%s/repo", dir)
+	config := fmt.tprintf("%s/config", dir)
+	_ = os.make_directory_all(root)
+	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "GLOBAL_MEMORY")
+	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "PROJECT_MEMORY")
+
+	prompt := build_system_prompt(
+		{
+			cwd = root,
+			config_dir = config,
+			agent = agent_default_general(),
+			tool_section = "TOOL_SECTION",
+			include_memory = false,
+		},
+	)
+	testing.expect(t, !test_contains(prompt, "GLOBAL_MEMORY"))
+	testing.expect(t, !test_contains(prompt, "PROJECT_MEMORY"))
+	testing.expect(t, !test_contains(prompt, "全局记忆"))
+	testing.expect(t, !test_contains(prompt, "项目记忆"))
+	testing.expect(t, test_contains(prompt, "## 环境"))
+}
+
+@(test)
+test_system_prompt_without_skills_section :: proc(t: ^testing.T) {
+	prompt := build_system_prompt(
+		{
+			cwd = ".",
+			agent = agent_default_general(),
+			tool_section = "TOOL_SECTION",
+			skill_section = "",
+			include_memory = true,
+		},
+	)
+	testing.expect(t, !test_contains(prompt, "## 可用技能"))
+	testing.expect(t, !test_contains(prompt, "<available_skills>"))
+}

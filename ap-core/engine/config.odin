@@ -18,6 +18,37 @@ tool_name_valid :: proc(name: string) -> bool {
 	return false
 }
 
+tool_name_known :: proc(name: string) -> bool {
+	return tool_name_valid(name)
+}
+
+// 用 CLI 白名单覆盖 agent 定义；顺序按 ALL_TOOL_NAMES，重复项去重。
+apply_tool_override :: proc(agent: ^Agent_Def, names: []string) -> Error {
+	for name in names {
+		if !tool_name_valid(name) {
+			return make_error(.Usage, "unknown tool %q", name)
+		}
+	}
+	agent.tools = select_tools(names)
+	agent.tools_explicit = true
+	return ok_error()
+}
+
+// 去重后按 ALL_TOOL_NAMES 的固定顺序返回；忽略未知名字，由调用方负责校验。
+select_tools :: proc(names: []string) -> []string {
+	selected := make(map[string]bool, len(names))
+	for name in names {
+		selected[name] = true
+	}
+	tools := make([dynamic]string, 0, len(selected))
+	for tool in ALL_TOOL_NAMES {
+		if tool in selected {
+			append(&tools, tool)
+		}
+	}
+	return tools[:]
+}
+
 Settings :: struct {
 	model:                 string,
 	base_url:              string,

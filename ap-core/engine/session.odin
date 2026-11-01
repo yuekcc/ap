@@ -30,6 +30,11 @@ Session_Request :: struct {
 	max_steps:            Maybe(int),
 	max_tokens:           Maybe(int),
 	append_system_prompt: Maybe(string),
+	base_system_prompt:   Maybe(string), // 替换内置固定指令段；已规范化
+	no_agents_md:         bool,
+	no_skills:            bool,
+	tools_set:            bool,
+	tools:                []string, // tools_set 时有效；--tools none 为空切片
 	agent_depth:          Maybe(int),
 	parent_session_id:    Maybe(string),
 	parent_tool_call_id:  Maybe(string),
@@ -55,6 +60,10 @@ Session :: struct {
 	self_exe:    string,
 	bash_path:   string,
 	session_id:  string,
+	tools_set:   bool,
+	tools_override: []string,
+	no_agents_md: bool,
+	no_skills:   bool,
 	agent_depth: int,
 	max_steps:   int,
 	max_tokens:  int,
@@ -140,6 +149,10 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 		if !is_ok(aerr) {
 			return resolved, aerr
 		}
+		// 工具集以冻结值为准；旧 transcript 没有 tools 字段时回退到 agent 定义。
+		if frozen_tools, ok := start.tools.?; ok {
+			agent.tools = frozen_tools
+		}
 		resolved.agent = agent
 		resolved.max_steps = settings.max_steps
 		resolved.max_tokens = settings.max_tokens
@@ -160,6 +173,18 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 		}
 		if value, ok := req.append_system_prompt.?; ok && len(value) > 0 {
 			append(&resolved.warnings, "--append-system-prompt ignored on restore")
+		}
+		if _, ok := req.base_system_prompt.?; ok {
+			append(&resolved.warnings, "--base-system-prompt ignored on restore: session is frozen to its recorded prompt")
+		}
+		if req.no_agents_md {
+			append(&resolved.warnings, "--no-agents-md ignored on restore: session prompt is frozen")
+		}
+		if req.no_skills {
+			append(&resolved.warnings, "--no-skills ignored on restore: session prompt is frozen")
+		}
+		if req.tools_set {
+			append(&resolved.warnings, "--tools ignored on restore: session is frozen to its recorded tool set")
 		}
 		if req.parent_session_id != nil || req.parent_tool_call_id != nil || req.agent_depth != nil {
 			append(&resolved.warnings, "parent/agent-depth arguments ignored on restore")
@@ -186,6 +211,11 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 	agent, aerr := load_agent(req.config_dir, agent_name)
 	if !is_ok(aerr) {
 		return resolved, aerr
+	}
+	if req.tools_set {
+		if terr := apply_tool_override(&agent, req.tools); !is_ok(terr) {
+			return resolved, terr
+		}
 	}
 	resolved.agent = agent
 	resolved.agent_name = agent_name
@@ -220,7 +250,14 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 	if value, ok := req.append_system_prompt.?; ok {
 		append_prompt = value
 	}
-	skill_section := skills_prompt_block(discover_skills(req.cwd))
+	base_prompt := ""
+	if value, ok := req.base_system_prompt.?; ok {
+		base_prompt = value
+	}
+	skill_section := ""
+	if !req.no_skills {
+		skill_section = skills_prompt_block(discover_skills(req.cwd))
+	}
 	resolved.system_prompt = build_system_prompt(
 		{
 			cwd = req.cwd,
@@ -229,6 +266,8 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 			append_prompt = append_prompt,
 			tool_section = tool_prompt_section(agent, resolved.agent_depth, settings.max_agent_depth),
 			skill_section = skill_section,
+			base_override = base_prompt,
+			include_memory = !req.no_agents_md,
 		},
 	)
 	return resolved, ok_error()
@@ -253,6 +292,8 @@ preview_prompt :: proc(req: Session_Request) -> (Session_Info, Error) {
 	return info, ok_error()
 }
 
+// 运行级上下文开关只在新 session 生效；恢复 / fork 时这些参数只 warning，
+// 不能再透传给子代理。
 make_session :: proc(
 	req: Session_Request,
 	resolved: Resolved_Session,
@@ -261,6 +302,16 @@ make_session :: proc(
 	agent_depth: int,
 	events: []Event,
 ) -> Session {
+	tools_set := false
+	tools_override: []string
+	no_agents_md := false
+	no_skills := false
+	if req.kind == .New {
+		tools_set = req.tools_set
+		tools_override = req.tools
+		no_agents_md = req.no_agents_md
+		no_skills = req.no_skills
+	}
 	return {
 		project     = req.project,
 		settings    = req.settings,
@@ -271,6 +322,10 @@ make_session :: proc(
 		self_exe    = req.self_exe,
 		bash_path   = req.bash_path,
 		session_id  = session_id,
+		tools_set   = tools_set,
+		tools_override = tools_override,
+		no_agents_md = no_agents_md,
+		no_skills   = no_skills,
 		agent_depth = agent_depth,
 		max_steps   = resolved.max_steps,
 		max_tokens  = resolved.max_tokens,
@@ -333,6 +388,7 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 			model         = resolved.model,
 			provider      = PROVIDER_NAME,
 			agent_name    = resolved.agent.name,
+			tools         = resolved.agent.tools,
 			content_ref   = var_ref,
 			content_bytes = var_bytes,
 		}
@@ -418,6 +474,10 @@ turn_run :: proc(
 		cancel,
 		s.events,
 		emitter,
+		s.tools_set,
+		s.tools_override,
+		s.no_agents_md,
+		s.no_skills,
 	)
 	defer loop_destroy(&loop)
 	return loop_run_turn(&loop, prompt), ok_error()
@@ -472,6 +532,7 @@ append_session_start :: proc(
 		parent_session_id   = parent_session_id,
 		parent_tool_call_id = parent_tool_call_id,
 		resumed_from        = var_resumed,
+		tools               = start.tools,
 		content_ref         = start.content_ref,
 		content_bytes       = start.content_bytes,
 	}

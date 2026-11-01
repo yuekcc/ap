@@ -194,6 +194,39 @@ task_stderr_chunk :: proc(user: rawptr, chunk: string) {
 	task_forward_stderr(state, chunk)
 }
 
+// 组装子代理命令行。--tools / --no-agents-md / --no-skills 按父进程状态传播，
+// --base-system-prompt / --append-system-prompt 属于父进程本次运行，不传播。
+task_child_args :: proc(ctx: ^Tool_Context, agent_name: string, prompt_max_steps: int) -> []string {
+	args := make([dynamic]string, 0, 20)
+	append(
+		&args,
+		ctx.self_exe,
+		"--agent", agent_name,
+		"--output-format", "stream-json",
+		"--print0",
+		"--parent-session-id", ctx.session_id,
+		"--parent-tool-call-id", ctx.parent_tool_call_id,
+		"--agent-depth", fmt.tprintf("%d", ctx.agent_depth + 1),
+		"--config-dir", ctx.config_dir,
+		"--model", ctx.model,
+		"--max-steps", fmt.tprintf("%d", prompt_max_steps),
+	)
+	if ctx.tools_set {
+		tools_value := "none"
+		if len(ctx.tools_override) > 0 {
+			tools_value = strings.join(ctx.tools_override, ",")
+		}
+		append(&args, "--tools", tools_value)
+	}
+	if ctx.no_agents_md {
+		append(&args, "--no-agents-md")
+	}
+	if ctx.no_skills {
+		append(&args, "--no-skills")
+	}
+	return args[:]
+}
+
 tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	prompt, perr := tool_arg_string(args, "prompt")
 	if !is_ok(perr) {
@@ -215,18 +248,7 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		return tool_fail("cannot determine ap executable path")
 	}
 
-	exec_args := []string {
-		ctx.self_exe,
-		"--agent", agent_name,
-		"--output-format", "stream-json",
-		"--print0",
-		"--parent-session-id", ctx.session_id,
-		"--parent-tool-call-id", ctx.parent_tool_call_id,
-		"--agent-depth", fmt.tprintf("%d", ctx.agent_depth + 1),
-		"--config-dir", ctx.config_dir,
-		"--model", ctx.model,
-		"--max-steps", fmt.tprintf("%d", ctx.max_steps),
-	}
+	exec_args := task_child_args(ctx, agent_name, ctx.max_steps)
 
 	state: Task_State
 	state.line_buf = make([dynamic]byte, 0, 8192)

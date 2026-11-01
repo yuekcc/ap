@@ -124,6 +124,10 @@ loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, Tool_Context, str
 		cancel,
 		events,
 		{},
+		false,
+		nil,
+		false,
+		false,
 	)
 	loop.provider_call = fake_provider_call
 	loop.sleep_fn = proc(ms: int) {}

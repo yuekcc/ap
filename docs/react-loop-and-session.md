@@ -77,7 +77,8 @@ Transcript 是 session 的唯一事实来源，完整事件只追加，永不改
   agent_depth: 0,
   parent_session_id: null,
   parent_tool_call_id: null,
-  resumed_from: null
+  resumed_from: null,
+  tools: ['read_file', 'write_file', 'edit_file', 'bash', 'task']
 }
 ```
 
@@ -89,6 +90,7 @@ Transcript 是 session 的唯一事实来源，完整事件只追加，永不改
 4. `resumed_from`：原地恢复指向自身 `session_id`；fork 指向源 `session_id`；新 session 为 null
 5. system prompt 超过 `blob_threshold_bytes` 时，`content` 置空并写 `content_ref` / `content_bytes`；读取方从 blob 还原
 6. 同一文件内允许多个 `session_start`（恢复、fork 后的追加），读取方以最后一个为准
+7. `tools` 是**冻结的声明工具列表**（`--tools` 已应用；`task` 的深度移除是运行期行为，不在这里体现）。`--tools none` 写空数组 `[]`，不能省略；字段缺失或 `null` 表示旧 transcript，读取时回退到 agent 定义
 
 ### session_end
 
@@ -297,13 +299,14 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 ## 恢复与重放
 
 1. `-s <id>`：只在当前项目内查找 `projects/<hash>/<id>.jsonl`；找不到退出 2
-2. 按文件行序读取（正常写入下即 `seq` 递增），最后一个 `session_start` 决定 system prompt、model、provider、agent_name、agent_depth、cwd
-3. 不重新调用 LLM、不重新执行工具、不重新读记忆文件
+2. 按文件行序读取（正常写入下即 `seq` 递增），最后一个 `session_start` 决定 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集
+3. 不重新调用 LLM、不重新执行工具、不重新读记忆文件、不重新扫描技能目录
 4. blob 按引用解析；blob 缺失时恢复失败（退出 2），不静默降级
 5. 未闭合的 tool call：投影时删除没有 `tool_execution_end` 的 `tool_use` 块；若整条 assistant 消息只剩这个块，整条不提交；同一消息里的 text 保留
 6. 不写任何修复事件；恢复时只截掉崩溃留下的不完整尾行，完整事件保持原样
 7. 恢复后追加新的 `session_start`，然后开始新 turn；新事件的 `seq` 继续递增
 8. 子代理 session 同样可以 `-s` 打开；`parent_session_id` 用于展示层级
+9. 恢复期 `--base-system-prompt` / `--base-system-prompt-file` / `--append-system-prompt` / `--no-agents-md` / `--no-skills` / `--tools` 一律 warning + 忽略，不改变冻结的 prompt 与工具集
 
 ## fork
 
@@ -311,7 +314,7 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 
 1. 生成新 `session_id`
 2. 复制全部事件到同项目目录的新文件
-3. 追加新的 `session_start`：新 id、`resumed_from=源 id`、`parent_session_id=null`、`parent_tool_call_id=null`、`agent_depth=0`，其余字段沿用源
+3. 追加新的 `session_start`：新 id、`resumed_from=源 id`、`parent_session_id=null`、`parent_tool_call_id=null`、`agent_depth=0`，其余字段（含 `tools`）沿用源
 4. `seq` 从源最大值 + 1 继续
 5. blob 不复制，按 sha256 共享
 6. 原文件不动
