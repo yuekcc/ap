@@ -516,7 +516,7 @@ new_session_id :: proc() -> string {
 	}
 
 	year, month, day, hour, minute, second := platform.local_now()
-	return fmt.tprintf(
+	return fmt.aprintf(
 		"ses_%04d%02d%02d_%02d%02d%02d_%s",
 		year,
 		month,

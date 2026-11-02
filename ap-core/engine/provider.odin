@@ -8,6 +8,7 @@ import c "core:c/libc"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
+import "core:sync"
 import "core:time"
 import "vendor:curl"
 
@@ -732,8 +733,13 @@ provider_network_error :: proc(code: curl.code) -> Provider_Error {
 }
 
 provider_global_ready := false
+provider_global_mu: sync.Mutex
 
+// libcurl 的 global_init 不是线程安全的；进程内可能有多个会话并发调用 provider，
+// 因此首次初始化必须串行化。初始化完成后锁只保护一次布尔读取，开销可忽略。
 provider_global_init :: proc() -> Error {
+	sync.mutex_lock(&provider_global_mu)
+	defer sync.mutex_unlock(&provider_global_mu)
 	if provider_global_ready {
 		return ok_error()
 	}

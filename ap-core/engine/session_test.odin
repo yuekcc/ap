@@ -9,6 +9,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:testing"
+import "core:thread"
 
 test_tool_execute :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
 	return {ok = true}
@@ -332,4 +333,27 @@ test_preview_and_session_open_have_identical_prompt :: proc(t: ^testing.T) {
 	testing.expect(t, is_ok(serr))
 	defer transcript_close(&session.store)
 	testing.expect_value(t, info.system_prompt, sinfo.system_prompt)
+}
+
+// new_session_id 的返回值会存进 Session 并在 session 生命周期内使用，不能依赖
+// 调用线程的 temp allocator。这里在子线程里生成、join 后再读取，防止回退成
+// fmt.tprintf（线程退出后 temp 内存失效，主线程读取会崩溃）。
+Session_Id_Thread_Result :: struct {
+	id: string,
+}
+
+session_id_thread_main :: proc(data: rawptr) {
+	result := (^Session_Id_Thread_Result)(data)
+	result.id = new_session_id()
+}
+
+@(test)
+test_new_session_id_outlives_thread_temp_allocator :: proc(t: ^testing.T) {
+	result: Session_Id_Thread_Result
+	handle := thread.create_and_start_with_data(&result, session_id_thread_main)
+	thread.join(handle)
+	thread.destroy(handle)
+
+	testing.expect(t, strings.has_prefix(result.id, "ses_"))
+	testing.expect(t, len(result.id) > 8)
 }
