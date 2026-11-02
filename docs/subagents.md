@@ -44,8 +44,10 @@ max_steps: 30
 1. 白名单只能包含 `read_file` / `write_file` / `edit_file` / `bash` / `task`
 2. 未知工具名 → 启动失败，退出 2
 3. `task` 在 `agent_depth >= max_agent_depth` 时由应用层在建会话前从生效工具集移除，即使白名单里有
-4. 未知 frontmatter 字段忽略并警告；`name` / `description` 缺失 → 退出 2
-5. 工具集完全由 agent 定义中的 `tools:` 决定；缺省为全部五个工具
+4. `--agent` 名称只接受字母、数字、`-`、`_`；文件里的 `name` 必须与文件名一致
+5. 未知 frontmatter 字段忽略并警告；`name` / `description` 缺失 → 退出 2
+6. 工具集完全由 agent 定义中的 `tools:` 决定；缺省为全部五个工具
+7. `max_steps` 必须是正整数；非法值导致 agent 加载失败，退出 2
 
 ## 内置代理
 
@@ -81,7 +83,7 @@ max_steps: 30
 约定：
 
 1. `<self_exe>` 优先用 `os.get_executable_path()`；失败时把 `argv[0]` 转成绝对路径；仍失败则使用原始 `argv[0]`。不经过 shell
-2. **不传 `--session`**：子进程自己生成 `session_id`；父进程从子进程的第一条 `session_start` 读取 `child_session_id`
+2. **不传 `--session`**：子进程自己生成 `session_id`；父进程从子进程的 `session_start` 读取 `child_session_id`，多条时以最后一条为准
 3. 提示词通过 stdin 传给 `--print0`，不放在命令行里，避免 Windows 命令行长度限制
 4. 子进程不继承父进程的技能清单；它按自己的启动目录重新发现（`task` 不改变 cwd，通常得到同一份清单），见 [skills.md](skills.md)
 5. cwd 继承父进程；不传 `--add-dir`
@@ -100,7 +102,7 @@ max_steps: 30
 
 深度规则不变：子进程启动时由 `ap-cli` 按自己的 `agent_depth` 与 `max_agent_depth` 决定是否移除 `task`，结果直接写入 `session_start.tools`。
 
-恢复 / fork 时 `--no-agents-md` / `--no-skills` 只 warning + 忽略，不会传播给子代理；`task` 的 `Tool_Config` 也只在新建 session 时记录这两个开关。
+恢复 / fork 时 `--no-agents-md` / `--no-skills` 被忽略且不产生 warning，不会传播给子代理；`task` 的 `Tool_Config` 只在新建 session 时记录这两个开关。
 
 ## 输出协议
 
@@ -119,7 +121,7 @@ stdout 包含：
 4. `message_end`（role=assistant）→ 暂存为候选结果
 5. `turn_end` → 记录 `stop_reason` 与 usage
 6. `session_end` + 子进程退出码 0 → 取最后一个 assistant 文本作为 `content`
-7. 退出码非 0 → `ok:false`，`error` 取最后一条 `error` 事件或 stderr 尾部 2000 字符
+7. 退出码非 0 → `ok:false`，`error` 取最后一条 `error` 事件或 stderr 尾部 2000 字节
 8. 子进程 stderr 全部转发到父 stderr，同时保留一个 8KB 环形缓冲用于失败摘要
 9. 没收到 `session_start` 就退出 → `ok:false`，不伪造 `child_session_id`
 

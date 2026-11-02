@@ -2,7 +2,7 @@
 
 ## 形态
 
-v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一个 turn（或达到终止条件），写 `session_end`，退出。没有交互式 REPL、没有 TUI、没有 Esc 取消。交互式界面由独立的 `ap-tui` 通过 `--output-format stream-json` 调用 ap，见 [tui.md](tui.md)。
+ap 本体只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一个 turn（或达到终止条件），写 `session_end`，退出。ap 自身没有交互式 REPL、TUI 或 Esc 取消；交互界面由独立的 `ap-tui` / `ap-web` 通过 `--output-format stream-json` 调用 ap，见 [tui.md](tui.md) 与 [web.md](web.md)。
 
 脚本化与子代理复用同一套入口，差异只体现在参数上：
 
@@ -24,15 +24,15 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 | `-p, --print <prompt>` | 提示词 | 直接指定提示词 |
 | `--print0` | — | 从 fd 0（stdin）读取整条提示词，直到 EOF |
 | `--config-dir <path>` | 目录 | 设置 `$AP_CONFIG`，默认 `~/.ap` |
-| `--model <id>` | model_id | 覆盖配置文件中的 model；恢复 session 时只警告，不生效 |
-| `--max-steps <n>` | 正整数 | 单个 turn 的最大 step 数，默认取配置 |
-| `--max-tokens <n>` | 正整数 | 单次响应的 `max_tokens`，默认取配置 |
+| `--model <id>` | model_id | 覆盖配置文件中的 model；新 session 的优先级是 CLI > agent 定义 > `settings.json`；恢复 session 时只警告，不生效 |
+| `--max-steps <n>` | 正整数 | 单个 turn 的最大 step 数；新 session 的优先级是 CLI > agent 定义 > `settings.json` |
+| `--max-tokens <n>` | 正整数 | 单次响应的 `max_tokens`，默认取 `settings.json`；agent 定义不覆盖该字段 |
 | `--output-format <fmt>` | `text` / `json` / `stream-json` | 输出格式，默认 `text` |
 | `--parent-session-id <id>` | session_id | 标记当前进程是某个 session 的子代理；父 transcript 必须存在 |
 | `--parent-tool-call-id <id>` | tool_call_id | 父进程中对应的 `task` 调用；必须与 `--parent-session-id` 同时使用 |
 | `--agent-depth <n>` | 非负整数 | 当前 agent 深度；默认 0，子代理为父 + 1；恢复时以记录为准 |
-| `--no-agents-md` | — | 不注入 `~/.agents/AGENTS.md` 与项目 `AGENTS.md`；恢复时只警告 |
-| `--no-skills` | — | 不扫描、不注入技能清单；不影响 `--list-skills`；恢复时只警告 |
+| `--no-agents-md` | — | 不注入 `~/.agents/AGENTS.md` 与项目 `AGENTS.md`；只在新 session 生效，恢复时忽略 |
+| `--no-skills` | — | 不扫描、不注入技能清单；不影响 `--list-skills`；只在新 session 生效，恢复时忽略 |
 | `--verbose` / `--debug` | — | 日志级别，输出到 stderr |
 | `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
 | `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型、不需要 API key |
@@ -74,7 +74,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 
 ### 查看 system prompt
 
-`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词或 API key。它会正常加载配置与 agent，因此需要可用的 `settings.json`（`model` 仍必填）；受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。组装入口与 `session_open` 共用 `build_prompt_sections`，保证打印结果与模型收到的冻结 prompt 一致。
+`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词或 API key。它会正常加载配置、定位 bash 并解析 agent，因此需要可用的 `settings.json`（`model` 仍必填）和 `bash`；受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。新 session 的组装入口与 `session_open` 共用应用的 `build_prompt_sections`，保证打印结果与模型收到的冻结 prompt 一致。
 
 新 session 按 [context-management.md](context-management.md) 的规则现场组装（技能清单、记忆文件、agent 定义都会重新扫描）。存在 `SYSTEM.md` 时，打印的是**完整组装结果**，不是只打印 base 文本。与 `-s` / `-c` 连用时打印该 session 在 `session_start` 中冻结的 prompt。输出不受 `--output-format` 影响，始终是纯文本，末尾保证有换行。
 
@@ -84,7 +84,7 @@ stdout 只放结果，所有日志、进度、工具执行信息走 stderr。
 
 stderr 上的进度按 markdown 排版：一次 step 是一行 `## Step N`，一次工具调用是一行 `### <工具名>`，工具输出后跟一行斜体状态 `_<工具名> ok (26ms)_`；标题行与内容块之间各留一个空行，`ap -p ... > out.md 2>&1` 的产物可直接当 markdown 读。
 
-turn 结束、进程退出前，还会向 stderr 打印一行 `<可执行文件> -s <session_id>`，可直接复制该命令继续同一段对话；三种输出格式下都会打印。
+turn 结束、进程退出前，还会向 stderr 打印续聊提示（`---` 分隔线后是 `继续对话，执行：<可执行文件> -s <session_id>`），可直接复制该命令继续同一段对话；三种输出格式下都会打印。
 
 | 格式 | stdout |
 | --- | --- |
@@ -120,12 +120,12 @@ turn 结束、进程退出前，还会向 stderr 打印一行 `<可执行文件>
 
 - `--model`（与记录不同值时）
 - `--agent`（与记录不同值时）
-- `--base-system-prompt` 等价输入（`$AP_CONFIG/SYSTEM.md`）
+- SDK 的 `base_system_prompt` 输入（CLI 通过 `$AP_CONFIG/SYSTEM.md` 提供等价内容）
 - 应用层 prompt sections
 - 工具集覆盖
 - `--parent-session-id` / `--parent-tool-call-id` / `--agent-depth`
 
-warning 文案（宿主通过 SDK 传入这些输入时由 session 层产生；`ap-cli` 在恢复时不会构造 base/sections/tools，因此正常 CLI 恢复通常只看到 `--model` / `--agent` 相关 warning）：
+warning 文案（宿主通过 SDK 传入这些输入时由 session 层产生；`ap-cli` 在恢复时不会构造 base/sections/tools，因此正常 CLI 恢复通常只看到 `--model` / `--agent` / 父链参数相关 warning）：
 
 ```text
 --base-system-prompt ignored on restore: session prompt is frozen
@@ -134,7 +134,7 @@ tool set ignored on restore: session is frozen to its recorded tool set
 --agent ignored on restore: session is frozen to "<name>"
 ```
 
-`--no-agents-md` / `--no-skills` 在恢复时不影响冻结 prompt；它们只在新建 session 时参与 sections 组装。
+`--no-agents-md` / `--no-skills` 在恢复时不影响冻结 prompt，也不会产生 warning；它们只在新建 session 时参与 sections 组装。
 
 恢复后的工具集以 `session_start.tools` 为准：改 `agents/<name>.md` 中的 `tools:` 或注册表新增工具都不再影响已有 session。冻结列表里在当前注册表中不存在的工具会跳过并 warning。旧 transcript 没有 `tools` 字段时不再回退到 agent 定义：使用当前注册表的全部工具并 warning。
 
@@ -213,7 +213,7 @@ hint: run ap from the directory where the session was created
 
 | 变量 | 说明 |
 | --- | --- |
-| `AP_CONFIG` | 默认 `$AP_CONFIG`；`--config-dir` 优先 |
+| `AP_CONFIG` | 配置根目录，默认 `~/.ap`；`--config-dir` 优先 |
 | `AP_API_KEY` | 覆盖 settings.json 中的 `api_key` |
 | `AP_BASH` | 指定 `bash` 可执行文件的绝对路径；设置后不再搜索 PATH 和常见安装位置 |
 
@@ -240,7 +240,7 @@ $AP_CONFIG/
 
 transcript 一行一个事件，完整事件只追加；恢复时若发现崩溃留下的不完整尾行，会先截掉它再追加新事件。blob 由用户自行清理。
 
-技能不在 `$AP_CONFIG` 下，固定从两处发现：`~/.agents/skills/<name>/SKILL.md` 与 `<项目>/.agents/skills/<name>/SKILL.md`。见 [skills.md](skills.md)。
+技能不在 `$AP_CONFIG` 下，固定从两处发现：`~/.agents/skills/<name>/SKILL.md` 与 `<启动目录>/.agents/skills/<name>/SKILL.md`。见 [skills.md](skills.md)。
 
 ## 项目识别
 

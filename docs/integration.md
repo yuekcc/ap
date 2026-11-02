@@ -58,7 +58,7 @@ ap --print0 --output-format stream-json [-s <session_id>] \
 | `-s <session_id>` | 已有 session | 新会话第一轮**不要**传；之后每轮都传 |
 | `--config-dir <dir>` | 建议总是传 | 让前端展示/重放的目录与 ap 实际读写的 `$AP_CONFIG` 一致 |
 | `--model` / `--agent` / `--max-steps` / `--max-tokens` | 可选透传 | 前端只做白名单映射；恢复 session 时 model/agent 可能与冻结值冲突并被忽略（见 5.2） |
-| `--no-agents-md` / `--no-skills` | 可选透传 | 只影响新 session 的上下文；恢复时 warning + 忽略（见 5.2）。`$AP_CONFIG/SYSTEM.md` 由 ap 自动读取，不需要透传 |
+| `--no-agents-md` / `--no-skills` | 可选透传 | 只影响新 session 的上下文；恢复时忽略且不产生 warning（见 5.2）。`$AP_CONFIG/SYSTEM.md` 由 ap 自动读取，不需要透传 |
 | `--verbose` | 可选 | 让 ap 把更多日志写到 stderr；`ap-tui` 用它实时展示，`ap-web` 不用 |
 | `-c` | 启动时可选 | 让 ap 自己找当前项目最近的根 session；前端也可自行定位后改用 `-s` |
 | `--fork-session` | 可选 | 必须与 `-s` / `-c` 连用；fork 的新 id 从 `session_start` 捕获 |
@@ -160,7 +160,7 @@ run_turn(prompt, session):
 
 - `session_id` 由 `session_start` 产生，**不能**在前端预先编造。新会话第一轮必须允许「还没有真实 id」的状态。
 - 取消令牌在每轮开始时清零；否则「取消后立刻开新 turn」会继承旧状态。
-- `turn_end` 不一定存在（provider 重试耗尽、工具基础设施故障、Windows 强杀等）。`stop_reason` 的回退顺序是：`turn_end.stop_reason` → `session_end.reason` → 主动取消时填 `cancelled` → null。
+- `turn_end` 不一定存在（provider 重试耗尽、工具基础设施故障、Windows 强杀等）。`stop_reason` 的回退顺序是：`turn_end.stop_reason` → `session_end.reason`（`exit` / `signal` / `error`）→ 主动取消时填 `cancelled` → null。不要把 `session_end.reason` 当成正常 stop reason。
 - 用户断开 UI（关闭页面、SSE 断线）**不应**取消 turn；turn 应继续跑完并写 transcript，客户端重连后从历史恢复。
 
 ## 4. 事件协议
@@ -248,7 +248,7 @@ at exit: flush remaining bytes as one last line
 
 - `-s <id>`：恢复当前项目内的指定 session；找不到时 ap 退出 2 并打印期望路径。
 - 恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集（`tools`）**不重算**。
-- 以下输入与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--base-system-prompt` 等价输入、应用层 prompt sections、工具集覆盖、父子关联参数。`$AP_CONFIG/SYSTEM.md` 只在新 session 读取，恢复时不重新应用；agent 文件也不再重新加载。
+- 以下输入与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、SDK 的 `base_system_prompt` 输入（CLI 等价物是 `$AP_CONFIG/SYSTEM.md`）、应用层 prompt sections、工具集覆盖、父子关联参数。`$AP_CONFIG/SYSTEM.md` 只在新 session 读取，恢复时不重新应用；agent 文件也不再重新加载。
 - 以下参数恢复时照常生效：`--max-steps`、`--max-tokens`、`--output-format`、`--verbose`、提示词来源、`--fork-session`、`--config-dir`。`--no-agents-md` / `--no-skills` 只影响新 session。
 - 恢复后工具集以 `session_start.tools` 为准；冻结工具在当前注册表中不存在时跳过并 warning。旧 transcript 没有该字段时使用当前注册表的全部工具并 warning。
 - 前端切换 session 时**不要**因为另一个 session 正在跑而拒绝；单飞约束只在同一 session 上。
@@ -411,7 +411,8 @@ project 识别规则（必须与 ap 完全一致）：
 env, err := apcore.env_open({
     config_dir = config_dir,
     cwd        = cwd,
-    settings   = sdk_settings,          // 只含 model/base_url/api_key/loop/provider 字段
+    settings   = sdk_settings,          // model / base_url / api_key / max_steps / max_tokens /
+                                        // llm_timeout_ms / blob_threshold_bytes / stream_include_usage
     tools      = aptools.builtin_tools(&tool_cfg),
 })
 
@@ -422,14 +423,16 @@ opts := apcore.Session_Options {
     max_steps         = effective_max_steps,
     max_tokens        = effective_max_tokens,
     base_system_prompt = base_prompt,   // nil = SDK 内置
-    tools             = active_tool_names,
+    tools             = active_tool_names, // 空切片 = 零工具，不能省略
 }
 for section in app_sections {           // 环境/技能/记忆/agent 正文/追加
     apcore.session_options_append(&opts, section)
 }
 
+cancel: apcore.Cancel_Token
 session, info, err := apcore.session_open(&env, opts)
 result, err := apcore.turn_run(&session, prompt, &cancel, emitter)
+_, err = apcore.session_close(&session, {reason = "exit", usage = result.session_usage})
 ```
 
 不再提供 `all_tool_names` / `select_tools` / `tool_name_known` / `list_tools_text` / `list_skills_text`。宿主用 `ap-core/tool` 的注册表与自己的应用层配置完成白名单、技能发现与文本输出。

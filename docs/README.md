@@ -1,6 +1,6 @@
 # ap Coding Agent Spec
 
-ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 ReAct 循环调用 LLM 与本地工具，直到任务完成。第一阶段只提供非交互的一次性 CLI，运行结束即退出；交互界面由独立的 `ap-tui`（终端）和 `ap-web`（浏览器）进程通过 `stream-json` 调用 ap，分别见 [tui.md](tui.md) 与 [web.md](web.md)。
+ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 ReAct 循环调用 LLM 与本地工具，直到任务完成。ap 本体是一次性 CLI，运行结束即退出；交互界面由独立的 `ap-tui`（终端）和 `ap-web`（浏览器）进程通过 `stream-json` 调用 ap，分别见 [tui.md](tui.md) 与 [web.md](web.md)。
 
 本文件是规格总入口，定义全局决策、术语和文档地图。子系统细节见各分篇。
 
@@ -66,7 +66,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 | 子代理 | 独立进程 + 独立 session，深度默认 1 | 见 [subagents.md](subagents.md) |
 | 进程间协议 | `--output-format stream-json`，stdout 只放事件 | 子代理与脚本化的唯一通道 |
 | Provider | 只支持 OpenAI chat completions 兼容接口 | 见 [provider.md](provider.md) |
-| 大输出 | 超过 100KB 写 blob，transcripts 只存引用 | 模型仍看到完整内容；blob 由用户清理 |
+| 大输出 | 超过 `blob_threshold_bytes`（默认 100KB）写 blob，transcripts 只存引用 | 模型仍看到完整内容；blob 由用户清理 |
 | 上下文版本 | 事件带 `v: 1`；未知事件类型跳过 | 前向兼容 |
 
 ## 术语
@@ -117,8 +117,8 @@ ap（经 `apcore` 门面）、ap-tui 与 ap-web 共用 `ap-core/platform` 的路
 | [tools.md](tools.md) | 五个工具的契约、blob、进程与输出上限 | 定稿 v1 |
 | [subagents.md](subagents.md) | agent 定义、启动协议、结果契约 | 定稿 v1 |
 | [skills.md](skills.md) | 技能发现、SKILL.md 格式、提示词注入、`--list-skills` | 定稿 v1 |
-| [tui.md](tui.md) | `ap-tui` 的进程模型、session 管理、历史重放、渲染与输入层 | 第一阶段 |
-| [web.md](web.md) | `ap-web`（单 exe：HTTP+SSE 服务器 + 内置 Alpine.js 前端）的方案 | 第一阶段 |
+| [tui.md](tui.md) | `ap-tui` 的进程模型、session 管理、历史重放、渲染与输入层 | 已实现 phase 1 |
+| [web.md](web.md) | `ap-web`（单 exe：HTTP+SSE 服务器 + 内置 Alpine.js 前端） | 已实现 phase 1 |
 | [integration.md](integration.md) | 新前端接入 ap.exe 的集成指南：进程契约、turn 生命周期、事件解析、session/历史、取消与并发 | 定稿 v1 |
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 | 定稿 v1 |
 
@@ -147,7 +147,7 @@ ap（经 `apcore` 门面）、ap-tui 与 ap-web 共用 `ap-core/platform` 的路
 | TodoWrite | 需要 UI 才有价值；CLI 下用文本计划替代 |
 | Plan mode | 与「全自动执行」目标相悖 |
 | 上下文压缩 | v1 不做；后续用 handoff 替代 |
-| 交互式 REPL / TUI | 第一阶段只在 `ap-tui` 里做滚动输出 + 行输入；ap 本体保持一次性 CLI |
+| 交互式 REPL / TUI | `ap-tui` phase 1 已提供滚动输出与 raw 多行编辑；ap 本体保持一次性 CLI |
 | 原生后台 bash | v1 用 wrapper 脚本兜住，不提供进程管理工具族 |
 | grep / glob / ls | v1 用 bash 覆盖，减少工具与 schema 复杂度 |
 | MCP / 插件 | 生态型功能，先把核心循环跑通 |
@@ -155,7 +155,7 @@ ap（经 `apcore` 门面）、ap-tui 与 ap-web 共用 `ap-core/platform` 的路
 ## 后续版本
 
 1. handoff：在上下文将满时把任务移交给新 session，替代压缩
-2. 交互模式 / TUI：`ap-tui` phase 1 已提供滚动渲染和行输入，继续完善输入框与展示效果
+2. 交互模式 / TUI：`ap-tui` phase 1 已提供滚动渲染与 raw 多行编辑框；phase 2 处理运行中排队、TUI 侧取消、可折叠工具展示与 session 管理
 3. 并行工具调用（transcript 已按 `tool_call_id` 关联，无需改格式）
 4. 后台子代理、一次 task 启动多个子代理
 5. blob 的 GC 与 session 清理命令

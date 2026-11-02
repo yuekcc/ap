@@ -12,7 +12,7 @@
 | 上下文超限 | `context_too_long` | 不重试，终止当前 turn | `error` + `turn_end(context_too_long)` |
 | 流中断 | 已收到部分 delta 后连接断开 | 丢弃半截消息，重试同一 step | `error` |
 | 工具错误 | 路径不存在、编辑未匹配、参数非法、bash 超时 | 作为 tool result 返回，循环继续 | `tool_execution_end(ok=false)` |
-| 工具基础设施故障 | 无法 spawn shell、工具参数/system prompt 的 blob 写入失败 | 终止 turn | `error`（scope=tool/session） |
+| 工具基础设施故障 | 无法 spawn shell、工具参数 blob 写入失败 | 终止 turn | `error`（scope=tool/session）；新 session 的 system prompt blob 写入失败发生在建会话阶段，只退出 4，没有 transcript 事件 |
 | transcript 写入失败 | 磁盘满、flush 失败、事件序列化失败 | 无法再可靠落盘，直接退出 | 尽力写 `error(scope=session)`；通常只能靠 stderr |
 | 用户中断 | SIGINT / SIGTERM | 见下 | `cancel` |
 
@@ -22,7 +22,7 @@
 
 1. 可重试：连接失败、超时、429、5xx（>=500）、流中断
 2. 不可重试：400 参数错误、401/403 鉴权、404 模型不存在、`context_too_long`、协议错误
-3. 退避：指数 + 抖动，基准 1s，最多 5 次（1s / 2s / 4s / 8s / 16s）；429 优先用 `Retry-After`
+3. 退避：指数 + 抖动，基准 1s，最多重试 5 次（首次调用 + 5 次重试；延迟 1s / 2s / 4s / 8s / 16s，上限 16s）；429 优先用 `Retry-After`
 4. 退避用阻塞 sleep 实现。信号只会设置取消标志，当前退避 sleep 结束后才检查取消；若 `Retry-After` 很大，退出也会相应延后
 5. **重试边界**：尚未收到任何 delta 时直接重发；收到部分 delta 后断流，丢弃半截消息，**重试同一个 step**，不把半截内容放进上下文；如果这段文本已经展示给用户，stderr 明确提示「该段已作废」
 6. **重试不增加 step**：`step_start` 只写一次，重试只写 `error(attempt)`；`max_steps` 不受重试影响

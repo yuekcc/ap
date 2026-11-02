@@ -67,7 +67,7 @@ Transcript 是 session 的唯一事实来源，完整事件只追加，永不改
   seq: 0,
   ts: 1730000000000,
   type: 'session_start',
-  session_id: '<uuid>',
+  session_id: 'ses_20261022_120000_abcdef123456',
   content: '<system prompt>',
   role: 'system',
   cwd: '<规范化绝对路径>',
@@ -216,7 +216,7 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 ```js
 {
   type: 'error',
-  scope: 'llm',            // llm | tool | config | session
+  scope: 'llm',            // llm | tool | session
   kind: 'rate_limit',      // provider 错误 kind，可空
   message: '<可读错误>',
   retryable: true,
@@ -224,7 +224,7 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 }
 ```
 
-`scope=tool` 只用于工具基础设施故障（无法 spawn shell、工具参数/system prompt 的 blob 写入失败）；普通工具错误（包括工具结果的 blob 写入失败）走 `tool_execution_end(ok=false)`，不作为 `error` 事件。
+`scope=tool` 只用于工具基础设施故障（无法 spawn shell、工具参数 blob 写入失败等）；普通工具错误（包括工具结果的 blob 写入失败）走 `tool_execution_end(ok=false)`，不作为 `error` 事件。`scope=session` 用于 context 组装失败、工具注册表查询失败等会话级故障。当前实现不产生 `scope=config` 的事件，配置错误在创建 transcript 前直接退出。
 
 ### cancel
 

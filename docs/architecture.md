@@ -11,7 +11,7 @@
 | CLI adapter（`ap-cli`，package `apcli`） | 参数解析、读取 `settings.json`、定位 bash、agent 定义解析、system prompt 段落组装、输出格式、退出码、信号安装、stdout/stderr、**组装根** | 不实现 agent loop/provider/transcript，不直接 import `engine` |
 | CLI tools（`ap-cli/tools`，package `aptools`） | 五个内置工具、工具配置、进程树清理、子代理启动 | 不增减 transcript 事件，不控制 loop |
 | CLI skills（`ap-cli/skills`，package `apskills`） | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 | 不执行技能正文 |
-| SDK 门面（`ap-core`，package `apcore`） | 接收已解析的 `config_dir` / `settings` / `tools`，定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不读环境变量、不打开 `settings.json`、不写 stdout/stderr、不装信号、不决定退出码 |
+| SDK 门面（`ap-core`，package `apcore`） | 接收已解析的 `config_dir` / `settings` / `tools`，定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不读环境变量、不打开 `settings.json`、不写 stdout（诊断日志只走 stderr）、不装信号、不决定退出码 |
 | Session（`ap-core/engine/session.odin`） | 新会话/恢复/fork 解析、冻结 prompt 与工具集、`session_start`/`session_end` 写入 | 不读 agent 文件、不扫描技能/记忆、不决定退出码与输出格式 |
 | Loop | turn/step 状态机、事件编排、重试决策、中断处理、工具执行管线 | 不解析 SSE，不实现具体工具 |
 | Context | transcript → messages 投影、base + 工具段 + sections 的 system prompt 组装、blob 解析 | 不发请求，不写 transcript，不决定 section 顺序 |
@@ -189,7 +189,7 @@ session_options_append :: proc(opts: ^Session_Options, section: string)
    - Unix 的递归扫描不是运行期登记表：正常返回后 ap 不会在退出时再次清理后台后代
 4. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
 5. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
-6. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → （新 session）解析 agent / 发现技能 / 读取 `AGENTS.md` / 组装 prompt sections / 应用工具白名单与深度规则 → 构造工具注册表 → `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
+6. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → 读取提示词 → （新 session）解析 agent / 发现技能 / 读取 `$AP_CONFIG/SYSTEM.md` → 构造工具注册表 → 应用工具白名单与深度规则 → 组装 prompt sections（此处读取 `AGENTS.md`）→ `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
 7. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件
 8. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
 
@@ -214,9 +214,9 @@ ap-core/tool/        package tool：Tool / Tool_Context / Tool_Result / Registry
 ap-core/protocol/    package protocol：事件 schema、parse、Line_Reader、usage
 ap-core/platform/    package platform：paths / sessions / blob / json / text / 平台原语 / 进程树 / cancel
 ap-core/engine/      package engine：errors / config / session / loop / provider / sse / context / transcript / prompts
-ap-core/client/      package client：turn / spawn / store / history
-ap-tui/              package aptui：args / render / agent
-ap-web/              package apweb：server / api / sse / runner / assets / pickdir
+ap-core/client/      package client：turn / spawn / store / history / errors
+ap-tui/              package aptui：args / render / agent / input / editor / keys / term
+ap-web/              package apweb：server / http_util / api / sse / runner / assets / pickdir / net_*
 ```
 
 允许的 import 边：
@@ -247,7 +247,7 @@ Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 
 
 ## 实现约束（Odin）
 
-以下是在 Odin `dev-2026-10-nightly` 上核实过的约束，实现前必须按此规划：
+以下是在 Odin `dev-2026-10-nightly:84bc3fc` 上核实过的约束，实现前必须按此规划：
 
 1. **HTTP/TLS**：`core:net` 只有 socket，没有 HTTP 客户端，也没有 TLS 包。统一走 `vendor:curl`：
    - Windows 使用随 Odin 分发的静态 `lib/libcurl.lib`（8.17.0，Schannel，系统 CA），可保持单 exe
@@ -258,7 +258,7 @@ Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 
 5. **YAML frontmatter**：没有 stdlib，agent 定义的 5 个字段手写解析
 6. **流式 UTF-8**：SSE 回调可能切断多字节字符；`Sse_Parser` 的行缓冲保留未完成的行，直到换行后再交给 JSON 解析，因此不需要额外的 UTF-8 解码器
 7. **Windows 控制台**：输出中文前设置 UTF-8 code page；文件路径用宽字符 API（`core:sys/windows` 已封装）
-8. **版本固定**：在构建脚本里 pin Odin 版本；nightly 的 stdlib 会变
+8. **版本记录**：README 与 AGENTS.md 记录验证过的 nightly 版本，构建脚本打印当前 `odin version`；nightly 的 stdlib 会变，升级后必须重跑完整测试。构建脚本目前不强制版本。
 
 ## 验证
 

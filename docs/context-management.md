@@ -21,6 +21,8 @@ SDK 只固定前两段，其余段落由应用层按顺序 append：
 ## 追加指令
 ```
 
+`## 环境` 当前包含 OS、cwd、当前时间和“是否在 git 仓库中”。`## 追加指令` 是应用层的预留入口（`Prompt_Options.append_prompt`）；当前 CLI 没有 `--append-system-prompt`，`run` 不设置该字段，因此正常运行时不会出现这一节。
+
 拼接规则由 SDK 实现：
 
 1. base 末尾保证一个 `\n`，然后追加 `\n## 工具\n`、工具段与 `\n`
@@ -36,7 +38,7 @@ SDK 只固定前两段，其余段落由应用层按顺序 append：
 - 记忆文件不做 `@import`（v1），避免递归与不可预期读取
 - 记忆文件按原文完整注入，不截断；用户应自行控制大小
 - system prompt 在 `session_start` 中冻结；恢复时不重新计算
-- `--print-system-prompt` 与 `session_open` 共用同一个 `build_prompt_sections`：新 session 现场组装，恢复时读取 `session_start` 的冻结值；不创建 session、不调用模型
+- `--print-system-prompt` 与正常新建 session 共用应用层的 `build_prompt_sections` 和同一套 `Session_Options` 组装路径：新 session 现场组装，恢复时读取 `session_start` 的冻结值；不创建 session、不调用模型
 
 ### 基础提示词覆盖
 

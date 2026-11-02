@@ -108,11 +108,12 @@ SDK 不认识具体工具名、工具参数或子代理命令行。`Tool.user` �
 7. 文件不存在 / 无权限 / 是目录 → `ok:false`，错误信息说明原因
 8. `start_line` 大于文件总行数 → 返回空内容 + 元信息，不报错
 9. 单行本身超过 `max_capture_bytes` → `ok:false`，不返回半行
+10. 本次请求范围的累计输出超过 `max_capture_bytes` → `ok:false`，提示缩小 `start_line` / `end_line` 范围
 
 示例：
 
 ```
-read_file(file_path="ap-core/run.odin", start_line=1, end_line=500)
+read_file(file_path="ap-core/engine/loop.odin", start_line=1, end_line=500)
 ```
 
 `read_file` 与 `bash` 的 2000 行分页是唯一的范围限制；`bash` 超出部分写入 `.txt`，模型用 `read_file` 继续读。
@@ -139,7 +140,7 @@ read_file(file_path="ap-core/run.odin", start_line=1, end_line=500)
 示例：
 
 ```
-write_file(file_path="ap-core/run.odin", content="...")
+write_file(file_path="notes/todo.md", content="...")
 ```
 
 ## edit_file
@@ -168,12 +169,12 @@ write_file(file_path="ap-core/run.odin", content="...")
 示例：
 
 ```
-edit_file(file_path="ap-core/run.odin", old_string="foo", new_string="bar", replace_all=false)
+edit_file(file_path="ap-core/engine/loop.odin", old_string="foo", new_string="bar", replace_all=false)
 ```
 
 ## bash
 
-执行 `bash -c <command>`。所有平台统一使用 Bash：Windows 上通过 Git for Windows 的 `bash.exe`（启动时从 PATH 解析，找不到则退出 2）。
+执行 `bash -c <command>`。所有平台统一使用 Bash：启动时按 `AP_BASH` → PATH → 常见 Git 安装位置查找；Windows 上跳过 `C:\Windows\System32` 下的 WSL `bash.exe`，找不到时退出 2。
 
 参数：
 
@@ -186,7 +187,7 @@ edit_file(file_path="ap-core/run.odin", old_string="foo", new_string="bar", repl
 2. 默认 cwd 为 ap 启动目录；没有 `--add-dir`
 3. stdin 接 `/dev/null`（Windows 为 `NUL`），交互式命令会立即读到 EOF
 4. 继承 ap 的环境变量，但剔除 `AP_API_KEY`，避免密钥泄露给模型可控命令
-5. stdout 与 stderr 合并返回；两者顺序不保证
+5. stdout 与 stderr 合并返回；两者顺序不保证。输出先按 UTF-8 清洗，非法字节会被替换
 6. 结果首行：`[exit <code>, <duration>ms]`
 7. 非 0 退出不算工具失败：返回 `ok:true` + `exit_code`，由模型判断
 8. **超时由 ap 控制**：不要求在命令里调用 `timeout`；Windows 的 `timeout.exe` 语义不同
@@ -225,20 +226,20 @@ Windows 已知坑（不做特殊处理，写进文档避免模型反复踩）：
 
 1. `prompt`：子代理的提示词，**必须自包含**（子代理看不到父进程上下文）
 2. `agent_name`：子代理名称，默认 `general`
-3. `description`：3-5 词的任务概括，用于展示进度
+3. `description`：3-5 词的任务概括。schema 保留该参数，但当前实现不读取；进度展示只用 `[subagent]` 流式文本
 
 约束：
 
 1. 子代理通过启动新的 ap 进程实现，使用独立的 session
 2. 子代理继承父进程 cwd 与 `$AP_CONFIG`；不传 `--add-dir`
 3. 启动命令见 [subagents.md](subagents.md)：传 `--parent-session-id`、`--parent-tool-call-id`、`--agent-depth`，**不传 `--session`**
-4. 子进程自己生成 `session_id`；父进程从第一条 `session_start` 读取 `child_session_id`
+4. 子进程自己生成 `session_id`；父进程从子进程的 `session_start` 读取 `child_session_id`，多条时以最后一条为准
 5. 最大嵌套深度由 `max_agent_depth` 控制；达到上限时，应用层在建会话前从生效工具集移除 `task`
 6. 串行：同一时刻只运行一个子代理
 7. **不设超时**：`task` 不受 `tool_timeout_ms` 约束；子代理自己的 `llm_timeout_ms` 与 bash 超时仍然生效；父进程靠 SIGINT 取消
 8. 执行期间子代理的文本增量实时转发到父进程 stderr；不写父 transcript
 9. 返回：最终文本 + `child_session_id` + `stop_reason` + `usage` + `duration_ms`；写入 `tool_execution_end.metadata`
-10. 子代理异常退出时返回 `ok:false` + 错误摘要 + stderr 尾部（最多 2000 字符）
+10. 子代理异常退出时返回 `ok:false` + 错误摘要 + stderr 尾部（最多 2000 字节）
 11. 子代理写文件不隔离，与父进程操作同一工作目录
 12. 工具白名单由 agent 定义文件控制，是当前唯一的能力隔离手段
 

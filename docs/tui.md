@@ -124,23 +124,22 @@ stdin 与 stdout 都是 TTY 时，每轮 turn 前进入 raw mode，用自绘的�
 
 ```sh
 ./build.sh
-./bin/ap-tui
+./build/ap-tui
 
 # 或显式指定 agent
-./bin/ap-tui --agent-bin /path/to/ap
+./build/ap-tui --agent-bin /path/to/ap
 
 # 继续当前项目最近的 session
-./bin/ap-tui -c
+./build/ap-tui -c
 
 # 恢复指定 session
-./bin/ap-tui -s ses_20261022_120000_abcdef123456
+./build/ap-tui -s ses_20261022_120000_abcdef123456
 ```
 
-Windows：
+Windows 在 Git Bash 中执行同一个 `./build.sh`，产物是 `build\ap-tui.exe`：
 
 ```powershell
-.\build.ps1
-.\ap-tui.exe
+.\build\ap-tui.exe
 ```
 
 ## 测试

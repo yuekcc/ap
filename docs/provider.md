@@ -94,13 +94,13 @@ OpenAI 的流式 tool call 有三个坑，必须按下面的规则处理：
 
 1. 后续 chunk 可能只有 `index`，没有 `id` / `name`；**按 `index` 建槽**，不要只按 id 累积
 2. `id` 和 `name` 可能只在第一个片段出现；后续片段只追加 `function.arguments`
-3. 收到 `finish_reason` 后（`assembler_finish`）统一解析每个槽的 JSON；解析失败、缺 `id` / `name` 都是协议错误（`retryable=false`）
+3. 流结束后（`assembler_finish`，通常在 `[DONE]` 之后）统一解析每个槽的 JSON；解析失败、缺 `id` / `name` 都是协议错误（`retryable=false`）
 
 连接在 `[DONE]` 之前断开 → 视为流中断，整条响应丢弃并重试同一个 step；不会只保留其中一部分 tool call。
 
 ### 其它规则
 
-1. `message_end` 必须恰好一次；重复或缺失都算协议错误
+1. 流必须产出一个 `message_end`。缺少 `finish_reason`、空响应、`[DONE]` 之前断流都会报错；当前实现不专门检测重复的 `message_end`（最后一个 `finish_reason` 生效）
 2. 实现按数组顺序处理 `choices` 中的每一个；ap 不支持 `n>1`，服务端应只返回一个 choice
 3. usage 可能出现在最后一个 `choices` 为空的 chunk 里；没有就写 null
 4. `delta.content` 可能为 null；不要当成空字符串事件
@@ -177,7 +177,7 @@ Odin 的 `core:net` 没有 HTTP/TLS 客户端，统一使用 `vendor:curl`。
 2. 忽略空行和 `:` 开头的注释行
 3. 只处理 `data:` 前缀；`data: [DONE]` 结束
 4. 一个 chunk 可能包含多行，也可能一行被拆成多个 chunk；缓冲区必须跨回调保留
-5. 行缓冲按字节保留跨 chunk 的内容，直到换行后再解析 JSON；因此被切断的多字节 UTF-8 字符不会丢失
+5. 行缓冲按字节保留跨 chunk 的内容，直到换行后再解析 JSON；因此被切断的多字节 UTF-8 字符不会丢失。单行上限 16MB，超过按协议错误处理
 6. 连接关闭但没看到 `[DONE]` → `network`，由循环层重试同一个 step
 
 ### 取消

@@ -17,11 +17,11 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `ap-core/protocol/` | `protocol` | 事件 schema、宽松解析、`Line_Reader`、usage 计算 |
 | `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON/文本、平台原语、进程树、取消 token |
 | `ap-core/engine/` | `engine` | agent 机制：errors/config/session/loop/provider/sse/context/transcript |
-| `ap-core/client/` | `client` | 前端 kit：spawn、逐行泵、取消、只读 session/blob、历史展示辅助 |
-| `ap-tui/` | `aptui` | 终端前端库（`run` + 渲染/参数/agent） |
-| `ap-web/` | `apweb` | HTTP/SSE 前端库（`run` + server/api/sse/runner/assets） |
+| `ap-core/client/` | `client` | 前端 kit：spawn、逐行泵、取消、只读 session/blob、历史展示辅助、错误类型 |
+| `ap-tui/` | `aptui` | 终端前端库（`run` + 渲染、按键/输入、多行编辑、终端控制） |
+| `ap-web/` | `apweb` | HTTP/SSE 前端库（`run` + server/http_util/api/sse/runner/assets/pickdir/net） |
 
-同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter 与组装根，也是唯一读 `settings.json`、读 `AP_*` 环境变量、定位 bash、解析 agent 文件与组装 prompt sections 的地方；技能扫描在 `ap-cli/skills`，工具实现在 `ap-cli/tools`，它们是独立子包。`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
+同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter 与组装根，也是 ap 本体唯一读 `settings.json`、定位 bash、解析 agent 文件与组装 prompt sections 的地方；`AP_CONFIG` / `AP_API_KEY` / `AP_BASH` 分别在 platform 与 settings 层读取，前端通过 `ap-core/client` 读取 `AP_CONFIG` / `AP_AGENT_BIN` / `AP_BIN`。技能扫描在 `ap-cli/skills`，工具实现在 `ap-cli/tools`，它们是独立子包。`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
 
 ## 允许的边
 
@@ -55,4 +55,4 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
    断言 `source_files` 里没有 `ap-core/engine/`。这证明 agent 代码没有进入前端二进制。
 3. **反向用例**：`tools/check-deps.ps1 -SelfTest` / `tools/check-deps.sh --self-test` 会临时在 `ap-web`、`cmd/ap-web`、`ap-cli` 各加一条禁止 import，并新增 `engine` 反向 import `ap-cli/tools` 的用例，确认检查器返回失败。
 
-接入方式：`test.ps1` / `test.sh` 末尾调用；`build.ps1` / `build.sh` 在编译前调用。CI 可以只跑检查器作为独立 job。
+接入方式：`test.sh` 末尾调用；`build.sh` 在编译前调用。`tools/check-deps.ps1` 可以在 PowerShell 中单独运行，但仓库没有 `test.ps1` / `build.ps1`。CI 可以只跑检查器作为独立 job。

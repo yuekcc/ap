@@ -31,7 +31,7 @@
 ### 依赖
 
 - Odin nightly（开发使用 `dev-2026-10-nightly:84bc3fc`）
-- 一个可执行的 `ap`（`--agent-bin`、`AP_AGENT_BIN`、`AP_BIN`、同目录 `ap`/`ag`、`PATH` 依次查找）
+- 一个可执行的 `ap`（`--agent-bin`、`AP_AGENT_BIN`、`AP_BIN`、同目录 `ap`、`PATH` 依次查找）
 - Windows 需要 Git for Windows 提供的 `bash.exe`（ap 本身的要求）
 - 仅修改前端时需要 Node + npm
 
@@ -40,32 +40,32 @@
 在仓库根目录执行：
 
 ```sh
-# Linux / macOS，产物：bin/ap、bin/ap-web
+# Linux / macOS，产物：build/ap、build/ap-web
 ./build.sh
 ```
 
-```powershell
-# Windows，产物：bin\ap.exe、bin\ap-web.exe
-.\build.ps1
+```sh
+# Windows，在 Git Bash 中执行同一个脚本，产物：build\ap.exe、build\ap-web.exe
+./build.sh
 ```
 
 只构建 ap-web（入口 `cmd/ap-web`）：
 
 ```sh
-mkdir -p bin
-odin build cmd/ap-web -out:bin/ap-web -vet
+mkdir -p build
+odin build cmd/ap-web -out:build/ap-web -vet
 ```
 
-`build.sh` / `build.ps1` 检测到 `npx` 时会先刷新 `ap-web/dist`，否则直接使用仓库里已提交的产物。`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，所以该目录必须存在。
+`build.sh` 检测到 `npx` 时会先刷新 `ap-web/dist`，否则直接使用仓库里已提交的产物。`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，所以该目录必须存在。
 
 ### 运行
 
 ```sh
-./bin/ap-web                         # http://127.0.0.1:8417
-./bin/ap-web --port 9000
-./bin/ap-web -c                      # 定位当前项目最近的根 session
-./bin/ap-web -s ses_20261022_120000_abcdef123456
-./bin/ap-web --cwd /path/to/project
+./build/ap-web                         # http://127.0.0.1:8417
+./build/ap-web --port 9000
+./build/ap-web -c                      # 定位当前项目最近的根 session
+./build/ap-web -s ses_20261022_120000_abcdef123456
+./build/ap-web --cwd /path/to/project
 ```
 
 打开浏览器访问 `http://127.0.0.1:8417`。ap 的配置（`model`、`base_url`、`api_key` 等）仍由 `ap` 自己读取，默认是 `~/.ap/settings.json`，可用 `--config-dir` 或 `AP_CONFIG` 覆盖。
@@ -162,7 +162,7 @@ npm --prefix ap-web test           # 前端单元测试
 开发时可以配合磁盘静态资源，改样式后刷新即可，不需要重编 exe：
 
 ```sh
-./bin/ap-web --web-root ap-web/dist
+./build/ap-web --web-root ap-web/dist
 ```
 
 目录约定：
@@ -171,13 +171,14 @@ npm --prefix ap-web test           # 前端单元测试
 ap-web/
 ├── main.odin            # run：参数解析、监听、accept 循环（入口在 cmd/ap-web/main.odin）
 ├── server.odin          # HTTP/1.1 解析、响应、keep-alive
+├── http_util.odin       # MIME、percent-decode、状态行/头部写出
 ├── api.odin             # 路由与 JSON 编解码
 ├── sse.odin             # SSE 帧编码、hub、心跳
-├── agent.odin           # spawn ap、管道、事件泵
 ├── runner.odin          # session registry、按 session 分飞、取消、stderr 缓存、turn_done
-├── events.odin          # stream-json 事件解析
 ├── assets.odin          # 内置 dist/ + ETag + 磁盘模式
 ├── pickdir.odin         # Windows IFileDialog 目录选择
+├── net_windows.odin     # Windows socket / 监听 / DPI / 关停信号
+├── net_unix.odin        # Unix socket / 监听 / 关停信号
 ├── index.html           # Alpine 模板
 ├── frontend/            # 前端源码（api/sse/store/render/markdown/app）
 ├── dist/                # esbuild 产物，提交进仓库
@@ -196,7 +197,7 @@ odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 npm --prefix ap-web test
 ```
 
-仓库根目录的 `./test.sh` / `.\test.ps1` 会依次测试 `ap-core`、`ap-tui`、`ap-web` 和前端。
+仓库根目录的 `./test.sh` 会依次测试 `ap-core`、`ap-tui`、`ap-web`，最后运行 `tools/check-deps.sh`；前端测试需要单独执行 `npm --prefix ap-web test`。
 
 ## 安全与限制
 

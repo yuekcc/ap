@@ -89,7 +89,7 @@ ap-web（主进程）
 2. spawn `ap --print0 --output-format stream-json [-s <id>] <透传>`，工作目录设为该 session 的 `cwd`；提示词写 stdin 后关写端（Windows 上清理管道句柄继承标志，见 [tui.md](tui.md) 的坑）
 3. 逐行读 stdout：`parse_event_line`（复用 ap-tui 的事件结构）→ 逐事件推给 hub → 按该 session 的 key 广播 SSE
 4. stderr 缓存；turn 异常退出时随 `turn_done` 的 `stderr_preview` 带给前端
-5. 进程退出：把 slot key 别名到 `session_start` 里的真实 session id（新会话第一轮），广播 `turn_done`（含退出码与 stop_reason）
+5. 收到 `session_start`：把 slot key 别名到真实 session id（新会话第一轮）；进程退出后广播 `turn_done`（含退出码与 stop_reason）
 6. 运行中收到 `DELETE /api/turn?session_key=<key>`：只终止该 session 的 ap 进程树（复用 ap 内部的进程树终止语义：Unix 先 SIGTERM、2s 后 SIGKILL；Windows 用 Job Object 整树终止）。Unix 上 ap 收到 SIGTERM 后会自己写 `cancel` / `turn_end(cancelled)` / `session_end(reason=signal)`；Windows 的 Job 终止会连同 ap 一起结束，ap 来不及写收尾事件。两种情况 ap-web 都广播 `turn_done`，主动取消时 `stop_reason` 至少为 `cancelled`
 
 ### 取消与并发约束
@@ -128,7 +128,7 @@ ap-web（主进程）
 ### SSE
 
 - `Content-Type: text/event-stream`，`Cache-Control: no-cache`，`Connection: close`，禁用 Nagle（`TCP_NODELAY`）
-- 帧格式：`event: <type>\ndata: <json>\nid: <seq>\n\n`；`id` 单调递增，浏览器 `Last-Event-ID` 重连时从 transcript 补齐缺口（phase 1 可只做「重连即重放全量」）
+- 帧格式：`event: <type>\ndata: <json>\nid: <id>\n\n`；`id` 由 hub 单调分配，不是 transcript 的 `seq`。当前 phase 1 不使用 `Last-Event-ID` 做断点续传，重连后走 `GET /api/history` 全量重建，再按 transcript `seq` 去重
 - 心跳：每 15s 发 `: ping\n\n` 注释行，防代理超时
 - 写失败（EPIPE/连接 reset）即丢弃该订阅者，不影响 turn
 
@@ -139,7 +139,7 @@ ap-web（主进程）
 | 方法 | 路径 | 请求 | 响应 | 说明 |
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | – | `{"ok": true, "version": ...}` | 探活 |
-| GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 从 ap-web 启动参数/env 组装，前端展示；`platform` 决定是否显示目录选择入口 |
+| GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 从 ap-web 启动参数组装，前端展示；`platform` 决定是否显示目录选择入口 |
 | GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, cwd, running, turn}` | 指定 key 时返回该 session 的运行态；不带参数返回「最近活跃」session（仅作新标签页兜底） |
 | POST | `/api/session/new` | `{cwd?}` | `{session_id: null, session_key, cwd}` | 只分配一个 slot，不落盘；`cwd` 决定 slot 属于哪个 project，缺省用默认目录。下一条提示词让 ap 新建 session（同 ap-tui `/new`） |
 | GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running}]` | 复用 `ap-core/client/store.odin` 的 session 列表；`cwd` 定位 project，缺省用默认目录；`running` 表示该 transcript 对应的 session 是否在跑 |
@@ -148,7 +148,7 @@ ap-web（主进程）
 | GET | `/api/history?session_id=<id>&cwd=<dir>` | – | `{events: [...]}` | 从该 project 的 transcript 重放：逐行读 JSONL，`text_ref` / `input_ref` / `args_ref` / `content_ref` 从 blobs 解析（缺失则退化为对应 `*_preview`），超 200 行/20KB 的工具结果截断并标记（对齐 ap-tui 重放规则）；前端渲染初始画面 |
 | GET | `/api/cwd` | – | `{cwd}` | 默认工作目录（启动目录 / `--cwd`）；不再随会话切换变化 |
 | POST | `/api/cwd/pick` | – | `200 {cwd}` / `409 {error: cancelled}` / `501` | 弹出系统目录选择对话框（Windows：`IFileDialog` FOS_PICKFOLDERS）；只做路径选择与规范化，不修改进程 cwd、不清空 session。见「工作目录选择」 |
-| POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409 `turn_running`，不同 session/project 可并发；`prompt` 为空 400，`cwd` 不存在 400 `invalid_cwd` |
+| POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409 `turn_running`，不同 session/project 可并发；`prompt` 为空 400 `prompt_empty`，超过 1MB 413 `prompt_too_large`，`cwd` 不存在 400 `invalid_cwd` |
 | DELETE | `/api/turn?session_key=<key>` | – | `202 {"cancelled": bool}` | 取消该 session 的 turn（终止进程树）；不带 key 时退化为当前 session |
 | GET | `/api/events?session_key=<key>` | – | SSE 流 | 只订阅该 session 的事件；不带参数订阅全部（兼容/测试）。见下节 |
 
@@ -199,7 +199,7 @@ data: {"exit_code":0,"stop_reason":"stop","usage":{...},"stderr_preview":"..."}
 | SSE event | data | 说明 |
 | --- | --- | --- |
 | `ap` | ap 的 stream-json 事件原样 | 前端按 `type` 分派（`session_start` / `message_update` / `message_end` / `tool_execution_start/update/end` / `turn_start/turn_end` / `error`） |
-| `turn_done` | `{exit_code, stop_reason, usage, stderr_preview}` | turn 结束信封；`stop_reason` 取自 `turn_end`/`session_end`，主动取消但没有收尾事件时 ap-web 填 `cancelled`，其他缺失为 null |
+| `turn_done` | `{exit_code, stop_reason, usage, stderr_preview}` | turn 结束信封；`stop_reason` 优先取 `turn_end.stop_reason`，没有时取 `session_end.reason`（可能是 `exit` / `signal` / `error`），主动取消但没有收尾事件时 ap-web 填 `cancelled`，其他缺失为 null |
 | `ping` | `{ts}` | 心跳（也作为 SSE 注释行发送） |
 
 `GET /api/events?session_key=<key>` 只转发该 session 的 `ap` / `turn_done` 帧；订阅者匹配 slot key 或真实 session id 任一即可。心跳（空 topic）仍发给所有订阅者。不带 `session_key` 时保持旧的全量订阅，仅用于兼容与测试。
@@ -254,8 +254,9 @@ npm --prefix ap-web run watch      # 开发期监听
 ### 全量构建
 
 ```sh
-./build.sh        # Windows 下 ./build.ps1
-# 产物：bin/ap.exe  bin/ap-tui.exe  bin/ap-web.exe
+./build.sh
+# 产物：build/ap、build/ap-tui、build/ap-web（Windows 为 .exe）
+# Windows 在 Git Bash 中执行同一个脚本
 ```
 
 构建脚本逻辑：
@@ -268,10 +269,10 @@ npm --prefix ap-web run watch      # 开发期监听
 ### 运行
 
 ```sh
-./bin/ap-web                       # http://127.0.0.1:8417
-./bin/ap-web --web-root ap-web/dist   # 开发模式：静态资源走磁盘，前端改动刷新即生效
-./bin/ap-web -c                    # 启动即定位当前项目最近的 session
-./bin/ap-web -s ses_...
+./build/ap-web                       # http://127.0.0.1:8417
+./build/ap-web --web-root ap-web/dist   # 开发模式：静态资源走磁盘，前端改动刷新即生效
+./build/ap-web -c                    # 启动即定位当前项目最近的 session
+./build/ap-web -s ses_...
 ```
 
 ## CLI

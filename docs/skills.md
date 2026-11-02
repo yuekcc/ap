@@ -40,12 +40,12 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 
 约束：
 
-1. front matter 必须从文件第一行 `---` 开始，以单独一行 `---` 结束
+1. 文件可以带 UTF-8 BOM；去掉 BOM 后，第一行必须是 `---`，并以单独一行 `---` 结束
 2. 只解析 `name`、`description` 与 `disable-model-invocation`；其余字段忽略，`#` 开头的行忽略
 3. 值可以不加引号，也可以用单/双引号包裹；双引号内的 `\"`、`\\`、`\n`、`\t`、`\r` 会还原
 4. `name` 只是标识，不要求等于目录名；`description` 写清“什么时候该用它”，模型据此选择
 5. 正文是 front matter 之后的全部内容，必须非空
-6. 文件接受 UTF-8 BOM 与 CRLF，正文按 LF 归一
+6. 文件接受 CRLF，正文按 LF 归一
 7. 正文不会被截断地注入提示词；它只在模型主动读取时进入上下文
 8. `disable-model-invocation: true` 表示该技能只供用户查看，不进入 system prompt；只识别 `true`（不区分大小写），缺省为 false。它仍会加载，并出现在 `--list-skills` 中
 
