@@ -27,4 +27,5 @@ cd $out
 odin build ../cmd/ap -out:ap$ext -vet
 odin build ../cmd/ap-tui -out:ap-tui$ext -vet
 odin build ../cmd/ap-web -out:ap-web$ext -vet
-echo "built ${out}/ap$ext ${out}/ap-tui$ext ${out}/ap-web$ext"
+odin build ../cmd/magi-cli -out:magi-cli$ext -vet
+echo "built ${out}/ap$ext ${out}/ap-tui$ext ${out}/ap-web$ext ${out}/magi-cli$ext"

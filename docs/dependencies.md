@@ -9,6 +9,7 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `cmd/ap/` | `main` | 入口：`os.exit(apcli.run(os.args))` |
 | `cmd/ap-tui/` | `main` | 入口：`os.exit(aptui.run(os.args))` |
 | `cmd/ap-web/` | `main` | 入口：`os.exit(apweb.run(os.args))` |
+| `cmd/magi-cli/` | `main` | 入口：`os.exit(magicli.run(os.args))` |
 | `ap-cli/` | `apcli` | CLI adapter 与组装根：参数、加载 `settings.json`、定位 bash、agent 定义解析、system prompt sections、输出格式、退出码、信号 |
 | `ap-cli/tools/` | `aptools` | 五个内置工具、`Tool_Config`、进程树清理、子代理启动 |
 | `ap-cli/skills/` | `apskills` | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 |
@@ -20,8 +21,9 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `ap-core/client/` | `client` | 前端 kit：spawn、逐行泵、取消、只读 session/blob、历史展示辅助、错误类型 |
 | `ap-tui/` | `aptui` | 终端前端库（`run` + 渲染、按键/输入、多行编辑、终端控制） |
 | `ap-web/` | `apweb` | HTTP/SSE 前端库（`run` + server/http_util/api/sse/runner/assets/pickdir/net） |
+| `magi-cli/` | `magicli` | MAGI 决策器：参数、输入、三角色提示词、并行 session、投票聚合、输出与信号 |
 
-同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter 与组装根，也是 ap 本体唯一读 `settings.json`、定位 bash、解析 agent 文件与组装 prompt sections 的地方；`AP_CONFIG` / `AP_API_KEY` / `AP_BASH` 分别在 platform 与 settings 层读取，前端通过 `ap-core/client` 读取 `AP_CONFIG` / `AP_AGENT_BIN` / `AP_BIN`。技能扫描在 `ap-cli/skills`，工具实现在 `ap-cli/tools`，它们是独立子包。`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
+同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter 与组装根，也是 ap 本体唯一读 `settings.json`、定位 bash、解析 agent 文件与组装 prompt sections 的地方；`magi-cli/settings.odin` 另有一份只读 provider 字段的子集读取器；`AP_CONFIG` / `AP_API_KEY` / `AP_BASH` 分别在 platform 与 settings 层读取，前端通过 `ap-core/client` 读取 `AP_CONFIG` / `AP_AGENT_BIN` / `AP_BIN`。技能扫描在 `ap-cli/skills`，工具实现在 `ap-cli/tools`，它们是独立子包。`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
 
 ## 允许的边
 
@@ -30,10 +32,12 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `cmd/ap` | `ap-cli` | 其他一切 |
 | `cmd/ap-tui` | `ap-tui` | 其他一切 |
 | `cmd/ap-web` | `ap-web` | 其他一切 |
+| `cmd/magi-cli` | `magi-cli` | 其他一切 |
 | `ap-cli` | `apcore`、`ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`ap-cli/tools`、`ap-cli/skills`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/client`、`ap-web`、`ap-tui` |
 | `ap-cli/tools` | `ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-core/engine`、`ap-cli/skills` |
 | `ap-cli/skills` | `ap-core/platform`、`core:`/`vendor:` | `apcore`、`ap-core/engine`、`ap-cli/tools` |
 | `ap-web` / `ap-tui` | `ap-core/client`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/platform`、`apcore` 根包、`ap-cli`、彼此 |
+| `magi-cli` | `apcore`、`ap-core/platform`、`core:`/`vendor:` | `ap-core/engine`、`ap-cli`、`ap-core/client`、`ap-web`、`ap-tui` |
 | `ap-core/client` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`apcore` 根包 |
 | `apcore` | `ap-core/engine`、`ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-cli`、`ap-web`、`ap-tui`、`ap-core/client` |
 | `ap-core/engine` | `ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-cli`、`ap-cli/tools`、`ap-cli/skills`、`ap-core/client`、`ap-web`、`ap-tui` |
@@ -42,6 +46,8 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `ap-core/protocol` | `core:` | 所有本地包 |
 
 `apcore` 根包不得定义 `main`，否则 `apcli` 或前端 import 它时会把入口链进来。`ap-cli` 不得直接 import `ap-core/engine`：engine 只能经 `apcore` 门面访问，这是「core 可被宿主嵌入」的边界保证。`ap-core/tool` 不得 import engine，也不得被 engine 反向依赖到具体工具实现。
+
+`magi-cli` 是 `apcore` 的第二个宿主。它同样不能直接 import `engine`，也不复用 `ap-cli`；`magi-cli` 里出现 `ap-cli` 或 `engine` 的 import 视为边界违规。反过来，`ap-cli` 不得 import `magi-cli`。
 
 ## 检查器
 

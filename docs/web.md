@@ -255,14 +255,14 @@ npm --prefix ap-web run watch      # 开发期监听
 
 ```sh
 ./build.sh
-# 产物：build/ap、build/ap-tui、build/ap-web（Windows 为 .exe）
+# 产物：build/ap、build/ap-tui、build/ap-web、build/magi-cli（Windows 为 .exe）
 # Windows 在 Git Bash 中执行同一个脚本
 ```
 
 构建脚本逻辑：
 
 1. 探测 `npx`：存在则先跑 `npm --prefix ap-web run build` 刷新 dist；不存在则跳过（用仓库里已提交的 dist）
-2. `odin build ../cmd/ap-web -out:ap-web -vet`（与 `cmd/ap`、`cmd/ap-tui` 并列）
+2. `odin build ../cmd/ap-web -out:ap-web -vet`（与 `cmd/ap`、`cmd/ap-tui`、`cmd/magi-cli` 并列）
 
 注意：`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，目录不存在直接编译失败——这就是 dist 必须提交仓库、且前端构建必须先于 Odin 构建的原因。
 

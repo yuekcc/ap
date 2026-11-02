@@ -21,6 +21,7 @@
 | Protocol（`ap-core/protocol`） | 事件 schema、usage、宽松事件解析、行分帧 | 只依赖 `core:`；不含 IO、路径、agent 逻辑 |
 | Platform（`ap-core/platform`） | 路径/project hash/session 发现、blob 读写、JSON/文本、平台原语、进程树、取消 token | 不依赖任何本地包，不含 UI、loop、provider、tools |
 | Client（`ap-core/client`） | 前端 kit：定位 ap、拼 argv、spawn、逐行泵、取消、只读 session/blob 访问、历史展示辅助 | 不 import `ap-core/engine` 或 `apcore` 根包，不实现 agent |
+| MAGI CLI（`magi-cli`，package `magicli`） | 三角色投票、一票否决、输入输出、成员 session 编排 | 不 import engine/ap-cli/前端，不实现 agent loop，不执行工具 |
 | Engine（`ap-core/engine`） | Loop / Provider / Context / Transcript Store / Session 编排 | 不 import `apcore`、`ap-cli`、`ap-cli/tools`、`ap-cli/skills` |
 | External frontends | `ap-tui`（终端）与 `ap-web`（浏览器）：每轮拉起 ap 子进程、解析 `stream-json`、渲染；`ap-web` 额外提供 HTTP/SSE | 只 import `ap-core/client` + `ap-core/protocol`，不 import `ap-core/engine`、`ap-core/platform`、`apcore` 根包或彼此，不实现 agent |
 
@@ -46,6 +47,10 @@ ap-core/client ──► ap-core/platform, ap-core/protocol
 
 cmd/ap-tui ──► ap-tui（package aptui）─┐
 cmd/ap-web ──► ap-web（package apweb）─┴──► ap-core/client, ap-core/protocol
+
+cmd/magi-cli ──► magi-cli（package magicli）
+                    ├──► apcore（SDK 门面）
+                    └──► ap-core/platform
 ```
 
 Engine 内部：
@@ -167,7 +172,7 @@ session_options_append :: proc(opts: ^Session_Options, section: string)
 
 另有 `settings_defaults`（只给默认值，不读文件）、`registry_init`、`is_ok` / `errorf`、`log_set_level` / `log_warn` / `log_error`（诊断写 stderr），以及给宿主用的 `Error` / `Settings` / `Session` / `Emitter` / `Tool` / `Tool_Result` / `Registry` 等类型别名。
 
-`settings.json` 只由 `ap-cli` 读取与校验（`ap-cli/settings.odin`），拆成 `apcore.Settings` 与 `aptools.Tool_Config` 后再传入。`env_open` 不做 `setup_console`、不装信号、不写 stdout，只确保配置目录可写、解析 cwd/project、校验并保存工具注册表。`--list-skills` 的文本生成属于应用层；当前 CLI 不接受 `--list-tools`（与既有行为一致）。
+`settings.json` 由宿主 adapter 读取与校验：`ap-cli` 读取完整字段并拆成 `apcore.Settings` 与 `aptools.Tool_Config`，`magi-cli` 只读取 provider 相关字段。`env_open` 不做 `setup_console`、不装信号、不写 stdout，只确保配置目录可写、解析 cwd/project、校验并保存工具注册表。`--list-skills` 的文本生成属于应用层；当前 CLI 不接受 `--list-tools`（与既有行为一致）。
 
 ## 契约要点
 
@@ -177,21 +182,21 @@ session_options_append :: proc(opts: ^Session_Options, section: string)
 4. `transcript_append_line` 成功返回即意味着该行已写入并 flush；进程崩溃最多丢失最后一行。blob 必须在引用它的事件之前写完并 fsync。
 5. `transcript_read_all` 按文件行序读取；遇到未知事件类型跳过；遇到 `v` 大于支持版本、且类型已知时返回错误，避免误读。
 6. 任何模块都不得绕过 Loop 直接写 transcript 事件（Transcript Store 只提供追加原语）。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行，不写修复事件。
-7. SDK 门面（`apcore`）不得读 `os.args` / `os.stdin`、不得写 `os.stdout`、不得装信号、不得 `os.exit`，也不得打开 `settings.json` 或读 `AP_CONFIG` / `AP_API_KEY` / `AP_BASH`：配置加载、环境发现、agent/技能/记忆解析都属于 `ap-cli`，SDK 只接收 `Config.settings` / `config_dir` / `cwd` / `tools`。退出码映射、输出格式、控制台初始化同样只属于 `ap-cli`。
+7. SDK 门面（`apcore`）不得读 `os.args` / `os.stdin`、不得写 `os.stdout`、不得装信号、不得 `os.exit`，也不得打开 `settings.json` 或读 `AP_CONFIG` / `AP_API_KEY` / `AP_BASH`：配置加载、环境发现、agent/技能/记忆解析都属于宿主 adapter（`ap-cli` / `magi-cli`），SDK 只接收 `Config.settings` / `config_dir` / `cwd` / `tools`。退出码映射、输出格式、控制台初始化同样只属于宿主 adapter。
 
 ## 进程与生命周期
 
 1. **单主进程**：ap 本体只有一个进程；工具串行执行，不需要工作线程池
 2. **子进程只出现在两处**：`bash` 执行命令（Windows 上为 Git Bash），`task` 拉起子代理
-3. 所有子进程在创建时尝试加入进程树管理：
+4. 所有子进程在创建时尝试加入进程树管理：
    - Unix：不创建独立进程组；超时/取消时用 `os.process_list` + PPid 递归收集后代，先发 `SIGTERM`，2s 后对同一快照发 `SIGKILL`
    - Windows：每个子进程创建一个 Job Object 并加入；超时/取消时 `TerminateJobObject`，创建或分配失败时退化为 `taskkill /T /F`；正常返回的 Job 登记到运行期表，ap 退出时统一 `TerminateJobObject`
    - Unix 的递归扫描不是运行期登记表：正常返回后 ap 不会在退出时再次清理后台后代
-4. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
-5. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
-6. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → 读取提示词 → （新 session）解析 agent / 发现技能 / 读取 `$AP_CONFIG/SYSTEM.md` → 构造工具注册表 → 应用工具白名单与深度规则 → 组装 prompt sections（此处读取 `AGENTS.md`）→ `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
-7. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件
-8. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
+5. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
+6. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
+7. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → 读取提示词 → （新 session）解析 agent / 发现技能 / 读取 `$AP_CONFIG/SYSTEM.md` → 构造工具注册表 → 应用工具白名单与深度规则 → 组装 prompt sections（此处读取 `AGENTS.md`）→ `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
+8. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件
+9. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
 
 ## 状态归属
 
@@ -206,6 +211,7 @@ session_options_append :: proc(opts: ^Session_Options, section: string)
 cmd/ap/              package main：os.exit(apcli.run(os.args))
 cmd/ap-tui/          package main：os.exit(aptui.run(os.args))
 cmd/ap-web/          package main：os.exit(apweb.run(os.args))
+cmd/magi-cli/        package main：os.exit(magicli.run(os.args))
 ap-cli/              package apcli：options / settings / agent / prompt / run / output / app / signals
 ap-cli/tools/        package aptools：五个内置工具、Tool_Config、process
 ap-cli/skills/       package apskills：技能发现与提示词块
@@ -217,6 +223,8 @@ ap-core/engine/      package engine：errors / config / session / loop / provide
 ap-core/client/      package client：turn / spawn / store / history / errors
 ap-tui/              package aptui：args / render / agent / input / editor / keys / term
 ap-web/              package apweb：server / http_util / api / sse / runner / assets / pickdir / net_*
+magi-cli/            package magicli：options / settings / prompt / vote / run / signals
+magi-cli/prompts/    三角色与公共投票规则，编译期内嵌
 ```
 
 允许的 import 边：
@@ -226,10 +234,12 @@ ap-web/              package apweb：server / http_util / api / sse / runner / a
 | `cmd/ap` | `ap-cli` | 其他一切 |
 | `cmd/ap-tui` | `ap-tui` | 其他一切 |
 | `cmd/ap-web` | `ap-web` | 其他一切 |
+| `cmd/magi-cli` | `magi-cli` | 其他一切 |
 | `ap-cli` | `apcore`、`ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`ap-cli/tools`、`ap-cli/skills`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/client`、`ap-web`、`ap-tui` |
 | `ap-cli/tools` | `ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-core/engine`、`ap-cli/skills` |
 | `ap-cli/skills` | `ap-core/platform`、`core:`/`vendor:` | `apcore`、`ap-core/engine`、`ap-cli/tools` |
 | `ap-web` / `ap-tui` | `ap-core/client`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/platform`、`apcore` 根包、`ap-cli`、彼此 |
+| `magi-cli` | `apcore`、`ap-core/platform`、`core:`/`vendor:` | `ap-core/engine`、`ap-cli`、前端、`ap-core/client` |
 | `ap-core/client` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`apcore` 根包 |
 | `apcore` | `ap-core/engine`、`ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-cli`、`ap-web`、`ap-tui`、`ap-core/client` |
 | `ap-core/engine` | `ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-cli`、`ap-cli/tools`、`ap-cli/skills`、`ap-core/client`、前端 |
@@ -239,11 +249,13 @@ ap-web/              package apweb：server / http_util / api / sse / runner / a
 
 Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 在测试与构建前强制：扫描 import 行（含 `ap-cli` 不得直接 import `engine`、`engine` 不得反向 import `ap-cli/tools`），并用 `-export-dependencies:json` 断言前端的编译文件清单里没有 `ap-core/engine/`。脚本带 `--self-test` 反向用例，确认禁止 import 会返回非 0。
 
-## 外部消费者：ap-tui 与 ap-web
+## 外部消费者：ap-tui、ap-web 与 magi-cli
 
 `ap-tui` 不属于 ap 进程内的模块，也不依赖 ap 的内存结构。它每轮启动一个新的 ap 子进程，通过 `--print0 --output-format stream-json` 交互，并直接读取 v1 transcript 做历史重放。修改 stream-json 事件或 transcript schema 时要同步检查 [tui.md](tui.md)。
 
 `ap-web` 与 ap-tui 同构，只是把渲染器换成浏览器：每轮 spawn 一个 ap 子进程，逐行解析 `stream-json` 并经 SSE 转发；历史同样来自 transcript，额外用 `ap-core/client` 的 session/blob 原语做重放。它自带 HTTP/1.1 + SSE 服务器（`core:net`）和编译期内置的前端资源，不 import ap 或 ap-tui；运行态按 session 注册并记录各自的 working directory，同一 session 单飞、不同标签页/不同 project 可并发。协议、并发、取消和目录选择见 [web.md](web.md)。
+
+`magi-cli` 是进程内宿主，不走 `ap` 子进程协议：它直接 import `apcore`，为三名角色各开一个隔离 session，聚合投票后一次退出。它不链接 `ap-cli`，工具、技能、agent 文件与信号安装都在自己的 adapter 中。协议与决策语义见 [magi.md](magi.md)。
 
 ## 实现约束（Odin）
 

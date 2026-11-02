@@ -21,6 +21,7 @@ ap 本体没有交互界面。`ap-tui`（终端）和 `ap-web`（浏览器）是
 - 独立进程子代理、agent 定义文件、工具白名单和深度限制
 - 技能发现与清单注入；全局和项目 `AGENTS.md`；`$AP_CONFIG/SYSTEM.md` 覆盖基础提示词
 - 独立的 `ap-tui` 与 `ap-web`
+- `magi-cli`：三名角色各自投票、一票否决的决策程序，基于 `apcore` SDK
 - Windows、Linux、macOS；shell 统一使用 Bash
 
 ## 快速开始
@@ -40,12 +41,13 @@ ap 本体没有交互界面。`ap-tui`（终端）和 `ap-web`（浏览器）是
 ./build.sh
 ```
 
-脚本会先刷新 `ap-web/dist`（检测到 `npx` 时），运行 `tools/check-deps.sh`，再编译三个入口。产物在 `build/`：
+脚本会先刷新 `ap-web/dist`（检测到 `npx` 时），运行 `tools/check-deps.sh`，再编译四个入口。产物在 `build/`：
 
 ```
 build/ap
 build/ap-tui
 build/ap-web
+build/magi-cli
 ```
 
 Windows 下为对应的 `.exe`，在 Git Bash 中执行同一个脚本。直接调用 Odin 也可以；Windows 的 `-out` 必须带 `.exe` 后缀：
@@ -58,6 +60,7 @@ mkdir -p build
 odin build cmd/ap -out:build/ap$ext -vet
 odin build cmd/ap-tui -out:build/ap-tui$ext -vet
 odin build cmd/ap-web -out:build/ap-web$ext -vet
+odin build cmd/magi-cli -out:build/magi-cli$ext -vet
 ```
 
 ### 配置
@@ -124,6 +127,18 @@ cat prompt.txt | ./build/ap --print0
 
 agent 定义放在 `$AP_CONFIG/agents/<name>.md`。技能放在 `~/.agents/skills/<name>/SKILL.md` 或 `<启动目录>/.agents/skills/<name>/SKILL.md`；ap 只把清单注入 system prompt，正文由模型按需读取。完整参数见 [docs/cli-and-config.md](docs/cli-and-config.md)。
 
+## MAGI 决策
+
+`magi-cli` 把问题和材料交给 BALTHASAR-2（战略）、CASPER-3（伦理）、MELCHIOR-1（科学）三名角色独立投票，任意一名否决即整体否决。成员没有工具，各自一个 session，transcript 可用 `ap -s <session_id>` 审计。
+
+```sh
+./build/magi-cli --question '是否包含恶意行为' --context '<材料>'
+./build/magi-cli --input-file request.json --output-format text
+cat request.json | ./build/magi-cli --print0
+```
+
+请求 JSON 为 `{"question": "...", "context": "..."}`；默认输出 `magi.decision.v1` JSON。成员失败按否决处理。完整契约见 [docs/magi.md](docs/magi.md)。
+
 ## 前端
 
 `ap-tui`：
@@ -156,6 +171,9 @@ cmd/ap ──► ap-cli（组装根）──► apcore（SDK 门面）──► 
 
 cmd/ap-tui ──► ap-tui ──┐
 cmd/ap-web ──► ap-web ──┴──► ap-core/client + ap-core/protocol
+
+cmd/magi-cli ──► magi-cli ──► apcore ──► engine
+                              └──► ap-core/platform
 ```
 
 | 位置 | 职责 |
@@ -170,7 +188,8 @@ cmd/ap-web ──► ap-web ──┴──► ap-core/client + ap-core/protocol
 | `ap-core/protocol/` | 事件 schema、宽松解析、行分帧，只依赖 `core:` |
 | `ap-core/client/` | 前端 kit：spawn、逐行泵事件、只读 session 访问 |
 | `ap-tui/`、`ap-web/` | 前端库；本地包只允许 `ap-core/client` 与 `ap-core/protocol`，另可用 `core:` |
-| `cmd/` | 三个薄入口，只 import 对应的库包 |
+| `magi-cli/` | MAGI 决策器：参数、输入、三角色提示词、并行投票、一票否决与输出 |
+| `cmd/` | 四个薄入口，只 import 对应的库包 |
 
 依赖方向是单向的。`ap-cli` 不能直接 import `engine`；SDK 不读 argv、环境变量、`settings.json`，也不写 stdout、不装信号；前端不 import agent 代码。这些边由 `tools/check-deps.sh` 在构建和测试时强制，改 import 后先跑它。完整规则见 [docs/architecture.md](docs/architecture.md) 和 [docs/dependencies.md](docs/dependencies.md)。
 
@@ -197,7 +216,7 @@ transcript 只追加完整事件；恢复时唯一允许的物理改动是截掉
 ./test.sh
 ```
 
-脚本依次测试 `ap-core/protocol`、`platform`、`client`、`tool`、`engine`、`apcore`、`ap-cli`、`ap-tui`、`ap-web`，最后运行 `tools/check-deps.sh`。测试离线，不调用真实 LLM。前端测试单独跑：
+脚本依次测试 `ap-core/protocol`、`platform`、`client`、`tool`、`engine`、`apcore`、`ap-cli`、`magi-cli`、`ap-tui`、`ap-web`，最后运行 `tools/check-deps.sh`。测试离线，不调用真实 LLM。前端测试单独跑：
 
 ```sh
 npm --prefix ap-web test
@@ -254,4 +273,5 @@ npm --prefix ap-web run build
 | [docs/tui.md](docs/tui.md) | `ap-tui` 的进程模型与渲染 |
 | [docs/web.md](docs/web.md) | `ap-web` 的 HTTP/SSE API 与并发语义 |
 | [docs/integration.md](docs/integration.md) | 新前端接入 ap 的集成指南 |
+| [docs/magi.md](docs/magi.md) | `magi-cli` 的角色、投票、输入输出与失败语义 |
 | [docs/errors-and-cancellation.md](docs/errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 |
