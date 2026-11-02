@@ -1,9 +1,10 @@
-package engine
+package apskills
 
 import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:testing"
+import "core:time"
 
 make_skill_dir :: proc(base, dir_name, front_name, description, body: string) -> string {
 	dir := fmt.tprintf("%s/%s", base, dir_name)
@@ -213,34 +214,30 @@ test_skills_brief :: proc(t: ^testing.T) {
 	testing.expect_value(t, skills_brief(skills), "1. alpha: does alpha\n2. bravo: does bravo\n")
 }
 
-@(test)
-test_system_prompt_includes_skill_section :: proc(t: ^testing.T) {
-	dir := test_temp_dir("skill-prompt")
-	defer test_cleanup(dir)
+test_temp_dir :: proc(prefix: string) -> string {
+	base := os.get_env("TEMP", context.allocator)
+	if len(base) == 0 {
+		base = os.get_env("TMPDIR", context.allocator)
+	}
+	name := fmt.tprintf("%s/ap-skills-test-%s-%d", base, prefix, time.time_to_unix_nano(time.now()))
+	os.make_directory_all(name)
+	return name
+}
 
-	home := fmt.tprintf("%s/home", dir)
-	root := fmt.tprintf("%s/work", dir)
-	os.make_directory_all(home)
-	os.make_directory_all(root)
-	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "GLOBAL_MEMORY")
+test_write_file :: proc(path, content: string) {
+	dir, _ := os.split_path(path)
+	if len(dir) > 0 {
+		os.make_directory_all(dir)
+	}
+	if err := os.write_entire_file_from_bytes(path, transmute([]byte)content); err != nil {
+		panic("failed to write test file")
+	}
+}
 
-	prompt := build_system_prompt(
-		{
-			cwd = root,
-			home_dir = home,
-			agent = agent_default_general(),
-			tool_section = "TOOL_SECTION",
-			skill_section = "SKILL_SECTION",
-			append_prompt = "APPEND_SECTION",
-			include_memory = true,
-		},
-	)
-	testing.expect(t, test_contains(prompt, "## 可用技能"))
-	testing.expect(t, test_contains(prompt, "SKILL_SECTION"))
+test_cleanup :: proc(dir: string) {
+	os.remove_all(dir)
+}
 
-	skill_pos := strings.index(prompt, "SKILL_SECTION")
-	memory_pos := strings.index(prompt, "GLOBAL_MEMORY")
-	append_pos := strings.index(prompt, "APPEND_SECTION")
-	testing.expect(t, skill_pos < memory_pos)
-	testing.expect(t, memory_pos < append_pos)
+test_contains :: proc(haystack, needle: string) -> bool {
+	return strings.contains(haystack, needle)
 }

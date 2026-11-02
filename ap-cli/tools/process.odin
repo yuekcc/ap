@@ -1,6 +1,6 @@
-package engine
+package aptools
 
-import "../platform"
+import platform "../../ap-core/platform"
 
 import "core:fmt"
 import "core:os"
@@ -60,7 +60,7 @@ spawn_child :: proc(
 	cwd: string,
 	env: []string,
 	stdin_data: []byte,
-) -> (Child_Process, Error) {
+) -> (Child_Process, platform.Error) {
 	child: Child_Process
 	stdin_file: ^os.File
 	stdin_temp := ""
@@ -74,12 +74,12 @@ spawn_child :: proc(
 		}
 		stdin_temp = fmt.tprintf("%s/.ap-stdin-%d-%d", base, os.get_pid(), time.time_to_unix_nano(time.now()))
 		if werr := os.write_entire_file_from_bytes(stdin_temp, stdin_data); werr != nil {
-			return child, make_error(.Tool, "cannot write temporary stdin file: %v", werr)
+			return child, platform.errorf("cannot write temporary stdin file: %v", werr)
 		}
 		file, ferr := os.open(stdin_temp, {.Read, .Inheritable})
 		if ferr != nil {
 			os.remove(stdin_temp)
-			return child, make_error(.Tool, "cannot open temporary stdin file: %v", ferr)
+			return child, platform.errorf("cannot open temporary stdin file: %v", ferr)
 		}
 		stdin_file = file
 	}
@@ -89,7 +89,7 @@ spawn_child :: proc(
 			os.close(stdin_file)
 			os.remove(stdin_temp)
 		}
-		return child, make_error(.Tool, "cannot create stdout pipe: %v", e1)
+		return child, platform.errorf("cannot create stdout pipe: %v", e1)
 	}
 	stdout_r, stdout_w = r1, w1
 	r2, w2, e2 := os.pipe()
@@ -100,7 +100,7 @@ spawn_child :: proc(
 			os.close(stdin_file)
 			os.remove(stdin_temp)
 		}
-		return child, make_error(.Tool, "cannot create stderr pipe: %v", e2)
+		return child, platform.errorf("cannot create stderr pipe: %v", e2)
 	}
 	stderr_r, stderr_w = r2, w2
 
@@ -122,7 +122,7 @@ spawn_child :: proc(
 			os.close(stdin_file)
 			os.remove(stdin_temp)
 		}
-		return child, make_error(.Tool, "cannot spawn process: %v", perr)
+		return child, platform.errorf("cannot spawn process: %v", perr)
 	}
 
 	if stdin_file != nil {
@@ -138,35 +138,35 @@ spawn_child :: proc(
 		stderr  = stderr_r,
 		stdin_temp = stdin_temp,
 	}
-	return child, ok_error()
+	return child, platform.ok_error()
 }
 
-read_available :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool, err: Error) {
+read_available :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool, err: platform.Error) {
 	has, herr := os.pipe_has_data(file)
 	if herr != nil {
-		return nil, true, ok_error()
+		return nil, true, platform.ok_error()
 	}
 	if !has {
-		return nil, false, ok_error()
+		return nil, false, platform.ok_error()
 	}
 	n, rerr := os.read(file, buf)
 	if rerr == os.General_Error.Broken_Pipe {
-		return nil, true, ok_error()
+		return nil, true, platform.ok_error()
 	}
 	if rerr != nil {
-		return nil, true, make_error(.Tool, "pipe read failed: %v", rerr)
+		return nil, true, platform.errorf("pipe read failed: %v", rerr)
 	}
 	if n <= 0 {
-		return nil, true, ok_error()
+		return nil, true, platform.ok_error()
 	}
-	return buf[:n], false, ok_error()
+	return buf[:n], false, platform.ok_error()
 }
 
 run_child :: proc(opts: Run_Options) -> Run_Result {
 	started := time.tick_now()
 	result := Run_Result{exit_code = -1}
 	child, serr := spawn_child(opts.command, opts.cwd, opts.env, opts.stdin_data)
-	if !is_ok(serr) {
+	if !platform.is_ok(serr) {
 		result.error = serr.message
 		return result
 	}
@@ -179,9 +179,9 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 		read_buf: []byte,
 		on_chunk: proc(user: rawptr, chunk: string),
 		user: rawptr,
-	) -> (read_any: bool, err: Error) {
+	) -> (read_any: bool, err: platform.Error) {
 		if file^ == nil {
-			return false, ok_error()
+			return false, platform.ok_error()
 		}
 		data, done, rerr := read_available(file^, read_buf)
 		if len(data) > 0 {
@@ -211,11 +211,11 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 	for {
 		// 读取两路管道；先读的流先进入 combined（顺序不保证，符合契约）。
 		_, stdout_err := pump_stream(&child.stdout, &stdout_buf, &combined, read_buf[:], opts.on_stdout, opts.user)
-		if !is_ok(stdout_err) {
+		if !platform.is_ok(stdout_err) {
 			result.error = stdout_err.message
 		}
 		_, stderr_err := pump_stream(&child.stderr, &stderr_buf, &combined, read_buf[:], opts.on_stderr, opts.user)
-		if !is_ok(stderr_err) {
+		if !platform.is_ok(stderr_err) {
 			result.error = stderr_err.message
 		}
 

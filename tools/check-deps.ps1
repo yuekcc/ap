@@ -50,8 +50,32 @@ function Test-ImportRules {
         Get-Content $file | ForEach-Object {
             if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
                 $path = $Matches[1]
-                if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core$|\.\./ap-core/platform$|\.\./ap-core/protocol$)') {
-                    Fail-Check ('{0}: ap-cli 不允许 import "{1}"（只允许 apcore、platform、protocol）' -f $file, $path)
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core$|\.\./ap-core/platform$|\.\./ap-core/protocol$|\.\./ap-core/tool$|tools$|skills$)') {
+                    Fail-Check ('{0}: ap-cli 不允许 import "{1}"（只允许 apcore、tool、platform、protocol、tools、skills）' -f $file, $path)
+                }
+            }
+        }
+    }
+
+    Get-ChildItem "ap-cli/tools/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./\.\./ap-core/tool$|\.\./\.\./ap-core/platform$|\.\./\.\./ap-core/protocol$)') {
+                    Fail-Check ('{0}: ap-cli/tools 不允许 import "{1}"（只允许 tool、platform、protocol）' -f $file, $path)
+                }
+            }
+        }
+    }
+
+    Get-ChildItem "ap-cli/skills/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./\.\./ap-core/platform$)') {
+                    Fail-Check ('{0}: ap-cli/skills 不允许 import "{1}"（只允许 platform）' -f $file, $path)
                 }
             }
         }
@@ -62,8 +86,20 @@ function Test-ImportRules {
         Get-Content $file | ForEach-Object {
             if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
                 $path = $Matches[1]
-                if ($path -notmatch '^(core:|base:|vendor:|\.\./platform$|\.\./protocol$)') {
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./platform$|\.\./protocol$|\.\./tool$)') {
                     Fail-Check ('{0}: ap-core/engine 不允许 import "{1}"' -f $file, $path)
+                }
+            }
+        }
+    }
+
+    Get-ChildItem "ap-core/tool/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./platform$|\.\./protocol$)') {
+                    Fail-Check ('{0}: ap-core/tool 不允许 import "{1}"（只允许 platform、protocol）' -f $file, $path)
                 }
             }
         }
@@ -88,7 +124,7 @@ function Test-ImportRules {
         Get-Content $file | ForEach-Object {
             if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
                 $path = $Matches[1]
-                if ($path -notmatch '^(core:|base:|vendor:|engine$|platform$|protocol$)') {
+                if ($path -notmatch '^(core:|base:|vendor:|engine$|platform$|protocol$|tool$)') {
                     Fail-Check ('{0}: apcore 根包不允许 import "{1}"' -f $file, $path)
                 }
             }
@@ -150,6 +186,15 @@ if ($SelfTest) {
     Remove-Item $probe -Force
     if ($ok) {
         Write-Host "check-deps: self-test 失败：ap-cli 直接 import engine 没有被检出" -ForegroundColor Red
+        exit 1
+    }
+
+    $probe = "ap-core/engine/__check_deps_probe.odin"
+    Set-Content -Path $probe -Value "package engine`n`nimport `"../../ap-cli/tools`"" -Encoding utf8
+    $ok = Test-ImportRules-Bool
+    Remove-Item $probe -Force
+    if ($ok) {
+        Write-Host "check-deps: self-test 失败：engine 反向 import ap-cli/tools 没有被检出" -ForegroundColor Red
         exit 1
     }
     Write-Host "check-deps: self-test 通过"

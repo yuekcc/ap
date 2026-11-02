@@ -2,12 +2,15 @@ package engine
 
 import "../platform"
 import "../protocol"
+import "../tool"
 import "core:fmt"
 
 // engine 的错误类型不依赖 CLI 退出码；ap 在边界处映射成 Exit_Code。
 Project :: platform.Project
 SCHEMA_VERSION :: protocol.SCHEMA_VERSION
 PROVIDER_NAME :: protocol.PROVIDER_NAME
+Tool_Def :: tool.Tool_Def
+Function_Def :: tool.Function_Def
 Error_Kind :: enum int {
 	None     = 0,
 	Usage    = 1,

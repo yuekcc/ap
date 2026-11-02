@@ -29,9 +29,12 @@ v1 已实现：
 ## 源码结构
 
 ```
-ap-cli/             package apcli：CLI adapter（参数、settings.json、输出格式、退出码、信号）
-ap-core/            package apcore：SDK 门面（显式 Config、Session_Request、会话生命周期）
-ap-core/engine/     agent：loop / provider / tools / context / skills / transcript / session
+ap-cli/             package apcli：CLI adapter 与组装根（参数、settings、agent/skill/prompt、输出、退出码、信号）
+ap-cli/tools/       package aptools：五个内置工具、Tool_Config、进程管理、子代理
+ap-cli/skills/      package apskills：技能发现与提示词块
+ap-core/            package apcore：SDK 门面（显式 Config、Session_Options、会话生命周期）
+ap-core/tool/       package tool：工具契约、注册表、执行管线
+ap-core/engine/     agent 机制：loop / provider / context / transcript / session
 ap-core/platform/   路径、project/session、blob、JSON/文本、进程树、取消 token
 ap-core/protocol/   事件 schema、宽松解析、行分帧（只依赖 `core:`）
 ap-core/client/     前端 kit：spawn ap、逐行泵事件、只读 session 访问
@@ -42,7 +45,7 @@ cmd/ap-tui/         ap-tui 入口：os.exit(aptui.run(os.args))
 cmd/ap-web/         ap-web 入口：os.exit(apweb.run(os.args))
 ```
 
-`ap-cli` 只 import `apcore` 与 platform/protocol，不直接 import `engine`；前端只允许 import `ap-core/client` 与 `ap-core/protocol`。这些边界由 `tools/check-deps` 在测试/构建时强制；`cmd/*` 只放薄入口，只允许 import 对应的库包。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
+SDK 只保留机制：agent loop、provider、transcript、session 生命周期、context 投影、工具契约与执行管线。具体工具、技能发现、`AGENTS.md`、agent 定义解析与子代理启动都在 `ap-cli` 及其子包。`ap-cli` 只 import `apcore`、`ap-core/tool`、platform/protocol 与自己的 tools/skills 子包，不直接 import `engine`；前端只允许 import `ap-core/client` 与 `ap-core/protocol`。这些边界由 `tools/check-deps` 在测试/构建时强制；`cmd/*` 只放薄入口，只允许 import 对应的库包。详见 [docs/architecture.md](docs/architecture.md) 与 [docs/dependencies.md](docs/dependencies.md)。
 
 ## 构建
 
@@ -204,14 +207,18 @@ transcript 只追加完整事件；恢复时只会截掉崩溃留下的不完整
 ```powershell
 .\test.ps1
 # 或
+odin test ap-core/tool -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-core/engine -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-core -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-cli/tools -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-cli/skills -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 npm --prefix ap-web test
 ```
 
-当前测试覆盖：CLI/配置/路径、transcript/blob/fork/半行修复、context 投影与重放、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现与提示词注入；`ap-web` 覆盖 HTTP 解析/路由、SSE hub 与按 session 过滤、agent 事件泵、同 session 单飞与多 session 并发、内置/磁盘静态资源、目录选择与前端事件归约。
+当前测试覆盖：CLI/配置/路径、工具契约与注册表、transcript/blob/fork/半行修复、context 投影与重放、prompt section 顺序、SSE 解析、provider tool call 组装与错误映射、文件工具、bash 超时/取消/进程树清理、loop 的 turn/step/重试/取消、大参数 blob、技能发现、agent 定义解析与白名单/深度；`ap-web` 覆盖 HTTP 解析/路由、SSE hub 与按 session 过滤、agent 事件泵、同 session 单飞与多 session 并发、内置/磁盘静态资源、目录选择与前端事件归约。
 
 真实 LLM 端到端验证（使用本地 OpenAI 兼容端点，注意用量与超时）：
 

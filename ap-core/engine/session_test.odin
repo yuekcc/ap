@@ -1,11 +1,35 @@
 package engine
 
 import "../platform"
+import "../tool"
+
 import "core:crypto"
+import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:testing"
+
+test_tool_execute :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	return {ok = true}
+}
+
+test_registry :: proc(names: ..string) -> tool.Registry {
+	tools := make([]tool.Tool, len(names))
+	for name, i in names {
+		tools[i] = tool.Tool {
+			name = name,
+			description = name,
+			parameters_json = `{"type":"object"}`,
+			execute = test_tool_execute,
+		}
+	}
+	registry, err := tool.registry_init(tools)
+	if !platform.is_ok(err) {
+		panic("test registry init failed")
+	}
+	return registry
+}
 
 @(test)
 test_resolve_fork_without_explicit_source_uses_latest_root :: proc(t: ^testing.T) {
@@ -24,8 +48,7 @@ test_resolve_fork_without_explicit_source_uses_latest_root :: proc(t: ^testing.T
 		kind      = .Fork,
 		project   = project,
 		settings  = &settings,
-		config_dir = config_dir,
-		cwd       = project.root,
+		registry  = test_registry("read_file", "bash"),
 	}
 	resolved, err := resolve_session(req)
 	testing.expect(t, is_ok(err))
@@ -45,41 +68,34 @@ test_session_project :: proc(t: ^testing.T, name: string) -> (platform.Project, 
 }
 
 @(test)
-test_resolve_new_context_and_tool_switches :: proc(t: ^testing.T) {
-	project, config, dir := test_session_project(t, "resolve-switches")
+test_resolve_new_prompt_sections_and_tool_switches :: proc(t: ^testing.T) {
+	project, _, dir := test_session_project(t, "resolve-switches")
 	defer test_cleanup(dir)
-	test_write_file(fmt.tprintf("%s/AGENTS.md", config), "GLOBAL_MEMORY")
-	test_write_file(fmt.tprintf("%s/AGENTS.md", project.root), "PROJECT_MEMORY")
 
 	settings := settings_defaults()
 	req := Session_Request {
 		kind               = .New,
 		project            = project,
 		settings           = &settings,
-		config_dir         = config,
-		cwd                = project.root,
+		registry           = test_registry("read_file", "bash"),
 		base_system_prompt = "CUSTOM_BASE\n",
-		no_agents_md       = true,
-		no_skills          = true,
-		tools_set          = true,
+		prompt_sections    = []string{"## 环境\n- cwd: x\n", "## 追加指令\nAPPEND\n"},
 		tools              = []string{"read_file"},
 	}
 	resolved, err := resolve_session(req)
 	testing.expect(t, is_ok(err))
 	testing.expect(t, strings.has_prefix(resolved.system_prompt, "CUSTOM_BASE\n"))
 	testing.expect(t, !test_contains(resolved.system_prompt, "你是 AI Assistant"))
-	testing.expect(t, !test_contains(resolved.system_prompt, "GLOBAL_MEMORY"))
-	testing.expect(t, !test_contains(resolved.system_prompt, "PROJECT_MEMORY"))
-	testing.expect(t, !test_contains(resolved.system_prompt, "## 可用技能"))
+	testing.expect(t, test_contains(resolved.system_prompt, "## 环境"))
+	testing.expect(t, test_contains(resolved.system_prompt, "APPEND"))
 	testing.expect(t, test_contains(resolved.system_prompt, "### read_file"))
 	testing.expect(t, !test_contains(resolved.system_prompt, "### bash"))
-	testing.expect_value(t, len(resolved.agent.tools), 1)
-	testing.expect_value(t, resolved.agent.tools[0], "read_file")
+	testing.expect_value(t, strings.join(resolved.tools, ","), "read_file")
 }
 
 @(test)
 test_resolve_new_tools_none :: proc(t: ^testing.T) {
-	project, config, dir := test_session_project(t, "resolve-tools-none")
+	project, _, dir := test_session_project(t, "resolve-tools-none")
 	defer test_cleanup(dir)
 	settings := settings_defaults()
 	resolved, err := resolve_session(
@@ -87,20 +103,35 @@ test_resolve_new_tools_none :: proc(t: ^testing.T) {
 			kind = .New,
 			project = project,
 			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
-			tools_set = true,
+			registry = test_registry("read_file"),
 			tools = []string{},
 		},
 	)
 	testing.expect(t, is_ok(err))
-	testing.expect_value(t, len(resolved.agent.tools), 0)
+	testing.expect_value(t, len(resolved.tools), 0)
 	testing.expect(t, test_contains(resolved.system_prompt, "（本次没有可用工具）"))
 }
 
 @(test)
+test_resolve_new_unknown_tool_is_usage_error :: proc(t: ^testing.T) {
+	project, _, dir := test_session_project(t, "resolve-unknown-tool")
+	defer test_cleanup(dir)
+	settings := settings_defaults()
+	_, err := resolve_session(
+		{
+			kind = .New,
+			project = project,
+			settings = &settings,
+			registry = test_registry("read_file"),
+			tools = []string{"grep"},
+		},
+	)
+	testing.expect_value(t, err.kind, Error_Kind.Usage)
+}
+
+@(test)
 test_resolve_restore_warns_and_uses_frozen_tools :: proc(t: ^testing.T) {
-	project, config, dir := test_session_project(t, "resolve-restore-switches")
+	project, _, dir := test_session_project(t, "resolve-restore-switches")
 	defer test_cleanup(dir)
 	line := `{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_root","content":"frozen prompt","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null,"tools":["read_file"]}`
 	test_write_file(platform.session_file(project, "ses_root"), fmt.tprintf("%s\n", line))
@@ -111,32 +142,52 @@ test_resolve_restore_warns_and_uses_frozen_tools :: proc(t: ^testing.T) {
 			kind = .Resume,
 			project = project,
 			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
+			registry = test_registry("read_file", "bash"),
 			source_session_id = "ses_root",
+			agent_name = "other",
+			model = "other-model",
 			base_system_prompt = "IGNORED\n",
-			no_agents_md = true,
-			no_skills = true,
-			tools_set = true,
+			prompt_sections = []string{"IGNORED\n"},
 			tools = []string{"bash"},
-			append_system_prompt = "APPEND",
 		},
 	)
 	testing.expect(t, is_ok(err))
 	testing.expect_value(t, resolved.system_prompt, "frozen prompt")
-	testing.expect_value(t, len(resolved.agent.tools), 1)
-	testing.expect_value(t, resolved.agent.tools[0], "read_file")
+	testing.expect_value(t, strings.join(resolved.tools, ","), "read_file")
 	warnings := strings.join(resolved.warnings[:], "\n")
 	testing.expect(t, test_contains(warnings, "--base-system-prompt ignored on restore"))
-	testing.expect(t, test_contains(warnings, "--no-agents-md ignored on restore"))
-	testing.expect(t, test_contains(warnings, "--no-skills ignored on restore"))
-	testing.expect(t, test_contains(warnings, "tool override ignored on restore"))
-	testing.expect(t, test_contains(warnings, "--append-system-prompt ignored on restore"))
+	testing.expect(t, test_contains(warnings, "prompt sections ignored on restore"))
+	testing.expect(t, test_contains(warnings, "tool set ignored on restore"))
+	testing.expect(t, test_contains(warnings, "--agent ignored on restore"))
+	testing.expect(t, test_contains(warnings, "--model ignored on restore"))
 }
 
 @(test)
-test_resolve_restore_old_transcript_falls_back_to_agent_tools :: proc(t: ^testing.T) {
-	project, config, dir := test_session_project(t, "resolve-restore-old")
+test_resolve_restore_skips_unknown_frozen_tools :: proc(t: ^testing.T) {
+	project, _, dir := test_session_project(t, "resolve-restore-unknown")
+	defer test_cleanup(dir)
+	line := `{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_unknown","content":"frozen prompt","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null,"tools":["read_file","gone"]}`
+	test_write_file(platform.session_file(project, "ses_unknown"), fmt.tprintf("%s\n", line))
+
+	settings := settings_defaults()
+	resolved, err := resolve_session(
+		{
+			kind = .Resume,
+			project = project,
+			settings = &settings,
+			registry = test_registry("read_file"),
+			source_session_id = "ses_unknown",
+		},
+	)
+	testing.expect(t, is_ok(err))
+	testing.expect_value(t, strings.join(resolved.tools, ","), "read_file")
+	warnings := strings.join(resolved.warnings[:], "\n")
+	testing.expect(t, test_contains(warnings, "frozen tool \"gone\" is not registered"))
+}
+
+@(test)
+test_resolve_restore_old_transcript_uses_all_tools :: proc(t: ^testing.T) {
+	project, _, dir := test_session_project(t, "resolve-restore-old")
 	defer test_cleanup(dir)
 	line := `{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_old","content":"old prompt","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null}`
 	test_write_file(platform.session_file(project, "ses_old"), fmt.tprintf("%s\n", line))
@@ -147,19 +198,20 @@ test_resolve_restore_old_transcript_falls_back_to_agent_tools :: proc(t: ^testin
 			kind = .Resume,
 			project = project,
 			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
+			registry = test_registry("read_file", "bash"),
 			source_session_id = "ses_old",
 		},
 	)
 	testing.expect(t, is_ok(err))
-	testing.expect_value(t, len(resolved.agent.tools), 5)
+	testing.expect_value(t, strings.join(resolved.tools, ","), "read_file,bash")
+	warnings := strings.join(resolved.warnings[:], "\n")
+	testing.expect(t, test_contains(warnings, "using all registered tools"))
 }
 
 @(test)
-test_session_open_freezes_tools_in_session_start :: proc(t: ^testing.T) {
+test_session_open_freezes_tools_and_prompt :: proc(t: ^testing.T) {
 	context.random_generator = crypto.random_generator()
-	project, config, dir := test_session_project(t, "session-freeze-tools")
+	project, _, dir := test_session_project(t, "session-freeze-tools")
 	defer test_cleanup(dir)
 	settings := settings_defaults()
 	session, info, err := session_open(
@@ -167,10 +219,10 @@ test_session_open_freezes_tools_in_session_start :: proc(t: ^testing.T) {
 			kind = .New,
 			project = project,
 			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
-			tools_set = true,
+			registry = test_registry("read_file", "bash"),
 			tools = []string{"read_file"},
+			base_system_prompt = "BASE\n",
+			prompt_sections = []string{"## 环境\n- cwd: x\n"},
 		},
 	)
 	testing.expect(t, is_ok(err))
@@ -197,7 +249,7 @@ test_session_open_freezes_tools_in_session_start :: proc(t: ^testing.T) {
 @(test)
 test_session_open_tools_none_writes_empty_array :: proc(t: ^testing.T) {
 	context.random_generator = crypto.random_generator()
-	project, config, dir := test_session_project(t, "session-freeze-none")
+	project, _, dir := test_session_project(t, "session-freeze-none")
 	defer test_cleanup(dir)
 	settings := settings_defaults()
 	session, _, err := session_open(
@@ -205,9 +257,7 @@ test_session_open_tools_none_writes_empty_array :: proc(t: ^testing.T) {
 			kind = .New,
 			project = project,
 			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
-			tools_set = true,
+			registry = test_registry("read_file"),
 			tools = []string{},
 		},
 	)
@@ -233,7 +283,7 @@ test_session_open_tools_none_writes_empty_array :: proc(t: ^testing.T) {
 @(test)
 test_fork_copies_frozen_tools :: proc(t: ^testing.T) {
 	context.random_generator = crypto.random_generator()
-	project, config, dir := test_session_project(t, "session-fork-tools")
+	project, _, dir := test_session_project(t, "session-fork-tools")
 	defer test_cleanup(dir)
 	line := `{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_src","content":"frozen prompt","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null,"tools":["read_file"]}`
 	test_write_file(platform.session_file(project, "ses_src"), fmt.tprintf("%s\n", line))
@@ -244,8 +294,7 @@ test_fork_copies_frozen_tools :: proc(t: ^testing.T) {
 			kind = .Fork,
 			project = project,
 			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
+			registry = test_registry("read_file", "bash"),
 			source_session_id = "ses_src",
 		},
 	)
@@ -263,32 +312,24 @@ test_fork_copies_frozen_tools :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_restore_does_not_propagate_ignored_switches :: proc(t: ^testing.T) {
+test_preview_and_session_open_have_identical_prompt :: proc(t: ^testing.T) {
 	context.random_generator = crypto.random_generator()
-	project, config, dir := test_session_project(t, "restore-no-propagation")
+	project, _, dir := test_session_project(t, "preview-identical")
 	defer test_cleanup(dir)
-	line := `{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_restore","content":"frozen prompt","cwd":"/x","model":"m","provider":"p","agent_name":"general","agent_depth":0,"parent_session_id":null,"tools":["read_file"]}`
-	test_write_file(platform.session_file(project, "ses_restore"), fmt.tprintf("%s\n", line))
-
 	settings := settings_defaults()
-	session, _, err := session_open(
-		{
-			kind = .Resume,
-			project = project,
-			settings = &settings,
-			config_dir = config,
-			cwd = project.root,
-			source_session_id = "ses_restore",
-			base_system_prompt = "IGNORED\n",
-			no_agents_md = true,
-			no_skills = true,
-			tools_set = true,
-			tools = []string{"bash"},
-		},
-	)
-	testing.expect(t, is_ok(err))
-	transcript_close(&session.store)
-	testing.expect(t, !session.no_agents_md)
-	testing.expect(t, !session.no_skills)
-	testing.expect_value(t, strings.join(session.agent.tools, ","), "read_file")
+	req := Session_Request {
+		kind = .New,
+		project = project,
+		settings = &settings,
+		registry = test_registry("read_file"),
+		base_system_prompt = "BASE\n",
+		prompt_sections = []string{"## 环境\n- cwd: fixed\n"},
+		tools = []string{"read_file"},
+	}
+	info, perr := preview_prompt(req)
+	testing.expect(t, is_ok(perr))
+	session, sinfo, serr := session_open(req)
+	testing.expect(t, is_ok(serr))
+	defer transcript_close(&session.store)
+	testing.expect_value(t, info.system_prompt, sinfo.system_prompt)
 }

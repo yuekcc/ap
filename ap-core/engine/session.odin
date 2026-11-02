@@ -1,6 +1,8 @@
 package engine
 
 import "../platform"
+import "../tool"
+
 import "core:encoding/uuid"
 import "core:fmt"
 import "core:os"
@@ -16,29 +18,27 @@ Session_Kind :: enum {
 	Fork,
 }
 
+// Session_Request 全部是已解析值：SDK 不读 agent 文件、技能目录或记忆文件。
 Session_Request :: struct {
-	kind:                 Session_Kind,
-	project:              platform.Project,
-	settings:             ^Settings,
-	config_dir:           string,
-	cwd:                  string,
-	home_dir:             string, // 宿主解析；空 = 不注入全局 AGENTS.md
-	self_exe:             string,
-	bash_path:            string,
-	source_session_id:    string, // Resume 且为空时取最近的根 session
-	model:                Maybe(string),
-	agent:                Maybe(string),
-	max_steps:            Maybe(int),
-	max_tokens:           Maybe(int),
-	append_system_prompt: Maybe(string),
-	base_system_prompt:   Maybe(string), // 替换内置固定指令段；已规范化
-	no_agents_md:         bool,
-	no_skills:            bool,
-	tools_set:            bool,
-	tools:                []string, // tools_set 时有效；空切片表示零工具
-	agent_depth:          Maybe(int),
-	parent_session_id:    Maybe(string),
-	parent_tool_call_id:  Maybe(string),
+	kind:              Session_Kind,
+	project:           platform.Project,
+	settings:          ^Settings,
+	registry:          tool.Registry,
+	source_session_id: string, // Resume 且为空时取最近的根 session
+
+	// prompt / tools / agent_name / model 只在新 session 生效；恢复 / fork 使用冻结值。
+	// max_steps / max_tokens 不在 session_start 中冻结，恢复时仍取本次设置。
+	agent_name:          string, // 仅作标签，不触发文件读取
+	model:               string, // 空 = 用 Settings.model
+	max_steps:           int,    // 0 = 用 Settings.max_steps
+	max_tokens:          int,    // 0 = 用 Settings.max_tokens
+	agent_depth:         int,
+	parent_session_id:   Maybe(string),
+	parent_tool_call_id: Maybe(string),
+
+	base_system_prompt: Maybe(string), // 空 = 用 SDK 内置 base
+	prompt_sections:    []string,      // 按顺序 append；空串跳过
+	tools:              []string,      // 生效工具集；空切片 = 零工具，不能省略
 }
 
 Session_Info :: struct {
@@ -52,21 +52,18 @@ Session_Info :: struct {
 }
 
 Session :: struct {
-	project:     platform.Project,
-	settings:    ^Settings,
-	store:       Transcript_Store,
-	agent:       Agent_Def,
-	model:       string,
-	config_dir:  string,
-	self_exe:    string,
-	bash_path:   string,
-	session_id:  string,
-	no_agents_md: bool,
-	no_skills:   bool,
-	agent_depth: int,
-	max_steps:   int,
-	max_tokens:  int,
-	events:      []Event,
+	project:      platform.Project,
+	settings:     ^Settings,
+	store:        Transcript_Store,
+	registry:     tool.Registry,
+	active_tools: []string,
+	model:        string,
+	agent_name:   string,
+	session_id:   string,
+	agent_depth:  int,
+	max_steps:    int,
+	max_tokens:   int,
+	events:       []Event,
 }
 
 Close_Options :: struct {
@@ -78,17 +75,17 @@ Close_Options :: struct {
 Turn_Result :: Loop_Result
 
 Resolved_Session :: struct {
-	agent:        Agent_Def,
-	model:        string,
-	agent_name:   string,
-	max_steps:    int,
-	max_tokens:   int,
-	agent_depth:  int,
-	source_id:    string,
-	start:        Session_Start_Event,
+	model:         string,
+	agent_name:    string,
+	agent_depth:   int,
+	max_steps:     int,
+	max_tokens:    int,
+	source_id:     string,
+	start:         Session_Start_Event,
 	system_prompt: string,
-	events:       []Event,
-	warnings:     [dynamic]string,
+	tools:         []string,
+	events:        []Event,
+	warnings:      [dynamic]string,
 }
 
 // ---- 解析 ----
@@ -96,6 +93,7 @@ Resolved_Session :: struct {
 resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 	resolved := Resolved_Session{}
 	settings := req.settings
+	registry := req.registry
 	restoring := req.kind != .New
 
 	if restoring {
@@ -144,48 +142,54 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 		resolved.model = start.model
 		resolved.agent_name = start.agent_name
 		resolved.agent_depth = start.agent_depth
-		agent, aerr := load_agent(req.config_dir, resolved.agent_name)
-		if !is_ok(aerr) {
-			return resolved, aerr
-		}
-		// 工具集以冻结值为准；旧 transcript 没有 tools 字段时回退到 agent 定义。
+
+		// 工具集以 session_start.tools 为准；未知名字跳过并 warning，不终止。
 		if frozen_tools, ok := start.tools.?; ok {
-			agent.tools = frozen_tools
+			active := make([dynamic]string, 0, len(frozen_tools))
+			for name in frozen_tools {
+				if _, found := tool.registry_find(&registry, name); !found {
+					append(
+						&resolved.warnings,
+						fmt.tprintf("frozen tool %q is not registered; skipped", name),
+					)
+					continue
+				}
+				append(&active, name)
+			}
+			resolved.tools = active[:]
+		} else {
+			resolved.tools = tool.registry_names(&registry)
+			append(
+				&resolved.warnings,
+				"session has no recorded tool set; using all registered tools",
+			)
 		}
-		resolved.agent = agent
+
 		resolved.max_steps = settings.max_steps
 		resolved.max_tokens = settings.max_tokens
-		if value, ok := req.max_tokens.?; ok {
-			resolved.max_tokens = value
+		if req.max_tokens > 0 {
+			resolved.max_tokens = req.max_tokens
 		}
-		agent_steps_applies := req.max_steps == nil || req.parent_session_id != nil
-		if agent_steps_applies {
-			if value, ok := agent.max_steps.?; ok {
-				resolved.max_steps = value
-			}
+		if req.max_steps > 0 {
+			resolved.max_steps = req.max_steps
 		}
-		if opts_model, ok := req.model.?; ok && opts_model != start.model {
+
+		if len(req.model) > 0 && req.model != start.model {
 			append(&resolved.warnings, fmt.tprintf("--model ignored on restore: session is frozen to %q", start.model))
 		}
-		if opts_agent, ok := req.agent.?; ok && opts_agent != start.agent_name {
+		if len(req.agent_name) > 0 && req.agent_name != start.agent_name {
 			append(&resolved.warnings, fmt.tprintf("--agent ignored on restore: session is frozen to %q", start.agent_name))
 		}
-		if value, ok := req.append_system_prompt.?; ok && len(value) > 0 {
-			append(&resolved.warnings, "--append-system-prompt ignored on restore")
-		}
 		if _, ok := req.base_system_prompt.?; ok {
-			append(&resolved.warnings, "--base-system-prompt ignored on restore: session is frozen to its recorded prompt")
+			append(&resolved.warnings, "--base-system-prompt ignored on restore: session prompt is frozen")
 		}
-		if req.no_agents_md {
-			append(&resolved.warnings, "--no-agents-md ignored on restore: session prompt is frozen")
+		if len(req.prompt_sections) > 0 {
+			append(&resolved.warnings, "prompt sections ignored on restore: session prompt is frozen")
 		}
-		if req.no_skills {
-			append(&resolved.warnings, "--no-skills ignored on restore: session prompt is frozen")
+		if req.tools != nil {
+			append(&resolved.warnings, "tool set ignored on restore: session is frozen to its recorded tool set")
 		}
-		if req.tools_set {
-			append(&resolved.warnings, "tool override ignored on restore: session is frozen to its recorded tool set")
-		}
-		if req.parent_session_id != nil || req.parent_tool_call_id != nil || req.agent_depth != nil {
+		if req.parent_session_id != nil || req.parent_tool_call_id != nil || req.agent_depth > 0 {
 			append(&resolved.warnings, "parent/agent-depth arguments ignored on restore")
 		}
 		return resolved, ok_error()
@@ -204,69 +208,36 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 	}
 
 	agent_name := "general"
-	if value, ok := req.agent.?; ok {
-		agent_name = value
+	if len(req.agent_name) > 0 {
+		agent_name = req.agent_name
 	}
-	agent, aerr := load_agent(req.config_dir, agent_name)
-	if !is_ok(aerr) {
-		return resolved, aerr
-	}
-	if req.tools_set {
-		if terr := apply_tool_override(&agent, req.tools); !is_ok(terr) {
-			return resolved, terr
-		}
-	}
-	resolved.agent = agent
 	resolved.agent_name = agent_name
 	resolved.model = settings.model
-	if value, ok := req.model.?; ok {
-		resolved.model = value
+	if len(req.model) > 0 {
+		resolved.model = req.model
 	}
 	resolved.max_steps = settings.max_steps
-	if value, ok := req.max_steps.?; ok {
-		resolved.max_steps = value
+	if req.max_steps > 0 {
+		resolved.max_steps = req.max_steps
 	}
 	resolved.max_tokens = settings.max_tokens
-	if value, ok := req.max_tokens.?; ok {
-		resolved.max_tokens = value
+	if req.max_tokens > 0 {
+		resolved.max_tokens = req.max_tokens
 	}
-	agent_model_applies := req.model == nil || req.parent_session_id != nil
-	agent_steps_applies := req.max_steps == nil || req.parent_session_id != nil
-	if agent_model_applies {
-		if value, ok := agent.model.?; ok {
-			resolved.model = value
-		}
+	resolved.agent_depth = req.agent_depth
+
+	// 新 session 的未知工具名属于应用层错误；空切片表示零工具。
+	selected, serr := tool.registry_select(&registry, req.tools)
+	if !platform.is_ok(serr) {
+		return resolved, from_platform(serr, .Usage)
 	}
-	if agent_steps_applies {
-		if value, ok := agent.max_steps.?; ok {
-			resolved.max_steps = value
-		}
-	}
-	if value, ok := req.agent_depth.?; ok {
-		resolved.agent_depth = value
-	}
-	append_prompt := ""
-	if value, ok := req.append_system_prompt.?; ok {
-		append_prompt = value
-	}
-	base_prompt := ""
-	if value, ok := req.base_system_prompt.?; ok {
-		base_prompt = value
-	}
-	skill_section := ""
-	if !req.no_skills {
-		skill_section = skills_prompt_block(discover_skills(req.cwd))
-	}
+	resolved.tools = selected
+
 	resolved.system_prompt = build_system_prompt(
 		{
-			cwd = req.cwd,
-			home_dir = req.home_dir,
-			agent = agent,
-			append_prompt = append_prompt,
-			tool_section = tool_prompt_section(agent, resolved.agent_depth, settings.max_agent_depth),
-			skill_section = skill_section,
-			base_override = base_prompt,
-			include_memory = !req.no_agents_md,
+			base_override = req.base_system_prompt,
+			tool_section = tool.registry_prompt_section(&registry, resolved.tools),
+			sections = req.prompt_sections,
 		},
 	)
 	return resolved, ok_error()
@@ -301,28 +272,19 @@ make_session :: proc(
 	agent_depth: int,
 	events: []Event,
 ) -> Session {
-	no_agents_md := false
-	no_skills := false
-	if req.kind == .New {
-		no_agents_md = req.no_agents_md
-		no_skills = req.no_skills
-	}
 	return {
-		project     = req.project,
-		settings    = req.settings,
-		store       = store,
-		agent       = resolved.agent,
-		model       = resolved.model,
-		config_dir  = req.config_dir,
-		self_exe    = req.self_exe,
-		bash_path   = req.bash_path,
-		session_id  = session_id,
-		no_agents_md = no_agents_md,
-		no_skills   = no_skills,
-		agent_depth = agent_depth,
-		max_steps   = resolved.max_steps,
-		max_tokens  = resolved.max_tokens,
-		events      = events,
+		project      = req.project,
+		settings     = req.settings,
+		store        = store,
+		registry     = req.registry,
+		active_tools = resolved.tools,
+		model        = resolved.model,
+		agent_name   = resolved.agent_name,
+		session_id   = session_id,
+		agent_depth  = agent_depth,
+		max_steps    = resolved.max_steps,
+		max_tokens   = resolved.max_tokens,
+		events       = events,
 	}
 }
 
@@ -335,7 +297,7 @@ make_info :: proc(
 	return {
 		session_id    = session_id,
 		model         = resolved.model,
-		agent_name    = resolved.agent.name,
+		agent_name    = resolved.agent_name,
 		agent_depth   = agent_depth,
 		system_prompt = resolved.system_prompt,
 		initial_line  = initial_line,
@@ -380,8 +342,8 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 			cwd           = req.project.root,
 			model         = resolved.model,
 			provider      = PROVIDER_NAME,
-			agent_name    = resolved.agent.name,
-			tools         = resolved.agent.tools,
+			agent_name    = resolved.agent_name,
+			tools         = resolved.tools,
 			content_ref   = var_ref,
 			content_bytes = var_bytes,
 		}
@@ -454,21 +416,17 @@ turn_run :: proc(
 		s.project,
 		s.settings,
 		&s.store,
-		s.agent,
+		s.registry,
+		s.active_tools,
 		s.model,
-		s.config_dir,
-		s.self_exe,
-		s.bash_path,
+		s.agent_name,
 		s.session_id,
 		s.agent_depth,
-		s.settings.max_agent_depth,
 		s.max_steps,
 		s.max_tokens,
 		cancel,
 		s.events,
 		emitter,
-		s.no_agents_md,
-		s.no_skills,
 	)
 	defer loop_destroy(&loop)
 	return loop_run_turn(&loop, prompt), ok_error()

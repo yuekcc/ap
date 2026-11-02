@@ -35,7 +35,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 | `--no-skills` | — | 不扫描、不注入技能清单；不影响 `--list-skills`；恢复时只警告 |
 | `--verbose` / `--debug` | — | 日志级别，输出到 stderr |
 | `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
-| `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型 |
+| `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型、不需要 API key |
 | `--help` / `--version` | — | 用法与版本 |
 
 不提供 `--add-dir`。所有相对路径只相对启动目录；绝对路径不受限制。
@@ -74,7 +74,7 @@ v1 只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一
 
 ### 查看 system prompt
 
-`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词。它会正常加载配置与 agent，因此需要可用的 `settings.json`；受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。
+`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词或 API key。它会正常加载配置与 agent，因此需要可用的 `settings.json`（`model` 仍必填）；受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。组装入口与 `session_open` 共用 `build_prompt_sections`，保证打印结果与模型收到的冻结 prompt 一致。
 
 新 session 按 [context-management.md](context-management.md) 的规则现场组装（技能清单、记忆文件、agent 定义都会重新扫描）。存在 `SYSTEM.md` 时，打印的是**完整组装结果**，不是只打印 base 文本。与 `-s` / `-c` 连用时打印该 session 在 `session_start` 中冻结的 prompt。输出不受 `--output-format` 影响，始终是纯文本，末尾保证有换行。
 
@@ -116,22 +116,27 @@ turn 结束、进程退出前，还会向 stderr 打印一行 `<可执行文件>
 
 ### 恢复时的参数处理
 
-恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集不再重算。`$AP_CONFIG/SYSTEM.md` 只在新 session 生效；恢复时不会重新读取。以下参数与冻结值冲突时**在 stderr 打 warning 并忽略**，退出码不受影响：
+恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集不再重算。`$AP_CONFIG/SYSTEM.md` 只在新 session 生效；恢复时不会重新读取，也不再重新加载 agent 文件。以下输入与冻结值冲突时**在 stderr 打 warning 并忽略**，退出码不受影响：
 
 - `--model`（与记录不同值时）
 - `--agent`（与记录不同值时）
-- `--no-agents-md`
-- `--no-skills`
+- `--base-system-prompt` 等价输入（`$AP_CONFIG/SYSTEM.md`）
+- 应用层 prompt sections
+- 工具集覆盖
 - `--parent-session-id` / `--parent-tool-call-id` / `--agent-depth`
 
-warning 文案：
+warning 文案（宿主通过 SDK 传入这些输入时由 session 层产生；`ap-cli` 在恢复时不会构造 base/sections/tools，因此正常 CLI 恢复通常只看到 `--model` / `--agent` 相关 warning）：
 
 ```text
---no-agents-md ignored on restore: session prompt is frozen
---no-skills ignored on restore: session prompt is frozen
+--base-system-prompt ignored on restore: session prompt is frozen
+prompt sections ignored on restore: session prompt is frozen
+tool set ignored on restore: session is frozen to its recorded tool set
+--agent ignored on restore: session is frozen to "<name>"
 ```
 
-恢复后的工具集以 `session_start.tools` 为准：改 `agents/<name>.md` 中的 `tools:` 不再影响已有 session。旧 transcript 没有 `tools` 字段时，回退到当前 agent 定义的 `tools:`。
+`--no-agents-md` / `--no-skills` 在恢复时不影响冻结 prompt；它们只在新建 session 时参与 sections 组装。
+
+恢复后的工具集以 `session_start.tools` 为准：改 `agents/<name>.md` 中的 `tools:` 或注册表新增工具都不再影响已有 session。冻结列表里在当前注册表中不存在的工具会跳过并 warning。旧 transcript 没有 `tools` 字段时不再回退到 agent 定义：使用当前注册表的全部工具并 warning。
 
 以下参数在恢复时照常生效：
 
@@ -141,7 +146,7 @@ warning 文案：
 - `--fork-session`
 - `--config-dir`（必须先于查找生效，否则找不到 transcript）
 
-冻结的是 `session_start` 中的字段；`max_steps` / `max_tokens` 不在其中。恢复时若没有传 `--max-steps`，仍会重新加载冻结的 agent 定义并采用其中的 `max_steps`（如果有）；`--max-tokens` 同理取配置或命令行。
+冻结的是 `session_start` 中的字段；`max_steps` / `max_tokens` 不在其中。恢复时若没有传 `--max-steps`，采用 `settings.json` 的值；`--max-tokens` 同理取配置或命令行。不再重新加载 agent 定义，因此 agent 文件里的 `max_steps` 不会影响已有 session。
 
 找不到 session 时退出码 2，并打印期望路径，例如：
 
@@ -190,7 +195,19 @@ hint: run ap from the directory where the session was created
 1. `model` 必填；`base_url` 缺省为官方地址；`api_key` 必须由配置或 `AP_API_KEY` 提供
 2. `api_key` 支持用环境变量 `AP_API_KEY` 覆盖；日志与 transcript 中不记录
 3. 未知字段忽略并警告；类型错误按配置错误处理（退出码 2）
-4. 不再有 `context_window`、`auto_compact_threshold`、`output_limit_bytes` 等字段
+4. 文件格式与字段名不变；`ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`
+5. 不再有 `context_window`、`auto_compact_threshold`、`output_limit_bytes` 等字段
+
+字段归属：
+
+| 字段 | 归属 |
+| --- | --- |
+| `model`、`base_url`、`api_key` | SDK / provider |
+| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage` | SDK / loop |
+| `llm_timeout_ms` | SDK / provider |
+| `tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` | 应用层 / `aptools.Tool_Config` |
+
+`path`（配置文件路径）不再属于 SDK `Settings`，由 `ap-cli` 自己持有。
 
 ## 环境变量
 

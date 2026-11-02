@@ -1,12 +1,11 @@
 package engine
 
 import "../platform"
+import "../tool"
 
 import "core:encoding/json"
 import "core:fmt"
-import "core:os"
 import "core:strings"
-import "core:time"
 
 Chat_Tool_Call :: struct {
 	id:       string,
@@ -28,143 +27,43 @@ Chat_Message :: struct {
 }
 
 System_Prompt_Options :: struct {
-	cwd:           string,
-	// 全局记忆固定读取 <home_dir>/.agents/AGENTS.md；空则跳过。
-	home_dir:      string,
-	agent:         Agent_Def,
-	append_prompt: string,
+	// 非空时替换内置 base；空字符串表示使用 SYSTEM_PROMPT。
+	base_override: Maybe(string),
 	tool_section:  string,
-	skill_section: string,
-	// 非空时替换第 1 段内置固定指令；空字符串表示使用 SYSTEM_PROMPT。
-	base_override: string,
-	// false 时跳过全局与项目 AGENTS.md。
-	include_memory: bool,
+	// 应用层按调用顺序追加的原始 Markdown 块。
+	sections:      []string,
 }
 
 // 固定指令与输出要求在编译期从 ap-core/engine/prompts/system.md 内嵌进二进制。
 // 编辑提示词直接改那个 markdown 文件即可；运行时不依赖 prompts/ 目录。
 SYSTEM_PROMPT :: #load("prompts/system.md", string)
 
+// SDK 只固定 base 与工具段；其余段落由应用层按顺序 append。
 build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	b := strings.builder_make()
-	if len(opts.base_override) > 0 {
-		strings.write_string(&b, opts.base_override)
-	} else {
-		strings.write_string(&b, SYSTEM_PROMPT)
+	base := SYSTEM_PROMPT
+	if value, ok := opts.base_override.?; ok && len(value) > 0 {
+		base = value
+	}
+	strings.write_string(&b, base)
+	if !strings.has_suffix(base, "\n") {
+		strings.write_byte(&b, '\n')
 	}
 	strings.write_string(&b, "\n## 工具\n")
 	strings.write_string(&b, opts.tool_section)
-	strings.write_string(&b, "\n\n## 环境\n")
-	fmt.sbprintf(&b, "- OS: %v\n", ODIN_OS)
-	fmt.sbprintf(&b, "- cwd: %s\n", opts.cwd)
-	fmt.sbprintf(&b, "- 当前时间: %v\n", time.now())
-	fmt.sbprintf(&b, "- git 仓库: %s\n", "是" if find_git_root(opts.cwd) != "" else "否")
+	strings.write_string(&b, "\n")
 
-	if len(opts.skill_section) > 0 {
-		strings.write_string(&b, "\n## 可用技能\n\n")
-		strings.write_string(&b, opts.skill_section)
-		strings.write_string(&b, "\n")
-	}
-
-	if opts.include_memory && len(opts.home_dir) > 0 {
-		global_memory := fmt.tprintf("%s/.agents/AGENTS.md", opts.home_dir)
-		if os.exists(global_memory) {
-			if data, err := os.read_entire_file_from_path(global_memory, context.allocator); err == nil {
-				strings.write_string(&b, "\n## 全局记忆 (AGENTS.md)\n")
-				strings.write_string(&b, string(data))
-				strings.write_string(&b, "\n")
-			}
+	for section in opts.sections {
+		if len(section) == 0 {
+			continue
 		}
-	}
-
-	if opts.include_memory {
-		project_files := project_memory_files(opts.cwd)
-		for file in project_files {
-			if data, err := os.read_entire_file_from_path(file, context.allocator); err == nil {
-				fmt.sbprintf(&b, "\n## 项目记忆 (%s)\n", file)
-				strings.write_string(&b, string(data))
-				strings.write_string(&b, "\n")
-			}
+		strings.write_byte(&b, '\n')
+		strings.write_string(&b, section)
+		if !strings.has_suffix(section, "\n") {
+			strings.write_byte(&b, '\n')
 		}
-	}
-
-	if len(opts.agent.body) > 0 {
-		fmt.sbprintf(&b, "\n## Agent 定义 (%s)\n", opts.agent.name)
-		strings.write_string(&b, opts.agent.body)
-		strings.write_string(&b, "\n")
-	}
-
-	if len(opts.append_prompt) > 0 {
-		strings.write_string(&b, "\n## 追加指令\n")
-		strings.write_string(&b, opts.append_prompt)
-		strings.write_string(&b, "\n")
 	}
 	return strings.to_string(b)
-}
-
-find_git_root :: proc(start: string) -> string {
-	dir := start
-	for len(dir) > 0 {
-		git_path, _ := os.join_path([]string{dir, ".git"}, context.allocator)
-		if os.exists(git_path) {
-			return dir
-		}
-		parent := os.dir(dir)
-		if parent == dir || len(parent) == 0 {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
-project_memory_files :: proc(cwd: string) -> []string {
-	git_root := find_git_root(cwd)
-	dirs := make([dynamic]string, 0, 8)
-	dir := cwd
-	for len(dir) > 0 {
-		append(&dirs, dir)
-		if len(git_root) > 0 && dir == git_root {
-			break
-		}
-		parent := os.dir(dir)
-		if parent == dir || len(parent) == 0 {
-			break
-		}
-		dir = parent
-	}
-
-	// 近 → 远收集，再反转为远 → 近。
-	files := make([dynamic]string, 0, len(dirs))
-	for memory_dir in dirs {
-		base := os.base(memory_dir)
-		if strings.has_prefix(base, ".") {
-			continue
-		}
-		path, _ := os.join_path([]string{memory_dir, "AGENTS.md"}, context.allocator)
-		if os.exists(path) && os.is_file(path) {
-			canonical, cerr := platform.canonicalize_path(path, true)
-			if !platform.is_ok(cerr) {
-				canonical = path
-			}
-			append(&files, canonical)
-		}
-	}
-	// 去重（符号链接可能让不同祖先落到同一物理文件）；保留更近的文件。
-	seen := make(map[string]bool, len(files))
-	unique := make([dynamic]string, 0, len(files))
-	for path in files {
-		if path in seen {
-			continue
-		}
-		seen[path] = true
-		append(&unique, path)
-	}
-	ordered := make([dynamic]string, 0, len(unique))
-	for i := len(unique) - 1; i >= 0; i -= 1 {
-		append(&ordered, unique[i])
-	}
-	return ordered[:]
 }
 
 context_build :: proc(project: Project, events: []Event) -> (string, []Chat_Message, Error) {
@@ -180,17 +79,8 @@ context_build :: proc(project: Project, events: []Event) -> (string, []Chat_Mess
 }
 
 content_block_text :: proc(project: Project, block: Content_Block) -> (string, Error) {
-	if ref, has_ref := block.text_ref.?; has_ref {
-		data, berr := blob_read(project, ref)
-		if !is_ok(berr) {
-			return "", berr
-		}
-		return string(data), ok_error()
-	}
-	if text, has_text := block.text.?; has_text {
-		return text, ok_error()
-	}
-	return "", ok_error()
+	text, err := tool.content_block_text(project, block)
+	return text, from_platform(err, .Usage)
 }
 
 content_block_input :: proc(project: Project, block: Content_Block) -> (json.Value, Error) {

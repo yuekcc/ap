@@ -1,6 +1,7 @@
 package engine
 
 import "../platform"
+import "../tool"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -66,7 +67,47 @@ fake_provider_call :: proc(
 	return provider_error_none()
 }
 
-loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, Tool_Context, string) {
+loop_test_bash_exec :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, _ := args.(json.Object)
+	command, _ := obj["command"].(json.String)
+	text := "hello\n"
+	if strings.contains(string(command), "120000") {
+		b := strings.builder_make()
+		for _ in 0 ..< 120000 {
+			strings.write_byte(&b, 'x')
+		}
+		text = strings.to_string(b)
+	}
+	return {ok = true, content = text, exit_code = 0}
+}
+
+loop_test_write_exec :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, _ := args.(json.Object)
+	path_value, _ := obj["file_path"].(json.String)
+	content_value, _ := obj["content"].(json.String)
+	_ = os.write_entire_file_from_bytes(string(path_value), transmute([]byte)string(content_value))
+	return {ok = true, content = "written"}
+}
+
+loop_test_registry :: proc() -> tool.Registry {
+	tools := make([]tool.Tool, 2)
+	tools[0] = {
+		name = "bash",
+		description = "bash",
+		parameters_json = `{"type":"object"}`,
+		execute = loop_test_bash_exec,
+	}
+	tools[1] = {
+		name = "write_file",
+		description = "write_file",
+		parameters_json = `{"type":"object"}`,
+		execute = loop_test_write_exec,
+	}
+	registry, _ := tool.registry_init(tools)
+	return registry
+}
+
+loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, tool.Tool_Context, string) {
 	dir := test_temp_dir(name)
 	project, perr := platform.open_project(fmt.tprintf("%s/config", dir), dir)
 	testing.expect(t, platform.is_ok(perr))
@@ -92,40 +133,32 @@ loop_test_setup :: proc(t: ^testing.T, name: string) -> (Loop, Tool_Context, str
 	events, rerr := transcript_read_all(project, store.session_id)
 	testing.expect_value(t, rerr.kind, Error_Kind.None)
 
-	bash, _ := platform.find_bash()
-	agent := agent_default_general()
 	cancel := new(platform.Cancel_Token)
-	tool_ctx := Tool_Context {
+	tool_ctx := tool.Tool_Context {
 		cwd = dir,
 		project = project,
-		settings = settings,
 		cancel = cancel,
 		session_id = store.session_id,
 		agent_name = "general",
-		config_dir = fmt.tprintf("%s/config", dir),
-		bash_path = bash,
-		model = "fake",
-		max_steps = 5,
 	}
+	active := make([]string, 2)
+	active[0] = "bash"
+	active[1] = "write_file"
 	loop := loop_init(
 		project,
 		settings,
 		store,
-		agent,
+		loop_test_registry(),
+		active,
 		"fake",
-		fmt.tprintf("%s/config", dir),
-		"",
-		bash,
+		"general",
 		store.session_id,
 		0,
-		1,
 		5,
 		100,
 		cancel,
 		events,
 		{},
-		false,
-		false,
 	)
 	loop.provider_call = fake_provider_call
 	loop.sleep_fn = proc(ms: int) {}

@@ -1,6 +1,7 @@
 package engine
 
 import "../platform"
+import "../tool"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -12,10 +13,7 @@ MAX_LLM_RETRIES :: 5
 
 // 进度输出的排版提示：Block 是独立的 markdown 块（标题行、状态行），
 // 输出端在块之间插入空行；Line 与上文同属一块，逐行追加。
-Progress_Style :: enum {
-	Block,
-	Line,
-}
+Progress_Style :: tool.Progress_Kind
 
 Emitter :: struct {
 	user:              rawptr,
@@ -54,18 +52,14 @@ Loop :: struct {
 	provider:       Provider,
 	provider_call:  Provider_Call,
 	sleep_fn:       Loop_Sleep_Fn,
-	agent:          Agent_Def,
+	registry:       tool.Registry,
+	active_tools:   []string,
 	model:          string,
-	config_dir:     string,
-	self_exe:       string,
-	bash_path:      string,
+	agent_name:     string,
 	session_id:     string,
 	agent_depth:    int,
-	max_agent_depth: int,
 	max_steps:      int,
 	max_tokens:     int,
-	no_agents_md:   bool,
-	no_skills:      bool,
 	cancel:         ^platform.Cancel_Token,
 	emitter:        Emitter,
 	events:         [dynamic]Event,
@@ -120,15 +114,13 @@ loop_init :: proc(
 	project: Project,
 	settings: ^Settings,
 	store: ^Transcript_Store,
-	agent: Agent_Def,
-	model: string,
-	config_dir, self_exe, bash_path, session_id: string,
-	agent_depth, max_agent_depth, max_steps, max_tokens: int,
+	registry: tool.Registry,
+	active_tools: []string,
+	model, agent_name, session_id: string,
+	agent_depth, max_steps, max_tokens: int,
 	cancel: ^platform.Cancel_Token,
 	events: []Event,
 	emitter: Emitter,
-	no_agents_md: bool,
-	no_skills: bool,
 ) -> Loop {
 	loop := Loop {
 		project = project,
@@ -137,18 +129,14 @@ loop_init :: proc(
 		provider = provider_init(settings),
 		provider_call = provider_stream,
 		sleep_fn = loop_default_sleep,
-		agent = agent,
+		registry = registry,
+		active_tools = active_tools,
 		model = model,
-		config_dir = config_dir,
-		self_exe = self_exe,
-		bash_path = bash_path,
+		agent_name = agent_name,
 		session_id = session_id,
 		agent_depth = agent_depth,
-		max_agent_depth = max_agent_depth,
 		max_steps = max_steps,
 		max_tokens = max_tokens,
-		no_agents_md = no_agents_md,
-		no_skills = no_skills,
 		cancel = cancel,
 		emitter = emitter,
 		historical_usage = historical_usage_from_events(events),
@@ -454,28 +442,20 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		}
 		progress(l, .Block, "### %s", call.name)
 
-		tool_ctx := Tool_Context {
+		tool_ctx := tool.Tool_Context {
 			cwd = l.project.root,
 			project = l.project,
-			settings = l.settings,
 			cancel = l.cancel,
 			session_id = l.session_id,
-			parent_tool_call_id = call.id,
-			agent_name = l.agent.name,
+			tool_call_id = call.id,
+			agent_name = l.agent_name,
 			agent_depth = l.agent_depth,
-			config_dir = l.config_dir,
-			self_exe = l.self_exe,
-			bash_path = l.bash_path,
-			model = l.model,
-			max_steps = l.max_steps,
-			no_agents_md = l.no_agents_md,
-			no_skills = l.no_skills,
 			on_update = loop_tool_update,
 			update_user = l,
 			on_progress = l.emitter.on_progress,
 			progress_user = l.emitter.user,
 		}
-		res := tool_execute(call.name, call.input, &tool_ctx)
+		res := tool.tool_execute(&l.registry, call.name, call.input, &tool_ctx)
 
 		was_cancelled := platform.cancel_token_cancelled(l.cancel) || (!res.ok && res.error == "cancelled")
 		if was_cancelled {
@@ -602,8 +582,8 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			result.num_steps = step
 			return result
 		}
-		tools, terr := tool_definitions(l.agent, l.agent_depth, l.max_agent_depth)
-		if !is_ok(terr) {
+		tools, terr := tool.registry_definitions(&l.registry, l.active_tools)
+		if !platform.is_ok(terr) {
 			_ = loop_write_error(l, "session", .None, terr.message, false, 1)
 			result.error_kind = .Internal
 			result.fatal_error = terr.message

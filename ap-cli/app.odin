@@ -34,6 +34,10 @@ is_ok :: proc(err: Error) -> bool {
 	return err.code == .OK
 }
 
+log_warn :: proc(format: string, args: ..any) {
+	apcore.log_warn(format, ..args)
+}
+
 write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {
 	return platform.write_all(handle, data)
 }

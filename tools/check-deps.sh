@@ -71,9 +71,51 @@ check_imports() {
 				[ "$rest" = "$t" ] && continue
 				path=${rest%%\"*}
 				case "$path" in
-				core:* | base:* | vendor:* | ../ap-core | ../ap-core/platform | ../ap-core/protocol) ;;
+				core:* | base:* | vendor:* | ../ap-core | ../ap-core/platform | ../ap-core/protocol | ../ap-core/tool | tools | skills) ;;
 				*)
-					echo "check-deps: $f: ap-cli 不允许 import \"$path\"（只允许 apcore、platform、protocol）"
+					echo "check-deps: $f: ap-cli 不允许 import \"$path\"（只允许 apcore、tool、platform、protocol、tools、skills）"
+					fail=1
+					;;
+				esac
+				;;
+			esac
+		done <"$f"
+	done
+
+	for f in ap-cli/tools/*.odin; do
+		[ -f "$f" ] || continue
+		while IFS= read -r line; do
+			t=${line#"${line%%[![:space:]]*}"}
+			case "$t" in
+			import\ *)
+				rest=${t#*\"}
+				[ "$rest" = "$t" ] && continue
+				path=${rest%%\"*}
+				case "$path" in
+				core:* | base:* | vendor:* | ../../ap-core/tool | ../../ap-core/platform | ../../ap-core/protocol) ;;
+				*)
+					echo "check-deps: $f: ap-cli/tools 不允许 import \"$path\"（只允许 tool、platform、protocol）"
+					fail=1
+					;;
+				esac
+				;;
+			esac
+		done <"$f"
+	done
+
+	for f in ap-cli/skills/*.odin; do
+		[ -f "$f" ] || continue
+		while IFS= read -r line; do
+			t=${line#"${line%%[![:space:]]*}"}
+			case "$t" in
+			import\ *)
+				rest=${t#*\"}
+				[ "$rest" = "$t" ] && continue
+				path=${rest%%\"*}
+				case "$path" in
+				core:* | base:* | vendor:* | ../../ap-core/platform) ;;
+				*)
+					echo "check-deps: $f: ap-cli/skills 不允许 import \"$path\"（只允许 platform）"
 					fail=1
 					;;
 				esac
@@ -92,9 +134,30 @@ check_imports() {
 				[ "$rest" = "$t" ] && continue
 				path=${rest%%\"*}
 				case "$path" in
-				core:* | base:* | vendor:* | ../platform | ../protocol) ;;
+				core:* | base:* | vendor:* | ../platform | ../protocol | ../tool) ;;
 				*)
 					echo "check-deps: $f: ap-core/engine 不允许 import \"$path\""
+					fail=1
+					;;
+				esac
+				;;
+			esac
+		done <"$f"
+	done
+
+	for f in ap-core/tool/*.odin; do
+		[ -f "$f" ] || continue
+		while IFS= read -r line; do
+			t=${line#"${line%%[![:space:]]*}"}
+			case "$t" in
+			import\ *)
+				rest=${t#*\"}
+				[ "$rest" = "$t" ] && continue
+				path=${rest%%\"*}
+				case "$path" in
+				core:* | base:* | vendor:* | ../platform | ../protocol) ;;
+				*)
+					echo "check-deps: $f: ap-core/tool 不允许 import \"$path\"（只允许 platform、protocol）"
 					fail=1
 					;;
 				esac
@@ -134,7 +197,7 @@ check_imports() {
 				[ "$rest" = "$t" ] && continue
 				path=${rest%%\"*}
 				case "$path" in
-				core:* | base:* | vendor:* | engine | platform | protocol) ;;
+				core:* | base:* | vendor:* | engine | platform | protocol | tool) ;;
 				*)
 					echo "check-deps: $f: apcore 根包不允许 import \"$path\""
 					fail=1
@@ -229,6 +292,15 @@ if $self_test; then
 	if check_imports >/dev/null 2>&1; then
 		rm -f "$probe"
 		echo "check-deps: self-test 失败：ap-cli 直接 import engine 没有被检出"
+		exit 1
+	fi
+	rm -f "$probe"
+
+	probe=ap-core/engine/__check_deps_probe.odin
+	printf '%s\n' 'package engine' '' 'import "../../ap-cli/tools"' >"$probe"
+	if check_imports >/dev/null 2>&1; then
+		rm -f "$probe"
+		echo "check-deps: self-test 失败：engine 反向 import ap-cli/tools 没有被检出"
 		exit 1
 	fi
 	rm -f "$probe"

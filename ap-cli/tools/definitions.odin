@@ -1,19 +1,11 @@
-package engine
+package aptools
+
+import platform "../../ap-core/platform"
+import tool "../../ap-core/tool"
 
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
-
-Tool_Def :: struct {
-	type:     string,
-	function: Function_Def,
-}
-
-Function_Def :: struct {
-	name:        string,
-	description: string,
-	parameters:  json.Value,
-}
 
 Tool_Info :: struct {
 	name:        string,
@@ -58,70 +50,49 @@ tool_info_by_name :: proc(name: string) -> (Tool_Info, bool) {
 	return {}, false
 }
 
-tool_available :: proc(agent: Agent_Def, name: string, depth, max_depth: int) -> bool {
-	if !agent_has_tool(agent, name) {
-		return false
-	}
-	if name == "task" && depth >= max_depth {
-		return false
-	}
-	return true
-}
-
-available_tool_names :: proc(agent: Agent_Def, depth, max_depth: int) -> []string {
-	names := make([dynamic]string, 0, len(agent.tools))
-	for info in TOOL_INFOS {
-		if tool_available(agent, info.name, depth, max_depth) {
-			append(&names, info.name)
+// 按声明顺序返回全部内置工具。cfg 必须活得比 registry / session 长。
+builtin_tools :: proc(cfg: ^Tool_Config) -> []tool.Tool {
+	tools := make([]tool.Tool, len(TOOL_INFOS))
+	for info, i in TOOL_INFOS {
+		tools[i] = tool.Tool {
+			name = info.name,
+			description = info.description,
+			parameters_json = info.parameters,
+			user = cfg,
+		}
+		switch info.name {
+		case "read_file":
+			tools[i].execute = execute_read_file
+		case "write_file":
+			tools[i].execute = execute_write_file
+		case "edit_file":
+			tools[i].execute = execute_edit_file
+		case "bash":
+			tools[i].execute = execute_bash
+		case "task":
+			tools[i].execute = execute_task
 		}
 	}
-	return names[:]
+	return tools
 }
 
-tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def, Error) {
-	defs := make([dynamic]Tool_Def, 0, 5)
-	for info in TOOL_INFOS {
-		if !tool_available(agent, info.name, depth, max_depth) {
-			continue
-		}
-		params, perr := json.parse_string(info.parameters, .JSON, true)
-		if perr != nil {
-			return nil, make_error(.Internal, "invalid tool schema for %s: %v", info.name, perr)
-		}
-		append(
-			&defs,
-			Tool_Def {
-				type = "function",
-				function = Function_Def {
-					name = info.name,
-					description = info.description,
-					parameters = params,
-				},
-			},
-		)
+builtin_tool_names :: proc() -> []string {
+	names := make([]string, len(TOOL_INFOS))
+	for info, i in TOOL_INFOS {
+		names[i] = info.name
 	}
-	return defs[:], ok_error()
+	return names
 }
 
-tool_prompt_section :: proc(agent: Agent_Def, depth, max_depth: int) -> string {
-	b := strings.builder_make()
-	names := available_tool_names(agent, depth, max_depth)
-	if len(names) == 0 {
-		return "（本次没有可用工具）"
-	}
-	for name in names {
-		info, _ := tool_info_by_name(name)
-		fmt.sbprintf(&b, "\n### %s\n%s\n参数 JSON Schema: %s\n", info.name, info.description, info.parameters)
-	}
-	return strings.to_string(b)
-}
-
-// 列出声明的工具白名单，一行一个；顺序固定按 ALL_TOOL_NAMES。
-tools_brief :: proc(names: []string) -> string {
+// 工具简表；供宿主展示，输出格式与旧 SDK 一致。
+tools_brief :: proc(tool_names: []string) -> string {
 	b := strings.builder_make()
 	index := 0
-	for tool in select_tools(names) {
-		info, _ := tool_info_by_name(tool)
+	for name in tool_names {
+		info, found := tool_info_by_name(name)
+		if !found {
+			continue
+		}
 		index += 1
 		fmt.sbprintf(&b, "%d. %s: %s\n", index, info.name, info.description)
 	}
@@ -129,4 +100,58 @@ tools_brief :: proc(names: []string) -> string {
 		return "No tool found\n"
 	}
 	return strings.to_string(b)
+}
+
+arg_error :: proc(err: platform.Error) -> tool.Tool_Result {
+	return tool.tool_fail(err.message)
+}
+
+args_object :: proc(args: json.Value) -> (json.Object, bool) {
+	obj, ok := args.(json.Object)
+	return obj, ok
+}
+
+execute_read_file :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, ok := args_object(args)
+	if !ok {
+		return tool.tool_fail("tool arguments must be a JSON object")
+	}
+	cfg := (^Tool_Config)(user)
+	return tool_read_file(obj, cfg, ctx)
+}
+
+execute_write_file :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, ok := args_object(args)
+	if !ok {
+		return tool.tool_fail("tool arguments must be a JSON object")
+	}
+	cfg := (^Tool_Config)(user)
+	return tool_write_file(obj, cfg, ctx)
+}
+
+execute_edit_file :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, ok := args_object(args)
+	if !ok {
+		return tool.tool_fail("tool arguments must be a JSON object")
+	}
+	cfg := (^Tool_Config)(user)
+	return tool_edit_file(obj, cfg, ctx)
+}
+
+execute_bash :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, ok := args_object(args)
+	if !ok {
+		return tool.tool_fail("tool arguments must be a JSON object")
+	}
+	cfg := (^Tool_Config)(user)
+	return tool_bash(obj, cfg, ctx)
+}
+
+execute_task :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	obj, ok := args_object(args)
+	if !ok {
+		return tool.tool_fail("tool arguments must be a JSON object")
+	}
+	cfg := (^Tool_Config)(user)
+	return tool_task(obj, cfg, ctx)
 }

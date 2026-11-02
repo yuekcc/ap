@@ -2,6 +2,16 @@
 
 v1 只有五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`。没有 grep / glob / ls / webfetch / todo / 原生后台进程工具。
 
+## 实现归属
+
+| 层 | 负责 |
+| --- | --- |
+| SDK `ap-core/tool` | `Tool` / `Tool_Context` / `Tool_Result` / `Registry`、参数助手、注册表过滤、`tool_execute` 管线、blob 文本读取 |
+| SDK `engine` | 工具调用编排：按 step 串行执行、取消检查、写 `tool_execution_start/end`、blob 阈值、`fatal` 终止 turn、进度回调 |
+| 应用 `ap-cli/tools` | 五个工具的具体实现、`Tool_Config`、进程树管理、子代理命令行与 stream-json 解析 |
+
+SDK 不认识具体工具名、工具参数或子代理命令行。`Tool.user` 是宿主的 `Tool_Config` 指针，SDK 只透传。
+
 ## 整体约束
 
 1. **串行执行**：一个 step 中 LLM 返回多个 tool call 时，按响应顺序逐个执行，不并发
@@ -223,7 +233,7 @@ Windows 已知坑（不做特殊处理，写进文档避免模型反复踩）：
 2. 子代理继承父进程 cwd 与 `$AP_CONFIG`；不传 `--add-dir`
 3. 启动命令见 [subagents.md](subagents.md)：传 `--parent-session-id`、`--parent-tool-call-id`、`--agent-depth`，**不传 `--session`**
 4. 子进程自己生成 `session_id`；父进程从第一条 `session_start` 读取 `child_session_id`
-5. 最大嵌套深度由 `max_agent_depth` 控制；达到上限时子代理的工具集里移除 `task`
+5. 最大嵌套深度由 `max_agent_depth` 控制；达到上限时，应用层在建会话前从生效工具集移除 `task`
 6. 串行：同一时刻只运行一个子代理
 7. **不设超时**：`task` 不受 `tool_timeout_ms` 约束；子代理自己的 `llm_timeout_ms` 与 bash 超时仍然生效；父进程靠 SIGINT 取消
 8. 执行期间子代理的文本增量实时转发到父进程 stderr；不写父 transcript
@@ -238,16 +248,19 @@ Windows 已知坑（不做特殊处理，写进文档避免模型反复踩）：
 task(prompt="找出 config 加载路径并给出文件与行号", agent_name="general", description="定位配置加载")
 ```
 
-## 工具注册
+## 工具注册与白名单
 
-1. 五个工具默认注册；可被 agent 定义中的 `tools:` 排除
-2. `task` 在 `agent_depth >= max_agent_depth` 时从注册表移除
-3. 白名单里出现未知工具名 → 启动失败，退出 2
-4. 工具 schema 由 Registry 生成，作为 system prompt 的工具说明与 provider 请求的 `tools` 来源
+1. `ap-cli` 用 `aptools.builtin_tools(&Tool_Config)` 构造五个工具，显式传给 `apcore.env_open`；SDK 不使用全局可变注册表
+2. 注册时拒绝空工具名与重复工具名
+3. 白名单规则在应用层：`agent 定义 tools:` > 全部已注册工具
+4. `task` 在 `agent_depth >= max_agent_depth` 时从生效集合移除，并在建会话前完成，因此 `session_start.tools` 直接反映最终结果
+5. 白名单里出现未知工具名 → 新 session 启动失败，退出 2
+6. 恢复 / fork 以 `session_start.tools` 为准；冻结工具在当前注册表中不存在时跳过并 warning
+7. 工具 schema 由注册表生成，作为 system prompt 的工具段与 provider 请求的 `tools` 来源；输出顺序按注册表声明顺序
 
 ## 查看生效工具
 
-使用 `--print-system-prompt`：其中 `## 工具` 小节按当前 agent 定义中的 `tools:` 生成。零工具时该节写「（本次没有可用工具）」，provider 请求也不发送 `tools` 字段。
+使用 `--print-system-prompt`：其中 `## 工具` 小节按生效工具集生成。零工具时该节写「（本次没有可用工具）」，provider 请求也不发送 `tools` 字段。
 
 ## 候选工具（v1 不做）
 

@@ -8,20 +8,20 @@
 
 | 模块 | 负责 | 明确不做 |
 | --- | --- | --- |
-| CLI adapter（`ap-cli`，package `apcli`） | 参数解析、读取 `settings.json`、定位 bash、输出格式、退出码、信号安装、stdout/stderr | 不组装消息，不碰 provider/loop/transcript，不直接 import `engine` |
-| SDK 门面（`ap-core`，package `apcore`） | 接收宿主传入的 `config_dir` / `settings` / `bash_path`，定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不读环境变量、不打开 `settings.json`、不写 stdout/stderr、不装信号、不决定退出码 |
-| Session（`ap-core/engine/session.odin`） | 新会话/恢复/fork 解析、system prompt 预览、`session_start`/`session_end` 写入 | 不决定退出码与输出格式 |
-| Loop | turn/step 状态机、事件编排、重试决策、中断处理 | 不解析 SSE，不实现工具 |
-| Context | transcript → messages 投影、system prompt 组装、blob 解析 | 不发请求，不写 transcript |
-| Skills | 发现并解析技能目录、生成 system prompt 清单与 `--list-skills` 简表 | 不执行技能、不把正文注入上下文 |
+| CLI adapter（`ap-cli`，package `apcli`） | 参数解析、读取 `settings.json`、定位 bash、agent 定义解析、system prompt 段落组装、输出格式、退出码、信号安装、stdout/stderr、**组装根** | 不实现 agent loop/provider/transcript，不直接 import `engine` |
+| CLI tools（`ap-cli/tools`，package `aptools`） | 五个内置工具、工具配置、进程树清理、子代理启动 | 不增减 transcript 事件，不控制 loop |
+| CLI skills（`ap-cli/skills`，package `apskills`） | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 | 不执行技能正文 |
+| SDK 门面（`ap-core`，package `apcore`） | 接收已解析的 `config_dir` / `settings` / `tools`，定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不读环境变量、不打开 `settings.json`、不写 stdout/stderr、不装信号、不决定退出码 |
+| Session（`ap-core/engine/session.odin`） | 新会话/恢复/fork 解析、冻结 prompt 与工具集、`session_start`/`session_end` 写入 | 不读 agent 文件、不扫描技能/记忆、不决定退出码与输出格式 |
+| Loop | turn/step 状态机、事件编排、重试决策、中断处理、工具执行管线 | 不解析 SSE，不实现具体工具 |
+| Context | transcript → messages 投影、base + 工具段 + sections 的 system prompt 组装、blob 解析 | 不发请求，不写 transcript，不决定 section 顺序 |
+| Tool contract（`ap-core/tool`） | `Tool` / `Tool_Context` / `Tool_Result` / `Registry` / 执行管线 | 不实现具体工具、不管理进程策略 |
 | Provider | 请求翻译、SSE 解析、usage 提取、错误归一 | 不重试，不做循环控制 |
-| Tools | 工具注册、参数校验、执行、结果结构化、进程树管理 | 不改上下文，不做循环控制 |
-| Subagent Runner | 拉起 `ap` 子进程、解析 stream-json、转换为 tool 结果 | 不直接调用父进程内存里的对象 |
 | Transcript Store | 事件追加、读取、blob 读写、重放 | 不做业务判断 |
 | Protocol（`ap-core/protocol`） | 事件 schema、usage、宽松事件解析、行分帧 | 只依赖 `core:`；不含 IO、路径、agent 逻辑 |
 | Platform（`ap-core/platform`） | 路径/project hash/session 发现、blob 读写、JSON/文本、平台原语、进程树、取消 token | 不依赖任何本地包，不含 UI、loop、provider、tools |
 | Client（`ap-core/client`） | 前端 kit：定位 ap、拼 argv、spawn、逐行泵、取消、只读 session/blob 访问、历史展示辅助 | 不 import `ap-core/engine` 或 `apcore` 根包，不实现 agent |
-| Engine（`ap-core/engine`） | Loop / Provider / Context / Skills / Tools / Transcript Store / Session 编排 | 不 import `apcore`、`ap-core/client`、`ap-tui`、`ap-web` |
+| Engine（`ap-core/engine`） | Loop / Provider / Context / Transcript Store / Session 编排 | 不 import `apcore`、`ap-cli`、`ap-cli/tools`、`ap-cli/skills` |
 | External frontends | `ap-tui`（终端）与 `ap-web`（浏览器）：每轮拉起 ap 子进程、解析 `stream-json`、渲染；`ap-web` 额外提供 HTTP/SSE | 只 import `ap-core/client` + `ap-core/protocol`，不 import `ap-core/engine`、`ap-core/platform`、`apcore` 根包或彼此，不实现 agent |
 
 ## 依赖方向
@@ -29,13 +29,18 @@
 单向，违反即视为设计错误：
 
 ```
-cmd/ap ──► ap-cli（package apcli，CLI adapter）
-             ├──► ap-core（package apcore，SDK 门面）
-             └──► ap-core/platform, ap-core/protocol
+cmd/ap ──► ap-cli（package apcli，组装根）
+             ├──► apcore（SDK 门面）
+             ├──► ap-core/platform, ap-core/protocol, ap-core/tool
+             ├──► ap-cli/tools（package aptools）
+             └──► ap-cli/skills（package apskills）
 
-ap-core ──► ap-core/engine ──► ap-core/platform
-         │            └──────► ap-core/protocol
-         └──► ap-core/platform, ap-core/protocol
+ap-cli/tools ──► ap-core/tool, ap-core/platform, ap-core/protocol
+ap-cli/skills ──► ap-core/platform
+
+apcore ──► engine, ap-core/tool, platform, protocol
+engine ──► ap-core/tool, platform, protocol
+tool ──► platform, protocol
 
 ap-core/client ──► ap-core/platform, ap-core/protocol
 
@@ -49,17 +54,16 @@ Engine 内部：
 Session ──► Loop ──► Context ──► (纯计算)
               │
               ├────► Provider ──► vendor:curl ──► OpenAI API
-              ├────► Tools ──► Subagent Runner ──► 子进程 ap
+              ├────► Tool Registry ──► Tool.execute（应用层实现）
               └────► Transcript Store ──► *.jsonl + blobs/
 ```
 
-
-1. `Provider`、`Skills` 互不依赖；`Transcript Store` 只提供事件/blob 的读写原语；`Tools` 不依赖 Provider，但 `task` 会通过 `blob_read` 读取子代理 `message_end` 中的 `text_ref`
-2. `Context` 只读 transcript、配置和 blob，不写回、不发请求
-3. `Tools` 不感知 Loop 的状态机；只接收 `(name, args, ctx)` 返回结构化结果
-4. 子代理只能通过命令行 + stdout/stderr 协议交互，不允许依赖父进程内存结构
-5. `ap-core/protocol` 只依赖 `core:`；`ap-core/platform` 只依赖 `core:`/`vendor:`。`ap-core/engine` 只依赖 `ap-core/platform` 与 `ap-core/protocol`；`ap-core/client` 只依赖这两者；`apcore` 只依赖 engine/platform/protocol；`ap-cli` 只依赖 `apcore`、platform、protocol，不直接 import `engine`；前端只依赖 `ap-core/client` 与 `ap-core/protocol`
-6. 子目录就是独立包：`ap-cli/*.odin` 是 `package apcli`，`ap-core/*.odin` 是 `package apcore`（SDK 门面），`ap-core/engine/*.odin` 是 `package engine`。`cmd/*` 里只有 `main`，`odin build cmd/ap` 只链接需要的那部分
+1. `Provider` 与 `Tool` 互不依赖；`Transcript Store` 只提供事件/blob 的读写原语；`tool` 只定义契约与注册表，不实现具体工具
+2. `Context` 只读 transcript、配置和 blob，不写回、不发请求；system prompt 只拼 base、工具段与应用层 sections
+3. `Tool` 不感知 Loop 的状态机；只接收 `(args, ctx)` 返回结构化结果；`ctx` 不含宿主配置，应用配置通过 `Tool.user` 绑定
+4. 子代理只能通过命令行 + stdout/stderr 协议交互，不允许依赖父进程内存结构；`task` 属于 `ap-cli/tools`
+5. `ap-core/protocol` 只依赖 `core:`；`ap-core/platform` 只依赖 `core:`/`vendor:`；`ap-core/tool` 只依赖 platform/protocol；`engine` 只依赖 tool/platform/protocol；`apcore` 依赖 engine/tool/platform/protocol；`ap-cli` 依赖 apcore、tool、platform、protocol 与自己的 tools/skills 子包，不直接 import `engine`；前端只依赖 `ap-core/client` 与 `ap-core/protocol`
+6. 子目录就是独立包：`ap-cli/*.odin` 是 `package apcli`，`ap-cli/tools/*.odin` 是 `package aptools`，`ap-cli/skills/*.odin` 是 `package apskills`，`ap-core/*.odin` 是 `package apcore`（SDK 门面），`ap-core/tool/*.odin` 是 `package tool`，`ap-core/engine/*.odin` 是 `package engine`。`cmd/*` 里只有 `main`，`odin build cmd/ap` 只链接需要的那部分
 
 ## 关键接口
 
@@ -77,10 +81,10 @@ loop_init :: proc(
     project: Project,
     settings: ^Settings,
     store: ^Transcript_Store,
-    agent: Agent_Def,
-    model: string,
-    config_dir, self_exe, bash_path, session_id: string,
-    agent_depth, max_agent_depth, max_steps, max_tokens: int,
+    registry: tool.Registry,
+    active_tools: []string,
+    model, agent_name, session_id: string,
+    agent_depth, max_steps, max_tokens: int,
     cancel: ^platform.Cancel_Token,
     events: []Event,
     emitter: Emitter,
@@ -88,10 +92,7 @@ loop_init :: proc(
 loop_run_turn :: proc(l: ^Loop, prompt: string) -> Loop_Result
 
 context_build :: proc(project: Project, events: []Event) -> (system_prompt: string, messages: []Chat_Message, err: Error)
-
-discover_skills :: proc(cwd: string) -> []Skill
-skills_prompt_block :: proc(skills: []Skill) -> string
-skills_brief :: proc(skills: []Skill) -> string
+build_system_prompt :: proc(opts: System_Prompt_Options) -> string
 
 Session_Request :: struct { ... }
 preview_prompt :: proc(req: Session_Request) -> (Session_Info, Error)
@@ -108,42 +109,51 @@ provider_stream :: proc(
     cancel: ^platform.Cancel_Token,
 ) -> Provider_Error
 
-Tool_Context :: struct { ... }
-
-tool_execute :: proc(name: string, args: json.Value, ctx: ^Tool_Context) -> Tool_Result
-tool_definitions :: proc(agent: Agent_Def, depth, max_depth: int) -> ([]Tool_Def, Error)
+// ap-core/tool
+Registry :: struct { ... }
+registry_init :: proc(tools: []Tool) -> (Registry, platform.Error)
+registry_select :: proc(registry: ^Registry, names: []string) -> ([]string, platform.Error)
+registry_definitions :: proc(registry: ^Registry, active_tools: []string) -> ([]Tool_Def, platform.Error)
+registry_prompt_section :: proc(registry: ^Registry, active_tools: []string) -> string
+tool_execute :: proc(registry: ^Registry, name: string, args: json.Value, ctx: ^Tool_Context) -> Tool_Result
 ```
 
 说明：
 
 - `Stream_Sink` 是 `{user, on_event}`，所有 Provider 事件通过 `Provider_Event` union 回调：`Provider_Message_Start` / `Provider_Text_Delta` / `Provider_Reasoning_Delta` / `Provider_Tool_Start` / `Provider_Tool_Delta` / `Provider_Tool_End` / `Provider_Message_End` / `Provider_Error_Event`。Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。
 - `platform.Cancel_Token` 只有一个原子标志；信号处理器设置它，Provider 在 curl 的进度回调里轮询。没有关闭通知或额外的 `loop_cancel` 接口。
-- `Tool_Result` 是工具结果结构，见 [tools.md](tools.md)。
-- 启动子代理所需的信息直接放在 `Tool_Context` 里：`session_id`、`cwd`、`model`、`agent_name`、`agent_depth`、`config_dir`、`self_exe`、`bash_path` 等。
-- `Skills` 只在组装新 session 的 system prompt 前运行一次，把清单交给 `Context`；`context_build` 本身不访问技能目录，只从 transcript 的 `session_start` 取冻结的 system prompt。
-- 子代理没有独立的 `subagent_run` 接口；它由 `tool_task` 通过 `run_child` 拉起当前 ap 可执行文件实现。
+- `Tool_Result` / `Tool_Context` / `Tool` / `Registry` 定义在 `ap-core/tool`，见 [tools.md](tools.md)。`Tool_Context` 只含通用字段（cwd、project、cancel、session_id、tool_call_id、agent_name、agent_depth、回调），宿主配置通过 `Tool.user` 绑定。
+- 技能发现、`AGENTS.md`、环境段、agent 正文与用户追加段都在应用层；`context_build` 只从 transcript 的 `session_start` 取冻结的 system prompt。
+- 子代理没有独立的 `subagent_run` 接口；它由 `ap-cli/tools` 的 `tool_task` 通过 `run_child` 拉起当前 ap 可执行文件实现。
 
 ### SDK 门面（`apcore`）
 
-宿主（当前的 `ap-cli`）只 import `apcore` 与 platform/protocol 的路径与事件原语，不直接 import `engine`。门面的输入全部是显式数据：配置目录、`Settings`、bash 路径、子代理可执行文件都由宿主解析好后传入，SDK 不打开任何配置文件、也不读环境变量。
+宿主（当前的 `ap-cli`）只 import `apcore`、`ap-core/tool` 与 platform/protocol 原语，不直接 import `engine`。门面的输入全部是显式数据：配置目录、`Settings`、已注册的工具；SDK 不打开任何配置文件、不读环境变量、不解析 agent 文件或技能目录。
 
 ```
 Config :: struct {
-    config_dir:      string,   // 已解析：--config-dir / AP_CONFIG / ~/.ap
-    cwd:             string,   // 空 = 当前目录
-    home_dir:        string,   // 宿主解析的用户主目录；空 = 不注入全局 AGENTS.md
-    bash_path:       string,   // 宿主定位，例如 platform.find_bash
-    child_agent_bin: string,   // task 子代理要拉起的 ap；空 = 当前可执行文件
-    settings:        Settings, // 宿主读 settings.json 并校验后的结果
+    config_dir: string,   // 已解析：--config-dir / AP_CONFIG / ~/.ap
+    cwd:        string,   // 空 = 当前目录
+    settings:   Settings,
+    tools:      []Tool,   // 应用层构造的注册表内容
 }
 
 Env :: struct {
-    config_dir, cwd, home_dir, bash_path, child_agent_bin: string,
+    config_dir, cwd: string,
     project:  Project,
     settings: Settings,
+    tools:    Registry,
 }
 
-Session_Options :: struct { ... } // Session_Request 中所有“来自调用方”的字段
+Session_Options :: struct {
+    kind, source_session_id: ...,
+    agent_name, model: string,
+    max_steps, max_tokens, agent_depth: int,
+    parent_session_id, parent_tool_call_id: Maybe(string),
+    base_system_prompt: Maybe(string),
+    prompt_sections: []string,
+    tools: []string, // 生效工具集；空切片 = 零工具
+}
 
 env_open :: proc(cfg: Config) -> (Env, Error)
 session_request :: proc(env: ^Env, opts: Session_Options) -> Session_Request
@@ -152,13 +162,12 @@ session_open :: proc(env: ^Env, opts: Session_Options) -> (Session, Session_Info
 turn_run :: proc(s: ^Session, prompt: string, cancel: ^Cancel_Token, sink: Emitter) -> (Turn_Result, Error)
 session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error)
 
-list_skills_text :: proc(cwd: string) -> (string, Error)
-list_tools_text :: proc(config_dir: string, agent: Maybe(string), tools_set: bool, tools: []string) -> (string, Error)
+session_options_append :: proc(opts: ^Session_Options, section: string)
 ```
 
-另有 `settings_defaults`（只给默认值，不读文件）、`is_ok` / `errorf`、`log_set_level` / `log_warn` / `log_error`（诊断写 stderr）、`select_tools` / `tool_name_known` / `all_tool_names` 的薄转发，以及给宿主用的 `Error` / `Settings` / `Session` / `Emitter` 等类型别名。
+另有 `settings_defaults`（只给默认值，不读文件）、`registry_init`、`is_ok` / `errorf`、`log_set_level` / `log_warn` / `log_error`（诊断写 stderr），以及给宿主用的 `Error` / `Settings` / `Session` / `Emitter` / `Tool` / `Tool_Result` / `Registry` 等类型别名。
 
-`settings.json` 只由 `ap-cli` 读取与校验（`ap-cli/settings.odin`），SDK 只接收最终的 `Settings`。`env_open` 不做 `setup_console`、不装信号、不写 stdout；`child_agent_bin` 空时回退到当前可执行文件（`ap-cli` 这类宿主），内嵌到别的宿主时必须显式给，因为 `os.get_executable_path()` 会指向宿主而不是 `ap`。`env_open` 本身不读 argv，argv 回退只发生在这个默认值里。`list_skills_text` / `list_tools_text` 只算文本，打印属于 CLI 层。
+`settings.json` 只由 `ap-cli` 读取与校验（`ap-cli/settings.odin`），拆成 `apcore.Settings` 与 `aptools.Tool_Config` 后再传入。`env_open` 不做 `setup_console`、不装信号、不写 stdout，只确保配置目录可写、解析 cwd/project、校验并保存工具注册表。`--list-skills` 的文本生成属于应用层；当前 CLI 不接受 `--list-tools`（与既有行为一致）。
 
 ## 契约要点
 
@@ -168,7 +177,7 @@ list_tools_text :: proc(config_dir: string, agent: Maybe(string), tools_set: boo
 4. `transcript_append_line` 成功返回即意味着该行已写入并 flush；进程崩溃最多丢失最后一行。blob 必须在引用它的事件之前写完并 fsync。
 5. `transcript_read_all` 按文件行序读取；遇到未知事件类型跳过；遇到 `v` 大于支持版本、且类型已知时返回错误，避免误读。
 6. 任何模块都不得绕过 Loop 直接写 transcript 事件（Transcript Store 只提供追加原语）。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行，不写修复事件。
-7. SDK 门面（`apcore`）不得读 `os.args` / `os.stdin`、不得写 `os.stdout`、不得装信号、不得 `os.exit`，也不得打开 `settings.json` 或读 `AP_CONFIG` / `AP_API_KEY` / `AP_BASH`：配置加载与环境发现属于 `ap-cli`，SDK 只接收 `Config.settings` / `config_dir` / `bash_path`。退出码映射、输出格式、控制台初始化同样只属于 `ap-cli`。唯一的 argv 触点是 `child_agent_bin` 为空时 `resolve_self_exe` 的回退。
+7. SDK 门面（`apcore`）不得读 `os.args` / `os.stdin`、不得写 `os.stdout`、不得装信号、不得 `os.exit`，也不得打开 `settings.json` 或读 `AP_CONFIG` / `AP_API_KEY` / `AP_BASH`：配置加载、环境发现、agent/技能/记忆解析都属于 `ap-cli`，SDK 只接收 `Config.settings` / `config_dir` / `cwd` / `tools`。退出码映射、输出格式、控制台初始化同样只属于 `ap-cli`。
 
 ## 进程与生命周期
 
@@ -180,7 +189,7 @@ list_tools_text :: proc(config_dir: string, agent: Maybe(string), tools_set: boo
    - Unix 的递归扫描不是运行期登记表：正常返回后 ap 不会在退出时再次清理后台后代
 4. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
 5. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
-6. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json` → 定位 bash → 把 `config_dir` / `settings` / `bash_path` 交给 `apcore.env_open` → 解析 agent → 计算 project hash → （恢复）打开并读取 transcript，取最后一个 `session_start` / （新 session）发现技能并组装 system prompt → 打开/创建 transcript 用于追加 → 写 `session_start` → 进入 Loop
+6. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → （新 session）解析 agent / 发现技能 / 读取 `AGENTS.md` / 组装 prompt sections / 应用工具白名单与深度规则 → 构造工具注册表 → `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
 7. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件
 8. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
 
@@ -197,11 +206,14 @@ list_tools_text :: proc(config_dir: string, agent: Maybe(string), tools_set: boo
 cmd/ap/              package main：os.exit(apcli.run(os.args))
 cmd/ap-tui/          package main：os.exit(aptui.run(os.args))
 cmd/ap-web/          package main：os.exit(apweb.run(os.args))
-ap-cli/              package apcli：options / run / output / app / signals
+ap-cli/              package apcli：options / settings / agent / prompt / run / output / app / signals
+ap-cli/tools/        package aptools：五个内置工具、Tool_Config、process
+ap-cli/skills/       package apskills：技能发现与提示词块
 ap-core/             package apcore：SDK 门面（env_open / session_request / 会话生命周期）
+ap-core/tool/        package tool：Tool / Tool_Context / Tool_Result / Registry / execute
 ap-core/protocol/    package protocol：事件 schema、parse、Line_Reader、usage
 ap-core/platform/    package platform：paths / sessions / blob / json / text / 平台原语 / 进程树 / cancel
-ap-core/engine/      package engine：errors / config / session / loop / provider / sse / skills / transcript / process / tools / prompts
+ap-core/engine/      package engine：errors / config / session / loop / provider / sse / context / transcript / prompts
 ap-core/client/      package client：turn / spawn / store / history
 ap-tui/              package aptui：args / render / agent
 ap-web/              package apweb：server / api / sse / runner / assets / pickdir
@@ -214,15 +226,18 @@ ap-web/              package apweb：server / api / sse / runner / assets / pick
 | `cmd/ap` | `ap-cli` | 其他一切 |
 | `cmd/ap-tui` | `ap-tui` | 其他一切 |
 | `cmd/ap-web` | `ap-web` | 其他一切 |
-| `ap-cli` | `apcore`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/client`、`ap-web`、`ap-tui` |
+| `ap-cli` | `apcore`、`ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`ap-cli/tools`、`ap-cli/skills`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/client`、`ap-web`、`ap-tui` |
+| `ap-cli/tools` | `ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-core/engine`、`ap-cli/skills` |
+| `ap-cli/skills` | `ap-core/platform`、`core:`/`vendor:` | `apcore`、`ap-core/engine`、`ap-cli/tools` |
 | `ap-web` / `ap-tui` | `ap-core/client`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`ap-core/platform`、`apcore` 根包、`ap-cli`、彼此 |
 | `ap-core/client` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-core/engine`、`apcore` 根包 |
-| `apcore` | `ap-core/engine`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-cli`、`ap-web`、`ap-tui`、`ap-core/client` |
-| `ap-core/engine` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-cli`、`ap-core/client`、前端 |
+| `apcore` | `ap-core/engine`、`ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `ap-cli`、`ap-web`、`ap-tui`、`ap-core/client` |
+| `ap-core/engine` | `ap-core/tool`、`ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | `apcore`、`ap-cli`、`ap-cli/tools`、`ap-cli/skills`、`ap-core/client`、前端 |
+| `ap-core/tool` | `ap-core/platform`、`ap-core/protocol`、`core:`/`vendor:` | 所有其它本地包 |
 | `ap-core/platform` | `core:`/`vendor:` | 所有本地包 |
 | `ap-core/protocol` | `core:` | 所有本地包 |
 
-Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 在测试与构建前强制：扫描 import 行（含 `ap-cli` 不得 import `engine`），并用 `-export-dependencies:json` 断言前端的编译文件清单里没有 `ap-core/engine/`。脚本带 `--self-test` 反向用例，确认禁止 import 会返回非 0。
+Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 在测试与构建前强制：扫描 import 行（含 `ap-cli` 不得直接 import `engine`、`engine` 不得反向 import `ap-cli/tools`），并用 `-export-dependencies:json` 断言前端的编译文件清单里没有 `ap-core/engine/`。脚本带 `--self-test` 反向用例，确认禁止 import 会返回非 0。
 
 ## 外部消费者：ap-tui 与 ap-web
 

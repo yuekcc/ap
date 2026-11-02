@@ -1,9 +1,6 @@
 package engine
 
-import "../platform"
-
 import "core:fmt"
-import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -230,47 +227,45 @@ test_project_messages_replay_is_byte_identical :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_system_prompt_layers_and_git_boundary :: proc(t: ^testing.T) {
-	dir := test_temp_dir("prompt")
-	defer test_cleanup(dir)
-	root := fmt.tprintf("%s/repo", dir)
-	sub := fmt.tprintf("%s/sub", root)
-	home := fmt.tprintf("%s/home", dir)
-	os.make_directory_all(sub)
-	os.make_directory_all(fmt.tprintf("%s/.git", root))
-	test_write_file(fmt.tprintf("%s/AGENTS.md", dir), "outside-memory")
-	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "root-memory")
-	test_write_file(fmt.tprintf("%s/AGENTS.md", sub), "sub-memory")
-	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "global-memory")
-
-	agent := agent_default_general()
-	agent.body = "AGENT_BODY"
-	cwd, _ := platform.canonicalize_path(sub)
+test_build_system_prompt_orders_sections :: proc(t: ^testing.T) {
 	prompt := build_system_prompt(
 		{
-			cwd = cwd,
-			home_dir = home,
-			agent = agent,
-			append_prompt = "APPEND_MARKER",
+			base_override = "BASE\n",
 			tool_section = "TOOL_SECTION",
-			include_memory = true,
+			sections = []string{"## 环境\nENV\n", "## 追加指令\nAPPEND\n"},
 		},
 	)
-	testing.expect(t, test_contains(prompt, "global-memory"))
-	testing.expect(t, test_contains(prompt, "root-memory"))
-	testing.expect(t, test_contains(prompt, "sub-memory"))
-	testing.expect(t, !test_contains(prompt, "outside-memory"))
-	testing.expect(t, test_contains(prompt, "TOOL_SECTION"))
-	testing.expect(t, test_contains(prompt, "AGENT_BODY"))
-	testing.expect(t, test_contains(prompt, "APPEND_MARKER"))
+	testing.expect(t, strings.has_prefix(prompt, "BASE\n"))
+	testing.expect(t, test_contains(prompt, "## 工具\nTOOL_SECTION\n\n## 环境\nENV\n\n## 追加指令\nAPPEND\n"))
+	testing.expect(t, strings.has_suffix(prompt, "APPEND\n"))
+}
 
-	root_pos := strings.index(prompt, "root-memory")
-	sub_pos := strings.index(prompt, "sub-memory")
-	global_pos := strings.index(prompt, "global-memory")
-	append_pos := strings.index(prompt, "APPEND_MARKER")
-	testing.expect(t, global_pos < root_pos)
-	testing.expect(t, root_pos < sub_pos)
-	testing.expect(t, sub_pos < append_pos)
+@(test)
+test_build_system_prompt_skips_empty_sections_and_adds_newline :: proc(t: ^testing.T) {
+	prompt := build_system_prompt(
+		{
+			base_override = "BASE",
+			tool_section = "TOOL_SECTION",
+			sections = []string{"", "SECTION_WITHOUT_NEWLINE"},
+		},
+	)
+	testing.expect(t, strings.has_prefix(prompt, "BASE\n\n## 工具\nTOOL_SECTION\n"))
+	testing.expect(t, strings.has_suffix(prompt, "\n\nSECTION_WITHOUT_NEWLINE\n"))
+}
+
+@(test)
+test_build_system_prompt_base_override_keeps_tool_section :: proc(t: ^testing.T) {
+	prompt := build_system_prompt(
+		{
+			base_override = "CUSTOM_BASE\n",
+			tool_section = "TOOL_SECTION",
+			sections = []string{"APPEND_MARKER"},
+		},
+	)
+	testing.expect(t, strings.has_prefix(prompt, "CUSTOM_BASE\n"))
+	testing.expect(t, !test_contains(prompt, "你是 AI Assistant"))
+	testing.expect(t, test_contains(prompt, "## 工具\nTOOL_SECTION"))
+	testing.expect(t, test_contains(prompt, "APPEND_MARKER"))
 }
 
 @(test)
@@ -297,9 +292,6 @@ test_context_build_uses_frozen_system_prompt_blob :: proc(t: ^testing.T) {
 		test_event("user_message", `{"type":"user_message","content":"hi"}`),
 	}
 	system_prompt, messages, err := context_build(project, events)
-	if !is_ok(err) {
-		fmt.println("context_build error:", err.message)
-	}
 	testing.expect_value(t, err.kind, Error_Kind.None)
 	testing.expect_value(t, system_prompt, prompt_text)
 	testing.expect_value(t, len(messages), 1)
@@ -327,103 +319,4 @@ test_context_build_missing_system_blob_fails :: proc(t: ^testing.T) {
 	}
 	_, _, err := context_build(project, events)
 	testing.expect_value(t, err.kind, Error_Kind.Usage)
-}
-
-@(test)
-test_available_tools_removes_task_at_max_depth :: proc(t: ^testing.T) {
-	agent := agent_default_general()
-	names := available_tool_names(agent, 1, 1)
-	for name in names {
-		testing.expect(t, name != "task")
-	}
-	names_root := available_tool_names(agent, 0, 1)
-	found := false
-	for name in names_root {
-		if name == "task" {
-			found = true
-		}
-	}
-	testing.expect(t, found)
-}
-
-
-@(test)
-test_system_prompt_base_override_keeps_auto_sections :: proc(t: ^testing.T) {
-	dir := test_temp_dir("prompt-base")
-	defer test_cleanup(dir)
-	root := fmt.tprintf("%s/repo", dir)
-	home := fmt.tprintf("%s/home", dir)
-	_ = os.make_directory_all(root)
-	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "GLOBAL_MEMORY")
-	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "PROJECT_MEMORY")
-
-	agent := agent_default_general()
-	agent.body = "AGENT_BODY"
-	prompt := build_system_prompt(
-		{
-			cwd = root,
-			home_dir = home,
-			agent = agent,
-			append_prompt = "APPEND_MARKER",
-			tool_section = "TOOL_SECTION",
-			skill_section = "SKILL_SECTION",
-			base_override = "CUSTOM_BASE\n",
-			include_memory = true,
-		},
-	)
-	testing.expect(t, strings.has_prefix(prompt, "CUSTOM_BASE\n"))
-	testing.expect(t, !test_contains(prompt, "你是 AI Assistant"))
-	testing.expect(t, test_contains(prompt, "TOOL_SECTION"))
-	testing.expect(t, test_contains(prompt, "## 环境"))
-	testing.expect(t, test_contains(prompt, "SKILL_SECTION"))
-	testing.expect(t, test_contains(prompt, "GLOBAL_MEMORY"))
-	testing.expect(t, test_contains(prompt, "PROJECT_MEMORY"))
-	testing.expect(t, test_contains(prompt, "AGENT_BODY"))
-	testing.expect(t, test_contains(prompt, "APPEND_MARKER"))
-	testing.expect(t, strings.has_suffix(test_trim_right_space(prompt), "APPEND_MARKER"))
-}
-
-test_trim_right_space :: proc(s: string) -> string {
-	return strings.trim_right(s, " \t\r\n")
-}
-
-@(test)
-test_system_prompt_include_memory_false :: proc(t: ^testing.T) {
-	dir := test_temp_dir("prompt-no-memory")
-	defer test_cleanup(dir)
-	root := fmt.tprintf("%s/repo", dir)
-	home := fmt.tprintf("%s/home", dir)
-	_ = os.make_directory_all(root)
-	test_write_file(fmt.tprintf("%s/.agents/AGENTS.md", home), "GLOBAL_MEMORY")
-	test_write_file(fmt.tprintf("%s/AGENTS.md", root), "PROJECT_MEMORY")
-
-	prompt := build_system_prompt(
-		{
-			cwd = root,
-			home_dir = home,
-			agent = agent_default_general(),
-			tool_section = "TOOL_SECTION",
-			include_memory = false,
-		},
-	)
-	testing.expect(t, !test_contains(prompt, "GLOBAL_MEMORY"))
-	testing.expect(t, !test_contains(prompt, "PROJECT_MEMORY"))
-	testing.expect(t, !test_contains(prompt, "全局记忆"))
-	testing.expect(t, !test_contains(prompt, "项目记忆"))
-	testing.expect(t, test_contains(prompt, "## 环境"))
-}
-
-@(test)
-test_system_prompt_without_skills_section :: proc(t: ^testing.T) {
-	prompt := build_system_prompt(
-		{
-			cwd = ".",
-			agent = agent_default_general(),
-			tool_section = "TOOL_SECTION",
-			skill_section = "",
-			include_memory = true,
-		},
-	)
-	testing.expect(t, !test_contains(prompt, "## 可用技能"))
-	testing.expect(t, !test_contains(prompt, "<available_skills>"))
 }

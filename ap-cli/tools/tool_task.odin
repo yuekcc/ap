@@ -1,6 +1,8 @@
-package engine
+package aptools
 
-import "../platform"
+import platform "../../ap-core/platform"
+import protocol "../../ap-core/protocol"
+import tool "../../ap-core/tool"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -13,13 +15,13 @@ Task_State :: struct {
 	last_error:          string,
 	last_text:           string,
 	stop_reason:         string,
-	usage:               Usage,
+	usage:               protocol.Usage,
 	saw_session_start:   bool,
 	saw_session_end:     bool,
-	project:             Project,
+	project:             platform.Project,
 	pending_stdout:      [dynamic]byte,
 	pending_stderr:      [dynamic]byte,
-	on_progress:         proc(user: rawptr, style: Progress_Style, line: string),
+	on_progress:         proc(user: rawptr, style: tool.Progress_Kind, line: string),
 	progress_user:       rawptr,
 }
 
@@ -97,13 +99,12 @@ task_flush_pending :: proc(state: ^Task_State) {
 	}
 }
 
-task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
+task_handle_line :: proc(state: ^Task_State, project: platform.Project, line: string) {
 	if len(strings.trim_space(line)) == 0 {
 		return
 	}
 	value, perr := json.parse_string(line, .JSON, true)
 	if perr != nil {
-		log_debug("subagent: skipping non-JSON stdout line")
 		return
 	}
 	obj, is_obj := value.(json.Object)
@@ -116,7 +117,7 @@ task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
 	}
 	switch string(typ) {
 	case "session_start":
-		start: Session_Start_Event
+		start: protocol.Session_Start_Event
 		if json.unmarshal_string(line, &start) == nil {
 			state.saw_session_start = true
 			state.child_session_id = start.session_id
@@ -128,7 +129,7 @@ task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
 			}
 		}
 	case "message_end":
-		end: Message_End_Event
+		end: protocol.Message_End_Event
 		if json.unmarshal_string(line, &end) == nil && end.role == "assistant" && end.stop_reason != "cancelled" {
 			text := strings.builder_make()
 			has_text := false
@@ -136,8 +137,8 @@ task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
 				if block.type != "text" {
 					continue
 				}
-				block_text, terr := content_block_text(project, block)
-				if !is_ok(terr) {
+				block_text, terr := tool.content_block_text(project, block)
+				if !platform.is_ok(terr) {
 					continue
 				}
 				if has_text {
@@ -151,13 +152,13 @@ task_handle_line :: proc(state: ^Task_State, project: Project, line: string) {
 			}
 		}
 	case "turn_end":
-		end: Turn_End_Event
+		end: protocol.Turn_End_Event
 		if json.unmarshal_string(line, &end) == nil {
 			state.stop_reason = end.stop_reason
 			state.usage = end.usage
 		}
 	case "error":
-		err_ev: Error_Event
+		err_ev: protocol.Error_Event
 		if json.unmarshal_string(line, &err_ev) == nil {
 			state.last_error = err_ev.message
 		}
@@ -196,52 +197,57 @@ task_stderr_chunk :: proc(user: rawptr, chunk: string) {
 
 // 组装子代理命令行。--no-agents-md / --no-skills 按父进程状态传播，
 // system prompt 覆盖与追加指令属于父进程本次运行，不传播。
-task_child_args :: proc(ctx: ^Tool_Context, agent_name: string, prompt_max_steps: int) -> []string {
+task_child_args :: proc(
+	ctx: ^tool.Tool_Context,
+	cfg: ^Tool_Config,
+	agent_name: string,
+	prompt_max_steps: int,
+) -> []string {
 	args := make([dynamic]string, 0, 20)
 	append(
 		&args,
-		ctx.self_exe,
+		cfg.self_exe,
 		"--agent", agent_name,
 		"--output-format", "stream-json",
 		"--print0",
 		"--parent-session-id", ctx.session_id,
-		"--parent-tool-call-id", ctx.parent_tool_call_id,
+		"--parent-tool-call-id", ctx.tool_call_id,
 		"--agent-depth", fmt.tprintf("%d", ctx.agent_depth + 1),
-		"--config-dir", ctx.config_dir,
-		"--model", ctx.model,
+		"--config-dir", cfg.config_dir,
+		"--model", cfg.model,
 		"--max-steps", fmt.tprintf("%d", prompt_max_steps),
 	)
-	if ctx.no_agents_md {
+	if cfg.no_agents_md {
 		append(&args, "--no-agents-md")
 	}
-	if ctx.no_skills {
+	if cfg.no_skills {
 		append(&args, "--no-skills")
 	}
 	return args[:]
 }
 
-tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
-	prompt, perr := tool_arg_string(args, "prompt")
-	if !is_ok(perr) {
+tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	prompt, perr := tool.tool_arg_string(args, "prompt")
+	if !platform.is_ok(perr) {
 		return arg_error(perr)
 	}
 	if len(prompt) == 0 {
-		return tool_fail("prompt must not be empty")
+		return tool.tool_fail("prompt must not be empty")
 	}
 	agent_name := "general"
-	if value, err := tool_arg_optional_string(args, "agent_name"); !is_ok(err) {
+	if value, err := tool.tool_arg_optional_string(args, "agent_name"); !platform.is_ok(err) {
 		return arg_error(err)
 	} else if v, ok := value.?; ok && len(v) > 0 {
 		agent_name = v
 	}
-	if ctx.agent_depth >= ctx.settings.max_agent_depth {
-		return tool_fail("max_agent_depth reached; task is not available")
+	if ctx.agent_depth >= cfg.max_agent_depth {
+		return tool.tool_fail("max_agent_depth reached; task is not available")
 	}
-	if len(ctx.self_exe) == 0 {
-		return tool_fail("cannot determine ap executable path")
+	if len(cfg.self_exe) == 0 {
+		return tool.tool_fail("cannot determine ap executable path")
 	}
 
-	exec_args := task_child_args(ctx, agent_name, ctx.max_steps)
+	exec_args := task_child_args(ctx, cfg, agent_name, cfg.max_steps)
 
 	state: Task_State
 	state.line_buf = make([dynamic]byte, 0, 8192)
@@ -260,7 +266,7 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 			cwd = ctx.cwd,
 			stdin_data = transmute([]byte)prompt,
 			timeout_ms = 0,
-			max_capture_bytes = ctx.settings.max_capture_bytes,
+			max_capture_bytes = cfg.max_capture_bytes,
 			cancel = ctx.cancel,
 			on_stdout = task_stdout_chunk,
 			on_stderr = task_stderr_chunk,
@@ -273,7 +279,7 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	}
 	task_flush_pending(&state)
 	if !run.spawned {
-		res := tool_fail(run.error)
+		res := tool.tool_fail(run.error)
 		res.fatal = true
 		return res
 	}
@@ -307,13 +313,13 @@ tool_task :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	if len(content) == 0 {
 		content = "(subagent returned no text)"
 	}
-	res := tool_ok(content)
+	res := tool.tool_ok(content)
 	res.metadata = task_metadata(&state, run.duration_ms)
 	return res
 }
 
-task_fail_with_state :: proc(state: ^Task_State, duration_ms: int, message: string) -> Tool_Result {
-	res := tool_fail(message)
+task_fail_with_state :: proc(state: ^Task_State, duration_ms: int, message: string) -> tool.Tool_Result {
+	res := tool.tool_fail(message)
 	res.metadata = task_metadata(state, duration_ms)
 	return res
 }

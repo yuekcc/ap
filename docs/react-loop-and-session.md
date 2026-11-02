@@ -90,7 +90,7 @@ Transcript 是 session 的唯一事实来源，完整事件只追加，永不改
 4. `resumed_from`：原地恢复指向自身 `session_id`；fork 指向源 `session_id`；新 session 为 null
 5. system prompt 超过 `blob_threshold_bytes` 时，`content` 置空并写 `content_ref` / `content_bytes`；读取方从 blob 还原
 6. 同一文件内允许多个 `session_start`（恢复、fork 后的追加），读取方以最后一个为准
-7. `tools` 是**冻结的声明工具列表**（来自 agent 定义；`task` 的深度移除是运行期行为，不在这里体现）。零工具时写空数组 `[]`，不能省略；字段缺失或 `null` 表示旧 transcript，读取时回退到 agent 定义
+7. `tools` 是**冻结的生效工具列表**：应用层已应用 agent 白名单与深度规则，`task` 的移除在建会话前完成。零工具时写空数组 `[]`，不能省略；字段缺失或 `null` 表示旧 transcript，读取时使用当前注册表的全部工具并 warning
 
 ### session_end
 
@@ -306,7 +306,8 @@ assistant 消息只在开始时和结束时落盘，流式增量走 stdout，不
 6. 不写任何修复事件；恢复时只截掉崩溃留下的不完整尾行，完整事件保持原样
 7. 恢复后追加新的 `session_start`，然后开始新 turn；新事件的 `seq` 继续递增
 8. 子代理 session 同样可以 `-s` 打开；`parent_session_id` 用于展示层级
-9. 恢复期 `--no-agents-md` / `--no-skills` 一律 warning + 忽略；`$AP_CONFIG/SYSTEM.md` 不重新读取，不改变冻结的 prompt 与工具集
+9. 恢复期 `$AP_CONFIG/SYSTEM.md` 不重新读取，不重新解析 agent 文件，也不改变冻结的 prompt 与工具集；`--no-agents-md` / `--no-skills` 只影响新 session
+10. 冻结工具在当前注册表中不存在时跳过并 warning，不终止会话；新 session 的未知工具名仍视为用法错误
 
 ## fork
 

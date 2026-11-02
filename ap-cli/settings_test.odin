@@ -20,14 +20,33 @@ test_settings_defaults_and_defaults_file :: proc(t: ^testing.T) {
 		fmt.tprintf("%s/settings.json", dir),
 		`{"model":"test-model","api_key":"sk-test","base_url":"http://127.0.0.1:8788/v1/"}`,
 	)
-	s, err := load_settings(dir)
+	loaded, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
-	testing.expect_value(t, s.model, "test-model")
-	testing.expect_value(t, s.api_key, "sk-test")
-	testing.expect_value(t, s.base_url, "http://127.0.0.1:8788/v1")
-	testing.expect_value(t, s.max_steps, 100)
-	testing.expect_value(t, s.max_tokens, 8192)
-	testing.expect_value(t, s.stream_include_usage, true)
+	testing.expect_value(t, loaded.sdk.model, "test-model")
+	testing.expect_value(t, loaded.sdk.api_key, "sk-test")
+	testing.expect_value(t, loaded.sdk.base_url, "http://127.0.0.1:8788/v1")
+	testing.expect_value(t, loaded.sdk.max_steps, 100)
+	testing.expect_value(t, loaded.sdk.max_tokens, 8192)
+	testing.expect_value(t, loaded.sdk.stream_include_usage, true)
+	testing.expect_value(t, loaded.tool.config_dir, dir)
+	testing.expect_value(t, loaded.tool.max_agent_depth, 1)
+	testing.expect_value(t, loaded.tool.tool_timeout_ms, 120000)
+	testing.expect_value(t, loaded.tool.max_capture_bytes, 67108864)
+}
+
+@(test)
+test_settings_tool_fields_are_split_out :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-tools")
+	defer os.remove_all(dir)
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","max_agent_depth":3,"tool_timeout_ms":5000,"max_capture_bytes":1234}`,
+	)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.tool.max_agent_depth, 3)
+	testing.expect_value(t, loaded.tool.tool_timeout_ms, 5000)
+	testing.expect_value(t, loaded.tool.max_capture_bytes, 1234)
 }
 
 @(test)
@@ -47,9 +66,9 @@ test_settings_env_api_key_overrides :: proc(t: ^testing.T) {
 	settings_write_file(fmt.tprintf("%s/settings.json", dir), `{"model":"m","api_key":"from-file"}`)
 	_ = os.set_env("AP_API_KEY", "from-env")
 	defer os.unset_env("AP_API_KEY")
-	s, err := load_settings(dir)
+	loaded, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
-	testing.expect_value(t, s.api_key, "from-env")
+	testing.expect_value(t, loaded.sdk.api_key, "from-env")
 }
 
 @(test)
@@ -63,6 +82,11 @@ test_settings_missing_model_and_key :: proc(t: ^testing.T) {
 	settings_write_file(fmt.tprintf("%s/settings.json", dir), `{"model":"m"}`)
 	_, err2 := load_settings(dir)
 	testing.expect_value(t, err2.kind, apcore.Error_Kind.Usage)
+
+	// --print-system-prompt 不调用模型，不要求 API key。
+	loaded, err3 := load_settings(dir, false)
+	testing.expect_value(t, err3.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.model, "m")
 }
 
 @(test)

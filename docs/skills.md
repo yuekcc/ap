@@ -1,6 +1,6 @@
 # 技能（skills）
 
-技能是给模型按需读取的 Markdown 指令包，不是工具、不是插件。ap 只负责发现技能、把清单写进 system prompt；模型判断需要时，用 `read_file`（必要时 `bash`）读取对应 `SKILL.md`，再照其中步骤执行。
+技能是给模型按需读取的 Markdown 指令包，不是工具、不是插件。技能属于**应用层**（`ap-cli/skills`，package `apskills`）：ap 只负责发现技能、把清单写进 system prompt；模型判断需要时，用 `read_file`（必要时 `bash`）读取对应 `SKILL.md`，再照其中步骤执行。SDK（`apcore` / `ap-core/engine` / `ap-core/tool`）不扫描技能目录、不解析 `SKILL.md`，也不认识 `skill` 概念。
 
 v1 不做：技能脚本执行、参数传入、版本管理、远程安装/市场、把正文直接注入 system prompt。
 
@@ -21,6 +21,7 @@ v1 不做：技能脚本执行、参数传入、版本管理、远程安装/市�
 4. 结果按 `name` 升序排列，保证同一目录集合产出稳定的提示词
 5. `$AP_CONFIG` 不是技能根；全局技能固定在 `~/.agents/skills`
 6. 恢复 session 不重新扫描：system prompt 在 `session_start` 冻结，见 [context-management.md](context-management.md)
+7. `--no-skills` 只关闭发现与注入；`--list-skills` 仍走同一发现逻辑
 
 子代理是独立 `ap` 进程，会用子进程的启动目录重新发现一次。`task` 不改变工作目录，因此通常与父进程看到同一份清单。
 
@@ -50,7 +51,7 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 
 ## 注入 system prompt
 
-只在新 session 组装提示词时注入，位置在「环境」之后、「全局记忆」之前：
+由 `ap-cli/prompt.odin` 只在新 session 组装应用层 section 时注入，位置在「环境」之后、「全局记忆」之前：
 
 ```text
 ## 可用技能
@@ -73,7 +74,7 @@ skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成�
 1. 没有任何可注入技能时（包括全部技能都声明 `disable-model-invocation: true`），整个「可用技能」小节不出现，不留空标题或“暂无技能”之类噪音
 2. `name` / `description` / `location` 做 XML 转义；路径统一用 `/`，避免 Windows 反斜杠在提示词里被当成转义符
 3. 只注入元数据，不注入正文：技能再多也只占清单的 token
-4. 追加提示词（`~/.agents/AGENTS.md` 或项目 `AGENTS.md`）排在技能之后，位置最后
+4. 记忆（`~/.agents/AGENTS.md` 与项目 `AGENTS.md`）、agent 正文、用户追加段排在技能之后
 5. agent 工具白名单不参与发现；如果 agent 既没有 `read_file` 也没有 `bash`，清单仍会注入，但它无法读取正文。需要技能时给该 agent 加上 `read_file`
 6. 声明 `disable-model-invocation: true` 的技能从清单中剔除，但仍会出现在 `--list-skills` 输出中
 7. `--no-skills` 时完全不扫描技能目录，也不注入「可用技能」小节；该开关只影响新 session 的提示词，不影响 `--list-skills`，也不是安全边界（模型仍可用 `bash` / `read_file` 读 `SKILL.md`）
@@ -115,11 +116,11 @@ llmcli 的 `Skill.content` 会读入内存用于校验；ap 同样校验正文�
 
 ## 测试
 
-单元测试见 `ap-core/engine/skills_test.odin`，覆盖：
+单元测试见 `ap-cli/skills/skills_test.odin`，覆盖：
 
 - front matter 解析、引号与转义、BOM/CRLF、正文 trim
 - 缺少 name / description / 正文、缺少结束 `---`、没有 front matter 时判为无效
 - 同名覆盖、按 name 排序、两处根目录的发现顺序
 - 提示词块的空/非空、XML 转义、路径正斜杠、跳过 `disable-model-invocation: true` 的技能
 - 简表格式（包含被禁用的技能）
-- system prompt 中的小节位置（技能 → 全局记忆 → 追加指令）
+- `build_prompt_sections` 中的小节位置（环境 → 技能 → 记忆 → agent 正文）

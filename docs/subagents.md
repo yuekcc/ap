@@ -2,6 +2,8 @@
 
 子代理是一个独立的 ap 进程：独立上下文、独立 transcript、独立工具集，完成后只把最终结果交回父进程。
 
+`task` 属于应用层（`ap-cli/tools/tool_task.odin`）：子进程命令行、stream-json 解析、stderr 转发都由应用层实现。SDK 只执行注册表里名为 `task` 的工具，不感知 subagent 机制。
+
 ## 为什么用独立进程
 
 1. **上下文隔离**：子代理的探索过程不污染父进程上下文，只回传结论
@@ -41,7 +43,7 @@ max_steps: 30
 
 1. 白名单只能包含 `read_file` / `write_file` / `edit_file` / `bash` / `task`
 2. 未知工具名 → 启动失败，退出 2
-3. `task` 在 `agent_depth >= max_agent_depth` 时从注册表移除，即使白名单里有
+3. `task` 在 `agent_depth >= max_agent_depth` 时由应用层在建会话前从生效工具集移除，即使白名单里有
 4. 未知 frontmatter 字段忽略并警告；`name` / `description` 缺失 → 退出 2
 5. 工具集完全由 agent 定义中的 `tools:` 决定；缺省为全部五个工具
 
@@ -96,9 +98,9 @@ max_steps: 30
 
 子代理的工具集完全来自它自己的 agent 定义（`$AP_CONFIG/agents/<name>.md` 的 `tools:`，缺省为全部五个工具）。父进程不需要、也不会覆盖它。
 
-深度规则不变：子进程仍按自己的 `agent_depth` 与 `max_agent_depth` 决定是否移除 `task`。
+深度规则不变：子进程启动时由 `ap-cli` 按自己的 `agent_depth` 与 `max_agent_depth` 决定是否移除 `task`，结果直接写入 `session_start.tools`。
 
-恢复 / fork 时 `--no-agents-md` / `--no-skills` 只 warning + 忽略，不会传播给子代理。
+恢复 / fork 时 `--no-agents-md` / `--no-skills` 只 warning + 忽略，不会传播给子代理；`task` 的 `Tool_Config` 也只在新建 session 时记录这两个开关。
 
 ## 输出协议
 

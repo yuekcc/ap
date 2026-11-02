@@ -197,7 +197,7 @@ at exit: flush remaining bytes as one last line
 
 | 事件 | 必须做的事 |
 | --- | --- |
-| `session_start` | 记录 `session_id`（新会话的关键）；历史模式下 `content_ref` 解析 blob，`content` 作为 system prompt，通常不展示；`tools` 是冻结的声明工具集，仅用于审计，恢复时不要重算 |
+| `session_start` | 记录 `session_id`（新会话的关键）；历史模式下 `content_ref` 解析 blob，`content` 作为 system prompt，通常不展示；`tools` 是冻结的生效工具集，仅用于审计，恢复时不要重算 |
 | `user_message` | 只在历史模式展示（实时模式下提示词由 UI 自己回显，避免重复） |
 | `turn_start` | 标记 running，记录 `turn` |
 | `message_start` | 重置该 `message_id` 的「已收到文本增量」标志 |
@@ -248,9 +248,9 @@ at exit: flush remaining bytes as one last line
 
 - `-s <id>`：恢复当前项目内的指定 session；找不到时 ap 退出 2 并打印期望路径。
 - 恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集（`tools`）**不重算**。
-- 以下参数与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--no-agents-md`、`--no-skills`、父子关联参数。`$AP_CONFIG/SYSTEM.md` 只在新 session 读取，恢复时不重新应用。
-- 以下参数恢复时照常生效：`--max-steps`、`--max-tokens`、`--output-format`、`--verbose`、提示词来源、`--fork-session`、`--config-dir`。
-- 恢复后工具集以 `session_start.tools` 为准；旧 transcript 没有该字段时回退到 agent 定义。
+- 以下输入与冻结值冲突时，ap 在 stderr 打 warning 并忽略（退出码不受影响）：`--model`、`--agent`、`--base-system-prompt` 等价输入、应用层 prompt sections、工具集覆盖、父子关联参数。`$AP_CONFIG/SYSTEM.md` 只在新 session 读取，恢复时不重新应用；agent 文件也不再重新加载。
+- 以下参数恢复时照常生效：`--max-steps`、`--max-tokens`、`--output-format`、`--verbose`、提示词来源、`--fork-session`、`--config-dir`。`--no-agents-md` / `--no-skills` 只影响新 session。
+- 恢复后工具集以 `session_start.tools` 为准；冻结工具在当前注册表中不存在时跳过并 warning。旧 transcript 没有该字段时使用当前注册表的全部工具并 warning。
 - 前端切换 session 时**不要**因为另一个 session 正在跑而拒绝；单飞约束只在同一 session 上。
 
 ### 5.3 继续
@@ -403,7 +403,38 @@ project 识别规则（必须与 ap 完全一致）：
 7. **路径**：Windows 大小写/分隔符变体落到同一 project hash；跨目录 `-s` 失败并给出清晰提示。
 8. **真模型 e2e**：用本地 OpenAI 兼容端点跑一轮，确认文本增量、工具调用、`turn_end`、`session_end` 与 usage 都能落地。
 
-## 11. 相关文档
+## 11. 进程内 SDK（同仓库宿主）
+
+对外集成契约只有进程边界；`apcore` 是同仓库 Odin 宿主的进程内门面。本轮 SDK 边界收窄后，宿主需要自己提供工具、agent 定义、技能与 prompt sections：
+
+```odin
+env, err := apcore.env_open({
+    config_dir = config_dir,
+    cwd        = cwd,
+    settings   = sdk_settings,          // 只含 model/base_url/api_key/loop/provider 字段
+    tools      = aptools.builtin_tools(&tool_cfg),
+})
+
+opts := apcore.Session_Options {
+    kind              = .New,
+    agent_name        = "general",
+    model             = effective_model,
+    max_steps         = effective_max_steps,
+    max_tokens        = effective_max_tokens,
+    base_system_prompt = base_prompt,   // nil = SDK 内置
+    tools             = active_tool_names,
+}
+for section in app_sections {           // 环境/技能/记忆/agent 正文/追加
+    apcore.session_options_append(&opts, section)
+}
+
+session, info, err := apcore.session_open(&env, opts)
+result, err := apcore.turn_run(&session, prompt, &cancel, emitter)
+```
+
+不再提供 `all_tool_names` / `select_tools` / `tool_name_known` / `list_tools_text` / `list_skills_text`。宿主用 `ap-core/tool` 的注册表与自己的应用层配置完成白名单、技能发现与文本输出。
+
+## 12. 相关文档
 
 - [cli-and-config.md](cli-and-config.md)：CLI 参数、输出格式、退出码、配置、工作区布局、项目识别
 - [react-loop-and-session.md](react-loop-and-session.md)：事件 schema、stream 事件、恢复与 fork

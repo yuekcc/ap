@@ -1,13 +1,15 @@
 package apcli
 
 import apcore "../ap-core"
+import aptools "tools"
+
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
 
-// settings.json 属于应用层配置：由 ap-cli 读取、校验，再把结果作为
-// apcore.Settings 传给 SDK。apcore 不打开这个文件。
+// settings.json 属于应用层配置：一次读取，再拆成 SDK Settings 与工具配置。
+// apcore 不打开这个文件，也不认识工具超时/深度字段。
 
 known_setting_keys := [11]string {
 	"model",
@@ -21,6 +23,12 @@ known_setting_keys := [11]string {
 	"blob_threshold_bytes",
 	"max_capture_bytes",
 	"stream_include_usage",
+}
+
+Loaded_Settings :: struct {
+	sdk:  apcore.Settings,
+	tool: aptools.Tool_Config,
+	path: string,
 }
 
 json_get_string :: proc(obj: json.Object, key: string, out: ^string) -> apcore.Error {
@@ -75,25 +83,33 @@ json_get_bool :: proc(obj: json.Object, key: string, out: ^bool) -> apcore.Error
 	return apcore.ok_error()
 }
 
-load_settings :: proc(config_dir: string) -> (apcore.Settings, apcore.Error) {
-	s := apcore.settings_defaults()
-	s.path = fmt.tprintf("%s/settings.json", config_dir)
-	data, derr := os.read_entire_file_from_path(s.path, context.allocator)
+load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Settings, apcore.Error) {
+	loaded := Loaded_Settings {
+		sdk = apcore.settings_defaults(),
+		tool = aptools.Tool_Config {
+			config_dir = config_dir,
+			tool_timeout_ms = 120000,
+			max_capture_bytes = 67108864,
+			max_agent_depth = 1,
+		},
+		path = fmt.tprintf("%s/settings.json", config_dir),
+	}
+	data, derr := os.read_entire_file_from_path(loaded.path, context.allocator)
 	if derr != nil {
-		return s, apcore.errorf(
+		return loaded, apcore.errorf(
 			.Usage,
 			"cannot read config file %s: %v\nhint: create it with model and api_key (see settings.example.json), or pass --config-dir",
-			s.path,
+			loaded.path,
 			derr,
 		)
 	}
 	value, perr := json.parse_string(string(data), .JSON, true)
 	if perr != nil {
-		return s, apcore.errorf(.Usage, "invalid JSON in %s: %v", s.path, perr)
+		return loaded, apcore.errorf(.Usage, "invalid JSON in %s: %v", loaded.path, perr)
 	}
 	obj, is_obj := value.(json.Object)
 	if !is_obj {
-		return s, apcore.errorf(.Usage, "%s must contain a JSON object", s.path)
+		return loaded, apcore.errorf(.Usage, "%s must contain a JSON object", loaded.path)
 	}
 
 	for key in obj {
@@ -109,67 +125,69 @@ load_settings :: proc(config_dir: string) -> (apcore.Settings, apcore.Error) {
 		}
 	}
 
-	if err := json_get_string(obj, "model", &s.model); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_string(obj, "model", &loaded.sdk.model); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_string(obj, "base_url", &s.base_url); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_string(obj, "base_url", &loaded.sdk.base_url); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_string(obj, "api_key", &s.api_key); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_string(obj, "api_key", &loaded.sdk.api_key); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "max_steps", &s.max_steps); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "max_steps", &loaded.sdk.max_steps); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "max_agent_depth", &s.max_agent_depth); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "max_agent_depth", &loaded.tool.max_agent_depth); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "max_tokens", &s.max_tokens); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "max_tokens", &loaded.sdk.max_tokens); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "tool_timeout_ms", &s.tool_timeout_ms); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "tool_timeout_ms", &loaded.tool.tool_timeout_ms); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "llm_timeout_ms", &s.llm_timeout_ms); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "llm_timeout_ms", &loaded.sdk.llm_timeout_ms); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "blob_threshold_bytes", &s.blob_threshold_bytes); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "blob_threshold_bytes", &loaded.sdk.blob_threshold_bytes); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_int(obj, "max_capture_bytes", &s.max_capture_bytes); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_int(obj, "max_capture_bytes", &loaded.tool.max_capture_bytes); !apcore.is_ok(err) {
+		return loaded, err
 	}
-	if err := json_get_bool(obj, "stream_include_usage", &s.stream_include_usage); !apcore.is_ok(err) {
-		return s, err
+	if err := json_get_bool(obj, "stream_include_usage", &loaded.sdk.stream_include_usage); !apcore.is_ok(err) {
+		return loaded, err
 	}
 
 	if env_key := os.get_env("AP_API_KEY", context.allocator); len(env_key) > 0 {
-		s.api_key = env_key
+		loaded.sdk.api_key = env_key
 	}
-	if len(s.model) == 0 {
-		return s, apcore.errorf(.Usage, "settings.json: model is required")
+	if len(loaded.sdk.model) == 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: model is required")
 	}
-	if len(s.api_key) == 0 {
-		return s, apcore.errorf(.Usage, "model API key is missing: set api_key in %s or AP_API_KEY", s.path)
+	if require_api_key && len(loaded.sdk.api_key) == 0 {
+		return loaded, apcore.errorf(.Usage, "model API key is missing: set api_key in %s or AP_API_KEY", loaded.path)
 	}
-	if s.max_steps <= 0 {
-		return s, apcore.errorf(.Usage, "settings.json: max_steps must be positive")
+	if loaded.sdk.max_steps <= 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: max_steps must be positive")
 	}
-	if s.max_agent_depth < 0 {
-		return s, apcore.errorf(.Usage, "settings.json: max_agent_depth must be non-negative")
+	if loaded.tool.max_agent_depth < 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: max_agent_depth must be non-negative")
 	}
-	if s.max_tokens <= 0 {
-		return s, apcore.errorf(.Usage, "settings.json: max_tokens must be positive")
+	if loaded.sdk.max_tokens <= 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: max_tokens must be positive")
 	}
-	if s.tool_timeout_ms <= 0 || s.llm_timeout_ms <= 0 {
-		return s, apcore.errorf(.Usage, "settings.json: timeouts must be positive")
+	if loaded.tool.tool_timeout_ms <= 0 || loaded.sdk.llm_timeout_ms <= 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: timeouts must be positive")
 	}
-	if s.blob_threshold_bytes <= 0 || s.max_capture_bytes <= 0 {
-		return s, apcore.errorf(.Usage, "settings.json: size limits must be positive")
+	if loaded.sdk.blob_threshold_bytes <= 0 || loaded.tool.max_capture_bytes <= 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: size limits must be positive")
 	}
-	s.base_url = strings.trim_right(s.base_url, "/")
-	if len(s.base_url) == 0 {
-		return s, apcore.errorf(.Usage, "settings.json: base_url must not be empty")
+	loaded.sdk.base_url = strings.trim_right(loaded.sdk.base_url, "/")
+	if len(loaded.sdk.base_url) == 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: base_url must not be empty")
 	}
-	return s, apcore.ok_error()
+	loaded.tool.model = loaded.sdk.model
+	loaded.tool.max_steps = loaded.sdk.max_steps
+	return loaded, apcore.ok_error()
 }

@@ -1,6 +1,6 @@
-package engine
+package apskills
 
-import "../platform"
+import platform "../../ap-core/platform"
 
 import "core:fmt"
 import "core:os"
@@ -144,7 +144,6 @@ collect_skill_dirs :: proc(dirs: ^[dynamic]string, skills_home: string) {
 	}
 	entries, derr := os.read_directory_by_path(skills_home, -1, context.allocator)
 	if derr != nil {
-		log_debug("cannot list skills directory %s: %v", skills_home, derr)
 		return
 	}
 	defer os.file_info_slice_delete(entries, context.allocator)

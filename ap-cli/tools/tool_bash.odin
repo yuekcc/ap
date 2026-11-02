@@ -1,6 +1,7 @@
-package engine
+package aptools
 
-import "../platform"
+import platform "../../ap-core/platform"
+import tool "../../ap-core/tool"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -30,50 +31,50 @@ bash_output_prefix :: proc(text: string, max_lines: int) -> (string, int) {
 }
 
 bash_update :: proc(user: rawptr, chunk: string) {
-	ctx := (^Tool_Context)(user)
+	ctx := (^tool.Tool_Context)(user)
 	if ctx.on_update != nil {
 		ctx.on_update(ctx.update_user, chunk)
 	}
 }
 
-tool_bash :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
-	command, cerr := tool_arg_string(args, "command")
-	if !is_ok(cerr) {
+tool_bash :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	command, cerr := tool.tool_arg_string(args, "command")
+	if !platform.is_ok(cerr) {
 		return arg_error(cerr)
 	}
 	if len(command) == 0 {
-		return tool_fail("command must not be empty")
+		return tool.tool_fail("command must not be empty")
 	}
 	if utf8.rune_count(command) > BASH_COMMAND_MAX_CHARS {
-		return tool_fail(fmt.tprintf("command exceeds %d characters", BASH_COMMAND_MAX_CHARS))
+		return tool.tool_fail(fmt.tprintf("command exceeds %d characters", BASH_COMMAND_MAX_CHARS))
 	}
 	if len(command) > BASH_COMMAND_MAX_CHARS * 4 {
-		return tool_fail("command is too long in bytes")
+		return tool.tool_fail("command is too long in bytes")
 	}
-	timeout_ms := min(ctx.settings.tool_timeout_ms, BASH_TIMEOUT_MAX_MS)
-	if value, err := tool_arg_optional_int(args, "timeout_ms"); !is_ok(err) {
+	timeout_ms := min(cfg.tool_timeout_ms, BASH_TIMEOUT_MAX_MS)
+	if value, err := tool.tool_arg_optional_int(args, "timeout_ms"); !platform.is_ok(err) {
 		return arg_error(err)
 	} else if v, ok := value.?; ok {
 		timeout_ms = v
 	}
 	if timeout_ms <= 0 {
-		return tool_fail("timeout_ms must be positive")
+		return tool.tool_fail("timeout_ms must be positive")
 	}
 	if timeout_ms > BASH_TIMEOUT_MAX_MS {
-		return tool_fail(fmt.tprintf("timeout_ms exceeds maximum (%d)", BASH_TIMEOUT_MAX_MS))
+		return tool.tool_fail(fmt.tprintf("timeout_ms exceeds maximum (%d)", BASH_TIMEOUT_MAX_MS))
 	}
-	if len(ctx.bash_path) == 0 {
-		return tool_fail("bash is not available")
+	if len(cfg.bash_path) == 0 {
+		return tool.tool_fail("bash is not available")
 	}
 
 	env := filter_env_without("AP_API_KEY")
 	result := run_child(
 		{
-			command = []string{ctx.bash_path, "-c", command},
+			command = []string{cfg.bash_path, "-c", command},
 			cwd = ctx.cwd,
 			env = env,
 			timeout_ms = timeout_ms,
-			max_capture_bytes = ctx.settings.max_capture_bytes,
+			max_capture_bytes = cfg.max_capture_bytes,
 			cancel = ctx.cancel,
 			on_stdout = bash_update,
 			on_stderr = bash_update,
@@ -82,21 +83,21 @@ tool_bash :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 	)
 	defer free_run_result(&result)
 	if !result.spawned {
-		failed := tool_fail(result.error)
+		failed := tool.tool_fail(result.error)
 		failed.fatal = true
 		return failed
 	}
 	if result.cancelled {
-		return tool_fail("cancelled")
+		return tool.tool_fail("cancelled")
 	}
 	if result.timed_out {
-		return tool_fail(fmt.tprintf("timeout after %dms", timeout_ms))
+		return tool.tool_fail(fmt.tprintf("timeout after %dms", timeout_ms))
 	}
 	if result.overflow {
-		return tool_fail(fmt.tprintf("output exceeded %d bytes", ctx.settings.max_capture_bytes))
+		return tool.tool_fail(fmt.tprintf("output exceeded %d bytes", cfg.max_capture_bytes))
 	}
 	if len(result.error) > 0 {
-		failed := tool_fail(result.error)
+		failed := tool.tool_fail(result.error)
 		failed.fatal = true
 		return failed
 	}
@@ -110,8 +111,8 @@ tool_bash :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 		if len(preview) == 0 || preview[len(preview) - 1] != '\n' {
 			strings.write_byte(&b, '\n')
 		}
-		path, werr := blob_write_text(ctx.project, transmute([]byte)output)
-		if is_ok(werr) {
+		path, werr := platform.blob_write_text(ctx.project, transmute([]byte)output)
+		if platform.is_ok(werr) {
 			fmt.sbprintf(
 				&b,
 				"[共 %d 行，已返回 1-%d；完整输出已保存到 %s；继续请用 read_file(file_path=%q, start_line=%d)]",
@@ -131,7 +132,7 @@ tool_bash :: proc(args: json.Object, ctx: ^Tool_Context) -> Tool_Result {
 			)
 		}
 	}
-	res := tool_ok(strings.to_string(b))
+	res := tool.tool_ok(strings.to_string(b))
 	res.exit_code = result.exit_code
 	return res
 }
