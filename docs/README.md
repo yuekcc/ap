@@ -26,7 +26,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 2. 工具执行审批、权限规则、沙箱
 3. 上下文压缩、token 预算；压缩能力后续由 **handoff** 取代
 4. Hooks（PreToolUse / PostToolUse 等拦截机制）
-5. Plan mode、多 agent 并行编排（`magi-cli` 的三角色并行投票是独立组件，不属于 ap 本体）
+5. Plan mode、多 agent 并行编排（`magi` 的三角色并行投票是独立组件，不属于 ap 本体）
 6. MCP、插件系统
 7. 内置 WebFetch / WebSearch
 8. ap 本体不做图形界面、IDE 插件、Web 界面；浏览器界面由独立的 `ap-web` 提供
@@ -105,7 +105,7 @@ ReAct Loop（react-loop-and-session.md）
 
 ap（经 `apcore` 门面）、ap-tui 与 ap-web 共用 `ap-core/platform` 的路径、project、session、blob 与平台原语；前端通过 `ap-core/client` + `ap-core/protocol` 使用，见 [architecture.md](architecture.md) 与 [dependencies.md](dependencies.md)。
 
-`magi-cli` 是第二类进程内宿主：它只 import `apcore` 与 `ap-core/platform`，为每名成员各开一个隔离 session，不经过 `ap` 可执行文件，也不链接 `ap-cli`。见 [magi.md](magi.md)。
+`magi` 是第二类进程内宿主：它只 import `apcore` 与 `ap-core/platform`，为每名成员各开一个隔离 session，不经过 `ap` 可执行文件，也不链接 `ap-cli`。见 [magi.md](magi.md)。
 
 ## 文档地图
 
@@ -124,7 +124,7 @@ ap（经 `apcore` 门面）、ap-tui 与 ap-web 共用 `ap-core/platform` 的路
 | [tui.md](tui.md) | `ap-tui` 的进程模型、session 管理、历史重放、渲染与输入层 | 已实现 phase 1 |
 | [web.md](web.md) | `ap-web`（单 exe：HTTP+SSE 服务器 + 内置 Alpine.js 前端） | 已实现 phase 1 |
 | [integration.md](integration.md) | 新前端接入 ap.exe 的集成指南：进程契约、turn 生命周期、事件解析、session/历史、取消与并发 | 定稿 v1 |
-| [magi.md](magi.md) | `magi-cli`：三角色投票、一票否决、输入输出契约、失败与审计 | 定稿 v1 |
+| [magi.md](magi.md) | `magi`：三角色投票、一票否决、输入输出契约、失败与审计 | 定稿 v1 |
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 | 定稿 v1 |
 
 ## 参考 Claude Code 的取舍

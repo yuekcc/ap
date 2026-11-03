@@ -1,5 +1,5 @@
 #+build windows
-package magicli
+package magi
 
 import platform "../ap-core/platform"
 import "core:os"

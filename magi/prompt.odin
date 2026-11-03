@@ -1,4 +1,4 @@
-package magicli
+package magi
 
 import "core:fmt"
 import "core:strings"

@@ -81,13 +81,13 @@ function Test-ImportRules {
         }
     }
 
-    Get-ChildItem "magi-cli/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+    Get-ChildItem "magi/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
         $file = $_.FullName
         Get-Content $file | ForEach-Object {
             if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
                 $path = $Matches[1]
                 if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core$|\.\./ap-core/platform$)') {
-                    Fail-Check ('{0}: magi-cli 不允许 import "{1}"（只允许 apcore、platform）' -f $file, $path)
+                    Fail-Check ('{0}: magi 不允许 import "{1}"（只允许 apcore、platform）' -f $file, $path)
                 }
             }
         }
@@ -154,7 +154,7 @@ function Test-ImportRules {
     Get-ChildItem "cmd/*/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
         $file = $_.FullName
         $entry = $_.Directory.Name
-        $own = if ($entry -eq "ap") { "../../ap-cli" } else { "../../$entry" }
+        $own = if ($entry -eq "ap") { "../../ap-cli" } elseif ($entry -eq "magi-cli") { "../../magi" } else { "../../$entry" }
         Get-Content $file | ForEach-Object {
             if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
                 $path = $Matches[1]

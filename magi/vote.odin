@@ -1,4 +1,4 @@
-package magicli
+package magi
 
 import platform "../ap-core/platform"
 

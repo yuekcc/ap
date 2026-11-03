@@ -124,7 +124,7 @@ check_imports() {
 		done <"$f"
 	done
 
-	for f in magi-cli/*.odin; do
+	for f in magi/*.odin; do
 		[ -f "$f" ] || continue
 		while IFS= read -r line; do
 			t=${line#"${line%%[![:space:]]*}"}
@@ -136,7 +136,7 @@ check_imports() {
 				case "$path" in
 				core:* | base:* | vendor:* | ../ap-core | ../ap-core/platform) ;;
 				*)
-					echo "check-deps: $f: magi-cli 不允许 import \"$path\"（只允许 apcore、platform）"
+					echo "check-deps: $f: magi 不允许 import \"$path\"（只允许 apcore、platform）"
 					fail=1
 					;;
 				esac
@@ -244,6 +244,7 @@ check_imports() {
 		entry=${entry%%/*}
 		case "$entry" in
 		ap) own="../../ap-cli" ;;
+		magi-cli) own="../../magi" ;;
 		*) own="../../$entry" ;;
 		esac
 		while IFS= read -r line; do

@@ -1,4 +1,4 @@
-package magicli
+package magi
 
 import apcore "../ap-core"
 import platform "../ap-core/platform"
@@ -10,7 +10,7 @@ import "core:strconv"
 import "core:strings"
 
 // CLI 参数与输入解析。SDK 不读 argv，也不隐式读 stdin；
-// 这些语义都属于 magicli。
+// 这些语义都属于 magi。
 
 Output_Format :: enum {
 	Json,

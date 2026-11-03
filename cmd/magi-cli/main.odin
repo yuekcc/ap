@@ -1,8 +1,8 @@
 package main
 
 import "core:os"
-import magicli "../../magi-cli"
+import magi "../../magi"
 
 main :: proc() {
-	os.exit(magicli.run(os.args))
+	os.exit(magi.run(os.args))
 }

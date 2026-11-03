@@ -172,7 +172,7 @@ cmd/ap ──► ap-cli（组装根）──► apcore（SDK 门面）──► 
 cmd/ap-tui ──► ap-tui ──┐
 cmd/ap-web ──► ap-web ──┴──► ap-core/client + ap-core/protocol
 
-cmd/magi-cli ──► magi-cli ──► apcore ──► engine
+cmd/magi-cli ──► magi ──► apcore ──► engine
                               └──► ap-core/platform
 ```
 
@@ -188,7 +188,7 @@ cmd/magi-cli ──► magi-cli ──► apcore ──► engine
 | `ap-core/protocol/` | 事件 schema、宽松解析、行分帧，只依赖 `core:` |
 | `ap-core/client/` | 前端 kit：spawn、逐行泵事件、只读 session 访问 |
 | `ap-tui/`、`ap-web/` | 前端库；本地包只允许 `ap-core/client` 与 `ap-core/protocol`，另可用 `core:` |
-| `magi-cli/` | MAGI 决策器：参数、输入、三角色提示词、并行投票、一票否决与输出 |
+| `magi/` | MAGI 决策器：参数、输入、三角色提示词、并行投票、一票否决与输出 |
 | `cmd/` | 四个薄入口，只 import 对应的库包 |
 
 依赖方向是单向的。`ap-cli` 不能直接 import `engine`；SDK 不读 argv、环境变量、`settings.json`，也不写 stdout、不装信号；前端不 import agent 代码。这些边由 `tools/check-deps.sh` 在构建和测试时强制，改 import 后先跑它。完整规则见 [docs/architecture.md](docs/architecture.md) 和 [docs/dependencies.md](docs/dependencies.md)。
@@ -216,7 +216,7 @@ transcript 只追加完整事件；恢复时唯一允许的物理改动是截掉
 ./test.sh
 ```
 
-脚本依次测试 `ap-core/protocol`、`platform`、`client`、`tool`、`engine`、`apcore`、`ap-cli`、`magi-cli`、`ap-tui`、`ap-web`，最后运行 `tools/check-deps.sh`。测试离线，不调用真实 LLM。前端测试单独跑：
+脚本依次测试 `ap-core/protocol`、`platform`、`client`、`tool`、`engine`、`apcore`、`ap-cli`、`magi`、`ap-tui`、`ap-web`，最后运行 `tools/check-deps.sh`。测试离线，不调用真实 LLM。前端测试单独跑：
 
 ```sh
 npm --prefix ap-web test

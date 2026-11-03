@@ -1,4 +1,4 @@
-package magicli
+package magi
 
 import apcore "../ap-core"
 
@@ -7,7 +7,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 
-// magi-cli 复用 ap 的 $AP_CONFIG/settings.json，但只读取自己需要的字段。
+// magi 复用 ap 的 $AP_CONFIG/settings.json，但只读取自己需要的字段。
 // 这里不读工具超时、agent 深度等应用层配置；apcore 不认识这个文件。
 
 Loaded_Settings :: struct {

@@ -1,4 +1,4 @@
-package magicli
+package magi
 
 import apcore "../ap-core"
 import platform "../ap-core/platform"
@@ -9,7 +9,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 
-// magi-cli 的组装根：解析请求 → 打开 SDK Env → 三名成员各自跑一个隔离 session →
+// magi 的组装根：解析请求 → 打开 SDK Env → 三名成员各自跑一个隔离 session →
 // 纯函数聚合 → 输出决议。SDK 不读 argv/settings，这些都在这里完成。
 
 VERSION :: "0.1.0"

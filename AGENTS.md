@@ -33,7 +33,7 @@ npm --prefix ap-web test   # 前端单元测试
 odin test ap-core/engine -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
-odin test magi-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 测试不调用真实 LLM，也不依赖外网。需要 HTTP 或 agent 时使用本地替身，例如 `ap-web/testdata/fake_agent/`。
@@ -55,7 +55,7 @@ odin test magi-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | `ap-core/protocol` | 事件 schema、解析、行分帧、usage | 只依赖 `core:` |
 | `ap-core/client` | 前端 kit：spawn、逐行泵、取消、只读 session | 不 import engine 或 `apcore` |
 | `ap-tui`、`ap-web` | 前端库，提供 `run` | 本地包只允许 `ap-core/client` 和 `ap-core/protocol`，另可用 `core:`/`vendor:`；不互相 import |
-| `magi-cli`（`magicli`） | 三角色投票 CLI：参数、输入、提示词、并行 session、一票否决 | 不直接 import `ap-core/engine`、`ap-cli` 或前端；不执行工具 |
+| `magi` | 三角色投票 CLI：参数、输入、提示词、并行 session、一票否决 | 不直接 import `ap-core/engine`、`ap-cli` 或前端；不执行工具 |
 
 改 import 后先跑 `tools/check-deps.sh`。不要用别名、条件编译或注释绕过检查器；需要放宽边界时，先改规格和检查器。
 
@@ -70,14 +70,14 @@ odin test magi-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 7. **工具串行且无状态。** 一个 step 内的多个 tool call 按顺序执行，不共享 cwd、环境变量或 shell 变量。
 8. **blob 先写后引用。** blob 必须 fsync 后再追加引用它的事件。blob 缺失时恢复失败，不静默降级。
 9. **不做隐藏的安全拦截。** 当前是全自动、无审批、无沙箱。不要顺手加入审批、沙箱或权限规则；这类变更先写规格。
-10. **退出码由 CLI adapter 统一映射。** SDK 和工具返回错误值，不调用 `os.exit`；`ap-cli` 与 `magi-cli` 各自映射自己的退出码。
+10. **退出码由 CLI adapter 统一映射。** SDK 和工具返回错误值，不调用 `os.exit`；`ap-cli` 与 `magi` 各自映射自己的退出码。
 
 ## 改动地图
 
 | 要改什么 | 从哪里开始 | 同步更新 |
 | --- | --- | --- |
 | CLI 参数 | `ap-cli/options.odin`、`ap-cli/run.odin` | `print_usage`、`options_test.odin`、`docs/cli-and-config.md` |
-| `settings.json` | `ap-cli/settings.odin`、`magi-cli/settings.odin` | `settings.example.json`、`docs/cli-and-config.md` |
+| `settings.json` | `ap-cli/settings.odin`、`magi/settings.odin` | `settings.example.json`、`docs/cli-and-config.md` |
 | 输出格式或 stderr 排版 | `ap-cli/output.odin` | `docs/cli-and-config.md`、输出测试 |
 | 基础 system prompt | `ap-core/engine/prompts/system.md` | `docs/context-management.md`、`--print-system-prompt` 行为 |
 | 应用层 prompt sections | `ap-cli/prompt.odin` | `prompt_test.odin`、`docs/context-management.md` |
@@ -92,7 +92,7 @@ odin test magi-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | TUI | `ap-tui/` | `docs/tui.md`、`tui_test.odin` |
 | Web 后端 | `ap-web/server.odin`、`api.odin`、`sse.odin`、`runner.odin` | `docs/web.md`、对应 `*_test.odin` |
 | Web 前端 | `ap-web/frontend/` | 重新生成 `ap-web/dist/`，跑 `npm --prefix ap-web test`；不要手改 `dist/` |
-| MAGI 决策 | `magi-cli/`、`cmd/magi-cli/` | `docs/magi.md`、`docs/README.md`、README 的 MAGI 段落 |
+| MAGI 决策 | `magi/`、`cmd/magi-cli/` | `docs/magi.md`、`docs/README.md`、README 的 MAGI 段落 |
 | 包边界 | `tools/check-deps.sh`、`tools/check-deps.ps1` | `docs/dependencies.md`、`docs/architecture.md` |
 
 ## 代码约定

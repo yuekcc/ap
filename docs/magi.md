@@ -1,6 +1,6 @@
 # MAGI 决策 CLI
 
-`magi-cli` 是一个基于 `apcore` SDK 的独立决策程序：把一个问题和一个可选材料分别交给三名角色独立判断，再用**一票否决制**合成最终决议。它复用 ap 的 `settings.json`、provider、session 与 transcript 机制，但不执行工具，也不修改工作区。
+`magi`（可执行文件 `magi-cli`）是一个基于 `apcore` SDK 的独立决策程序：把一个问题和一个可选材料分别交给三名角色独立判断，再用**一票否决制**合成最终决议。它复用 ap 的 `settings.json`、provider、session 与 transcript 机制，但不执行工具，也不修改工作区。
 
 ```
 {question, context}
@@ -31,7 +31,7 @@
 
 ## 角色
 
-角色正文来自 `agent-things/magi` 的三份 agent 定义，编译期内嵌在 `magi-cli/prompts/`：
+角色正文来自 `agent-things/magi` 的三份 agent 定义，编译期内嵌在 `magi/prompts/`：
 
 | 成员 | 视角 | 关注点 |
 | --- | --- | --- |
@@ -227,7 +227,7 @@ balthasar-2.md / casper-3.md / melchior-1.md
 ## 测试
 
 ```sh
-odin test magi-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 单测覆盖投票解析、一票否决聚合、fail-closed、提示词组装和参数互斥。完整流程需要真实 provider；本地验证可用 OpenAI 兼容的 SSE 替身，不需要外网。
