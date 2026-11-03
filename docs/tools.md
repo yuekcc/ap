@@ -103,17 +103,23 @@ SDK 不认识具体工具名、工具参数或子代理命令行。`Tool.user` �
 2. 文件还有更多行时，结果末尾追加：`[共 N 行，已返回 X-Y；继续请用 start_line=Y+1]`
 3. `end_line` 超过文件尾时按实际行数返回，不报错
 4. 结果首行固定为元信息：`[<path> lines <start>-<end> of <total>]`
-5. 只支持 UTF-8；非 UTF-8 或二进制文件返回 `ok:false`，提示用 bash 处理
-6. 换行统一为 LF
-7. 文件不存在 / 无权限 / 是目录 → `ok:false`，错误信息说明原因
-8. `start_line` 大于文件总行数 → 返回空内容 + 元信息，不报错
-9. 单行本身超过 `max_capture_bytes` → `ok:false`，不返回半行
-10. 本次请求范围的累计输出超过 `max_capture_bytes` → `ok:false`，提示缩小 `start_line` / `end_line` 范围
+5. 元信息之后每行格式为 `<NNN>\t<content>`，`NNN` 是该行在文件中的实际行号（从 1 开始，不补零、不对齐），`content` 不含行号本身；行号前缀计入 `max_capture_bytes`
+6. 只支持 UTF-8；非 UTF-8 或二进制文件返回 `ok:false`，提示用 bash 处理
+7. 换行统一为 LF
+8. 文件不存在 / 无权限 / 是目录 → `ok:false`，错误信息说明原因
+9. `start_line` 大于文件总行数 → 返回空内容 + 元信息，不报错
+10. 单行本身超过 `max_capture_bytes` → `ok:false`，不返回半行
+11. 本次请求范围的累计输出（含行号前缀）超过 `max_capture_bytes` → `ok:false`，提示缩小 `start_line` / `end_line` 范围
 
 示例：
 
 ```
 read_file(file_path="ap-core/engine/loop.odin", start_line=1, end_line=500)
+
+[/path/to/ap-core/engine/loop.odin lines 1-3 of 1200]
+1	package engine
+2	
+3	import "core:fmt"
 ```
 
 `read_file` 与 `bash` 的 2000 行分页是唯一的范围限制；`bash` 超出部分写入 `.txt`，模型用 `read_file` 继续读。

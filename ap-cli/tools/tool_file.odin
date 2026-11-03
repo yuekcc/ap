@@ -58,11 +58,13 @@ read_file_stream :: proc(path: string, start_line, end_line, max_capture: int) -
 		}
 		line_number^ += 1
 		if line_number^ >= start_line && line_number^ <= end_line {
-			output_bytes^ += len(line) + 1
+			// 行号前缀让模型可以直接引用行，也方便 edit_file 定位；计入输出上限。
+			numbered := fmt.aprintf("%d\t%s", line_number^, string(line))
+			output_bytes^ += len(numbered) + 1
 			if output_bytes^ > max_capture {
 				return platform.errorf("read_file output exceeds max_capture_bytes (%d); request a smaller range", max_capture)
 			}
-			append(lines, strings.clone(string(line)))
+			append(lines, numbered)
 		}
 		return platform.ok_error()
 	}

@@ -16,7 +16,7 @@ Tool_Info :: struct {
 TOOL_INFOS := [5]Tool_Info {
 	{
 		name = "read_file",
-		description = "按行读取 UTF-8 文本文件；单次最多 2000 行，大文件用 start_line/end_line 分页读取，返回首行为元信息。",
+		description = "按行读取 UTF-8 文本文件；单次最多 2000 行，大文件用 start_line/end_line 分页读取。首行为元信息，其后每行格式为 `<NNN>\\t<content>`，NNN 是该行在文件中的实际行号（从 1 开始，不含补零或对齐）；内容本身不含行号，写回或匹配时不要带上它。",
 		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"start_line":{"type":"integer","minimum":1,"description":"起始行号（含），默认 1"},"end_line":{"type":"integer","minimum":1,"description":"结束行号（含），默认 start_line+499"}},"required":["file_path"],"additionalProperties":false}`,
 	},
 	{

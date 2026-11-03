@@ -126,7 +126,7 @@ test_read_file_basic_and_pagination :: proc(t: ^testing.T) {
 	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
 	testing.expect(t, res.ok)
 	testing.expect(t, test_contains(res.content, "lines 1-3 of 3"))
-	testing.expect(t, test_contains(res.content, "alpha\nbeta\ngamma"))
+	testing.expect(t, test_contains(res.content, "\n1\talpha\n2\tbeta\n3\tgamma"))
 
 	res2 := tool.tool_execute(
 		&tt.registry,
@@ -136,7 +136,7 @@ test_read_file_basic_and_pagination :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, res2.ok)
 	testing.expect(t, test_contains(res2.content, "lines 2-2 of 3"))
-	testing.expect(t, test_contains(res2.content, "\nbeta"))
+	testing.expect(t, test_contains(res2.content, "\n2\tbeta"))
 	testing.expect(t, test_contains(res2.content, "继续请用 start_line=3"))
 
 	res3 := tool.tool_execute(
@@ -157,7 +157,7 @@ test_read_file_crlf_and_utf8_errors :: proc(t: ^testing.T) {
 	test_write_file(crlf, "a\r\nb\r\n")
 	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, crlf))), &tt.ctx)
 	testing.expect(t, res.ok)
-	testing.expect(t, test_contains(res.content, "a\nb"))
+	testing.expect(t, test_contains(res.content, "\n1\ta\n2\tb"))
 	testing.expect(t, !test_contains(res.content, "\r"))
 
 	binary := fmt.tprintf("%s/bin.dat", tt.dir)
