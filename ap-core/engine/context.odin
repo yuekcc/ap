@@ -3,6 +3,7 @@ package engine
 import "../platform"
 import "../tool"
 
+import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -17,6 +18,9 @@ Chat_Tool_Function :: struct {
 	name:      string,
 	arguments: string,
 }
+
+// 文本块之间的分隔符。
+NEWLINE_SEP :: "\n"
 
 Chat_Message :: struct {
 	role:              string,
@@ -67,11 +71,23 @@ build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 }
 
 context_build :: proc(project: Project, events: []Event) -> (string, []Chat_Message, Error) {
-	_, system_prompt, serr := session_system_prompt(project, events)
+	return context_build_in(project, events, context.allocator)
+}
+
+// context_build_in 与 context_build 语义相同（仍是纯函数：同样的 transcript
+// 与 project 得到逐字节相同的 messages），只是把全部中间分配放到 allocator。
+// Loop 每个 step 都要重建一次上下文，用 step arena 承接这些分配可以随 step
+// 结束整体回收，调用方不必逐个 delete。
+context_build_in :: proc(
+	project: Project,
+	events: []Event,
+	allocator: runtime.Allocator,
+) -> (string, []Chat_Message, Error) {
+	_, system_prompt, serr := session_system_prompt_in(project, events, allocator)
 	if !is_ok(serr) {
 		return "", nil, serr
 	}
-	messages, merr := project_messages(project, events)
+	messages, merr := project_messages_in(project, events, allocator)
 	if !is_ok(merr) {
 		return "", nil, merr
 	}
@@ -79,17 +95,33 @@ context_build :: proc(project: Project, events: []Event) -> (string, []Chat_Mess
 }
 
 content_block_text :: proc(project: Project, block: Content_Block) -> (string, Error) {
-	text, err := tool.content_block_text(project, block)
+	return content_block_text_in(project, block, context.allocator)
+}
+
+content_block_text_in :: proc(
+	project: Project,
+	block: Content_Block,
+	allocator: runtime.Allocator,
+) -> (string, Error) {
+	text, err := tool.content_block_text_in(project, block, allocator)
 	return text, from_platform(err, .Usage)
 }
 
 content_block_input :: proc(project: Project, block: Content_Block) -> (json.Value, Error) {
+	return content_block_input_in(project, block, context.allocator)
+}
+
+content_block_input_in :: proc(
+	project: Project,
+	block: Content_Block,
+	allocator: runtime.Allocator,
+) -> (json.Value, Error) {
 	if ref, has_ref := block.input_ref.?; has_ref {
-		data, berr := blob_read(project, ref)
+		data, berr := blob_read(project, ref, allocator)
 		if !is_ok(berr) {
 			return nil, berr
 		}
-		value, perr := json.parse_string(string(data), .JSON, true)
+		value, perr := json.parse_string(string(data), .JSON, true, allocator)
 		if perr != nil {
 			return nil, make_error(.Usage, "tool input blob %s is not valid JSON: %v", ref, perr)
 		}
@@ -99,9 +131,17 @@ content_block_input :: proc(project: Project, block: Content_Block) -> (json.Val
 }
 
 tool_result_content :: proc(project: Project, end: Tool_Execution_End_Event) -> (string, Error) {
+	return tool_result_content_in(project, end, context.allocator)
+}
+
+tool_result_content_in :: proc(
+	project: Project,
+	end: Tool_Execution_End_Event,
+	allocator: runtime.Allocator,
+) -> (string, Error) {
 	content := ""
 	if ref, has_ref := end.content_ref.?; has_ref {
-		data, berr := blob_read(project, ref)
+		data, berr := blob_read(project, ref, allocator)
 		if !is_ok(berr) {
 			return "", berr
 		}
@@ -123,44 +163,52 @@ tool_result_content :: proc(project: Project, end: Tool_Execution_End_Event) -> 
 }
 
 project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, Error) {
+	return project_messages_in(project, events, context.allocator)
+}
+
+project_messages_in :: proc(
+	project: Project,
+	events: []Event,
+	allocator: runtime.Allocator,
+) -> ([]Chat_Message, Error) {
 	// 先收集 tool result，之后按 assistant 的 tool_use 顺序配对。
-	results := make(map[string]Tool_Execution_End_Event, 8)
+	results := make(map[string]Tool_Execution_End_Event, 8, allocator)
 	for ev in events {
 		if ev.type != "tool_execution_end" {
 			continue
 		}
 		end: Tool_Execution_End_Event
-		if uerr := json.unmarshal_string(ev.line, &end); uerr != nil {
+		if uerr := json.unmarshal_string(ev.line, &end, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
 			return nil, make_error(.Usage, "cannot parse tool_execution_end event: %v", uerr)
 		}
 		results[end.tool_call_id] = end
 	}
 
-	messages := make([dynamic]Chat_Message, 0, len(events))
+	messages := make([dynamic]Chat_Message, 0, len(events), allocator)
 	for ev in events {
 		switch ev.type {
 		case "user_message":
 			user: User_Message_Event
-			if uerr := json.unmarshal_string(ev.line, &user); uerr != nil {
+			if uerr := json.unmarshal_string(ev.line, &user, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
 				return nil, make_error(.Usage, "cannot parse user_message event: %v", uerr)
 			}
 			append_chat_message(&messages, Chat_Message{role = "user", content = user.content})
 		case "message_end":
 			end: Message_End_Event
-			if uerr := json.unmarshal_string(ev.line, &end); uerr != nil {
+			if uerr := json.unmarshal_string(ev.line, &end, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
 				return nil, make_error(.Usage, "cannot parse message_end event: %v", uerr)
 			}
 			if end.stop_reason == "cancelled" {
 				continue
 			}
 
-			text_parts := make([dynamic]string, 0, 2)
-			tool_calls := make([dynamic]Chat_Tool_Call, 0, 2)
+			text_parts := make([dynamic]string, 0, 2, allocator)
+			tool_calls := make([dynamic]Chat_Tool_Call, 0, 2, allocator)
 			has_any_block := false
 			for block in end.content {
 				switch block.type {
 				case "text":
-					text, terr := content_block_text(project, block)
+					text, terr := content_block_text_in(project, block, allocator)
 					if !is_ok(terr) {
 						return nil, terr
 					}
@@ -178,7 +226,7 @@ project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, 
 						// 未闭合的 tool call：投影时删除，不写修复事件。
 						continue
 					}
-					input, ierr := content_block_input(project, block)
+					input, ierr := content_block_input_in(project, block, allocator)
 					if !is_ok(ierr) {
 						return nil, ierr
 					}
@@ -207,13 +255,13 @@ project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, 
 				msg.reasoning_content = reasoning
 			}
 			if len(text_parts) > 0 {
-				msg.content = strings.join(text_parts[:], "\n", context.allocator)
+				msg.content = strings.join(text_parts[:], NEWLINE_SEP, allocator)
 			}
 			append_chat_message(&messages, msg)
 
 			for call in msg.tool_calls {
 				end := results[call.id]
-				content, rerr := tool_result_content(project, end)
+				content, rerr := tool_result_content_in(project, end, allocator)
 				if !is_ok(rerr) {
 					return nil, rerr
 				}

@@ -4,7 +4,9 @@ import "../platform"
 
 import "core:encoding/json"
 import "core:fmt"
+import "core:mem"
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 test_project_and_settings :: proc(t: ^testing.T, name: string) -> (Project, Settings, string) {
@@ -325,4 +327,50 @@ test_transcript_writes_unicode_without_escaping :: proc(t: ^testing.T) {
 	parsed: User_Message_Event
 	testing.expect_value(t, json.unmarshal_string(events[0].line, &parsed), nil)
 	testing.expect_value(t, parsed.content, "中文内容")
+}
+
+// 长对话里每条事件都会做一次序列化 + 规范化。如果这些中间结果不释放，
+// 内存会随事件数线性泄漏。这里用 tracking allocator 断言：
+// 追加 N 条事件后，净分配只应接近事件行本身，不能是它的数倍。
+@(test)
+test_transcript_append_does_not_leak_per_event :: proc(t: ^testing.T) {
+	project, settings, dir := test_project_and_settings(t, "transcript-leak")
+	defer test_cleanup(dir)
+
+	store, serr := new_transcript_store(project, "sess-leak", &settings)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
+	defer transcript_close(&store)
+
+	payload := strings.repeat("x", 512)
+	ta: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&ta, context.allocator)
+	old := context.allocator
+	context.allocator = mem.tracking_allocator(&ta)
+	defer {
+		context.allocator = old
+	}
+
+	EVENTS :: 200
+	before := ta.current_memory_allocated
+	for _ in 0 ..< EVENTS {
+		ev := User_Message_Event {
+			header  = make_header(&store, "user_message"),
+			content = payload,
+		}
+		_, aerr := transcript_append_line(&store, ev)
+		testing.expect_value(t, aerr.kind, Error_Kind.None)
+	}
+	after := ta.current_memory_allocated
+	// 每条事件真正需要留下的只有返回行（约 600 字节）。
+	// 留 4 倍余量，但远小于「每条事件多留一棵 JSON 树加两份字节」的量级。
+	per_event := (after - before) / EVENTS
+	testing.expectf(
+		t,
+		per_event < 2500,
+		"per-event retained memory is %d bytes;中间序列化结果没有被释放",
+		per_event,
+	)
+
+	context.allocator = old
+	mem.tracking_allocator_destroy(&ta)
 }

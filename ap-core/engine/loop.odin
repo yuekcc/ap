@@ -3,13 +3,45 @@ package engine
 import "../platform"
 import "../tool"
 
+import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
+import "core:mem/virtual"
 import "core:strings"
 import "core:time"
 import uuid "core:encoding/uuid"
 
 MAX_LLM_RETRIES :: 5
+
+// ---- 每 step 的临时分配区 ----
+//
+// context_build 按契约必须从完整 transcript 重新投影，所以每个 step 都会
+// 产生一份新的 messages、arguments 字符串与请求体。它们的生命周期只有
+// 一个 step，用 arena 一次性回收，避免长对话里 message 数量平方级增长。
+Step_Arena :: struct {
+	arena: virtual.Arena,
+	alloc: runtime.Allocator,
+}
+
+step_arena_init :: proc(sa: ^Step_Arena) -> bool {
+	if virtual.arena_init_growing(&sa.arena) != nil {
+		return false
+	}
+	sa.alloc = virtual.arena_allocator(&sa.arena)
+	return true
+}
+
+step_arena_destroy :: proc(sa: ^Step_Arena) {
+	virtual.arena_destroy(&sa.arena)
+	sa.alloc = {}
+}
+
+step_arena_allocator :: proc(sa: ^Step_Arena, enabled: bool) -> runtime.Allocator {
+	if !enabled {
+		return context.allocator
+	}
+	return sa.alloc
+}
 
 // 进度输出的排版提示：Block 是独立的 markdown 块（标题行、状态行），
 // 输出端在块之间插入空行；Line 与上文同属一块，逐行追加。
@@ -27,6 +59,8 @@ Emitter :: struct {
 
 Loop_Result :: struct {
 	stop_reason:  string,
+	// 最终 assistant 文本的独立副本，归调用方所有（需要释放）。
+	// 不能指向 Loop.last_text：loop 销毁后它就失效了。
 	result_text:  string,
 	num_steps:    int,
 	usage:        Usage,
@@ -63,6 +97,8 @@ Loop :: struct {
 	cancel:         ^platform.Cancel_Token,
 	emitter:        Emitter,
 	events:         [dynamic]Event,
+	// loop_init 复制进来的历史事件不属于 loop，销毁时不能释放它们的行。
+	initial_event_count: int,
 	historical_usage: Usage,
 	turn_usage:     Usage,
 	turn:           int,
@@ -76,6 +112,10 @@ Loop :: struct {
 	pending_end_seen: bool,
 	last_text:      string,
 	callback_error: Error,
+	// provider 会把 message_id / tool call id/name 借给 loop 使用；assembler
+	// 的临时缓冲在 provider_stream 返回时释放，所以 loop 需要自己持有副本。
+	owned_message_id: string,
+	owned_calls:      []Assembled_Tool_Call,
 }
 
 loop_default_sleep :: proc(ms: int) {
@@ -144,13 +184,32 @@ loop_init :: proc(
 	}
 	loop.events = make([dynamic]Event, len(events), len(events) + 16)
 	copy(loop.events[:], events)
+	loop.initial_event_count = len(events)
 	loop.attempt_text = make([dynamic]byte, 0, 256)
 	return loop
 }
 
 loop_destroy :: proc(l: ^Loop) {
+	// l.events 的前 len(initial_events) 项由调用方（session.events）持有，
+	// 只释放本 loop 追加的那部分行。type 永远是静态字面量，不释放。
+	for i in l.initial_event_count ..< len(l.events) {
+		delete(l.events[i].line)
+	}
 	delete(l.events)
 	delete(l.attempt_text)
+	delete(l.last_text)
+	loop_release_owned(l)
+}
+
+loop_release_owned :: proc(l: ^Loop) {
+	delete(l.owned_message_id)
+	l.owned_message_id = ""
+	for call in l.owned_calls {
+		delete(call.id)
+		delete(call.name)
+	}
+	delete(l.owned_calls)
+	l.owned_calls = nil
 }
 
 loop_append :: proc(l: ^Loop, event: any, header: Event_Header) -> Error {
@@ -276,6 +335,8 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 		return err
 	}
 	if len(end.text) > 0 {
+		// 每步都会走到这里；先释放上一步的副本，否则一个 turn 里每次覆盖都漏一份。
+		delete(l.last_text)
 		l.last_text = strings.clone(end.text)
 	}
 	l.message_started = false
@@ -288,7 +349,9 @@ loop_provider_event :: proc(user: rawptr, event: Provider_Event) {
 	switch ev in event {
 	case Provider_Message_Start:
 		if len(ev.message_id) > 0 {
-			l.current_message_id = ev.message_id
+			delete(l.owned_message_id)
+			l.owned_message_id = strings.clone(ev.message_id)
+			l.current_message_id = l.owned_message_id
 		}
 		if err := loop_start_message(l, ev.model); !is_ok(err) {
 			l.callback_error = err
@@ -317,7 +380,8 @@ loop_provider_event :: proc(user: rawptr, event: Provider_Event) {
 		}
 	case Provider_Tool_End:
 	case Provider_Message_End:
-		l.pending_calls = ev.tool_calls
+		loop_own_calls(l, ev.tool_calls)
+		l.pending_calls = l.owned_calls
 		l.pending_stop = ev.stop_reason
 		l.pending_end_seen = true
 		if err := loop_write_message_end(l, ev); !is_ok(err) {
@@ -517,6 +581,7 @@ loop_reset_attempt :: proc(l: ^Loop) {
 	l.current_tool_call_id = ""
 	l.attempt_had_text = false
 	clear(&l.attempt_text)
+	loop_release_owned(l)
 	l.pending_calls = nil
 	l.pending_stop = .Stop
 	l.pending_end_seen = false
@@ -526,6 +591,8 @@ loop_reset_attempt :: proc(l: ^Loop) {
 loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	result.error_kind = .None
 	l.turn_usage = Usage{}
+	// 上一轮的结果文本已随 Loop_Result 交给调用方（独立副本），这里释放 loop 内的。
+	delete(l.last_text)
 	l.last_text = ""
 
 	h_user := make_header(l.store, "user_message")
@@ -558,7 +625,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if step >= l.max_steps {
 			_ = loop_write_turn_end(l, "max_steps")
 			result.stop_reason = "max_steps"
-			result.result_text = l.last_text
+			result.result_text = strings.clone(l.last_text)
 			result.num_steps = step
 			result.usage = l.turn_usage
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
@@ -574,7 +641,20 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		}
 		progress(l, .Block, "## Step %d", step)
 
-		system_prompt, messages, cerr := context_build(l.project, l.events[:])
+		// 一个 step 的上下文、工具定义与请求体只活到本 step 结束。
+		// 用 arena 统一回收：长对话里这些中间量随 message 数线性增长，
+		// 每 step 都不释放会让进程内存在 turn 内平方级上涨。
+		step_arena: Step_Arena
+		arena_ok := step_arena_init(&step_arena)
+		defer if arena_ok {
+			step_arena_destroy(&step_arena)
+		}
+
+		system_prompt, messages, cerr := context_build_in(
+			l.project,
+			l.events[:],
+			step_arena_allocator(&step_arena, arena_ok),
+		)
 		if !is_ok(cerr) {
 			_ = loop_write_error(l, "session", .None, cerr.message, false, 1)
 			result.error_kind = .Usage
@@ -582,7 +662,11 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			result.num_steps = step
 			return result
 		}
-		tools, terr := tool.registry_definitions(&l.registry, l.active_tools)
+		tools, terr := tool.registry_definitions_in(
+			&l.registry,
+			l.active_tools,
+			step_arena_allocator(&step_arena, arena_ok),
+		)
 		if !platform.is_ok(terr) {
 			_ = loop_write_error(l, "session", .None, terr.message, false, 1)
 			result.error_kind = .Internal
@@ -590,7 +674,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			result.num_steps = step
 			return result
 		}
-		all_messages := make([dynamic]Chat_Message, 0, len(messages) + 1)
+		all_messages := make([dynamic]Chat_Message, 0, len(messages) + 1, step_arena_allocator(&step_arena, arena_ok))
 		append(&all_messages, Chat_Message{role = "system", content = system_prompt})
 		append(&all_messages, ..messages)
 		req := Chat_Message_Request {
@@ -675,7 +759,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			result.error_kind = .Provider
 			result.fatal_error = "context_too_long"
 			result.stop_reason = "context_too_long"
-			result.result_text = l.last_text
+			result.result_text = strings.clone(l.last_text)
 			result.num_steps = step
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
 			return result
@@ -712,10 +796,29 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		stop_reason := stop_reason_string(l.pending_stop)
 		_ = loop_write_turn_end(l, stop_reason)
 		result.stop_reason = stop_reason
-		result.result_text = l.last_text
+		result.result_text = strings.clone(l.last_text)
 		result.num_steps = step
 		result.usage = l.turn_usage
 		result.session_usage = usage_add(l.historical_usage, l.turn_usage)
 		return result
 	}
+}
+
+// 把本次 message_end 的 tool call 元数据拷进 loop 自己的所有权。
+// json.Value 参数本身由 provider 在事件期间持有，执行阶段仍可用；
+// id / name 需要单独持有，因为 provider 的缓冲随后就释放。
+loop_own_calls :: proc(l: ^Loop, calls: []Assembled_Tool_Call) {
+	loop_release_owned(l)
+	if len(calls) == 0 {
+		return
+	}
+	owned := make([]Assembled_Tool_Call, len(calls))
+	for call, i in calls {
+		owned[i] = {
+			id    = strings.clone(call.id),
+			name  = strings.clone(call.name),
+			input = call.input,
+		}
+	}
+	l.owned_calls = owned
 }

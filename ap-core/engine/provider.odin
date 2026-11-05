@@ -7,6 +7,7 @@ import "base:runtime"
 import c "core:c/libc"
 import "core:encoding/json"
 import "core:fmt"
+import "core:mem/virtual"
 import "core:strings"
 import "core:sync"
 import "core:time"
@@ -299,6 +300,11 @@ Stream_Assembler :: struct {
 	reasoning:      [dynamic]byte,
 	slots:          [dynamic]Tool_Slot,
 	last_error:     Provider_Error,
+	// 从 chunk 拷出来的 message_id / model / finish_reason / slot.id / slot.name
+	// 都放在这里。它们随组装器一起释放，避免逐字段追踪所有权。
+	owned:          virtual.Arena,
+	owned_alloc:    runtime.Allocator,
+	owns_strings:   bool,
 }
 
 assembler_init :: proc(a: ^Stream_Assembler, sink: Stream_Sink, model: string) {
@@ -307,6 +313,10 @@ assembler_init :: proc(a: ^Stream_Assembler, sink: Stream_Sink, model: string) {
 	a.text = make([dynamic]byte, 0, 256)
 	a.reasoning = make([dynamic]byte, 0, 256)
 	a.slots = make([dynamic]Tool_Slot, 0, 2)
+	a.owns_strings = virtual.arena_init_growing(&a.owned) == nil
+	if a.owns_strings {
+		a.owned_alloc = virtual.arena_allocator(&a.owned)
+	}
 }
 
 assembler_destroy :: proc(a: ^Stream_Assembler) {
@@ -316,6 +326,22 @@ assembler_destroy :: proc(a: ^Stream_Assembler) {
 		delete(slot.args)
 	}
 	delete(a.slots)
+	if a.owns_strings {
+		virtual.arena_destroy(&a.owned)
+	}
+}
+
+// chunk 解析出的字符串在本轮结束后会被释放，需要留存的字段必须拷一份。
+// 统一放进 owned arena，省掉逐字段的所有权标记。
+assembler_own :: proc(a: ^Stream_Assembler, value: string) -> string {
+	if !a.owns_strings || len(value) == 0 {
+		return value
+	}
+	cloned, cerr := strings.clone(value, a.owned_alloc)
+	if cerr != nil {
+		return value
+	}
+	return cloned
 }
 
 assembler_fail :: proc(a: ^Stream_Assembler, err: Provider_Error) -> Provider_Error {
@@ -351,6 +377,10 @@ assembler_feed :: proc(a: ^Stream_Assembler, data: string) -> Provider_Error {
 			{kind = .Protocol, message = fmt.tprintf("invalid SSE JSON: %v", uerr), retryable = false},
 		)
 	}
+	// 每个 SSE chunk 都会解析成一棵临时对象树；需要留存的部分已由
+	// assembler_own 拷进 owned arena，其余必须在本次调用结束前释放，
+	// 否则一次回答（上千个 chunk）会按 chunk 数线性泄漏。
+	defer chat_chunk_destroy(&chunk)
 	if err_info, has_error := chunk.error.?; has_error {
 		message := "server returned an error in stream"
 		if msg, ok := err_info.message.?; ok {
@@ -371,10 +401,10 @@ assembler_feed :: proc(a: ^Stream_Assembler, data: string) -> Provider_Error {
 	}
 
 	if len(chunk.id) > 0 {
-		a.message_id = chunk.id
+		a.message_id = assembler_own(a, chunk.id)
 	}
 	if len(chunk.model) > 0 {
-		a.model = chunk.model
+		a.model = assembler_own(a, chunk.model)
 	}
 
 	if !a.started {
@@ -404,11 +434,11 @@ assembler_feed :: proc(a: ^Stream_Assembler, data: string) -> Provider_Error {
 			id, has_id := call.id.?
 			args_delta := ""
 			if has_id && len(id) > 0 {
-				slot.id = id
+				slot.id = assembler_own(a, id)
 			}
 			if fn, has_fn := call.function.?; has_fn {
 				if value, ok := fn.name.?; ok && len(value) > 0 {
-					slot.name = value
+					slot.name = assembler_own(a, value)
 				}
 				if value, ok := fn.arguments.?; ok {
 					args_delta = value
@@ -424,7 +454,7 @@ assembler_feed :: proc(a: ^Stream_Assembler, data: string) -> Provider_Error {
 			}
 		}
 		if reason, ok := choice.finish_reason.?; ok && len(reason) > 0 {
-			a.finish_reason = reason
+			a.finish_reason = assembler_own(a, reason)
 		}
 	}
 
@@ -432,6 +462,40 @@ assembler_feed :: proc(a: ^Stream_Assembler, data: string) -> Provider_Error {
 		a.usage = usage_from_chat(raw_usage)
 	}
 	return provider_error_none()
+}
+
+free_maybe_string :: proc(value: Maybe(string)) {
+	if text, ok := value.?; ok {
+		delete(text)
+	}
+}
+
+// 释放 json.unmarshal 得到的 chunk。已由 assembler_own 拷贝的字段不再引用
+// 这里的内存，所以可以整棵释放。
+chat_chunk_destroy :: proc(chunk: ^Chat_Chunk) {
+	delete(chunk.id)
+	delete(chunk.model)
+	for &choice in chunk.choices {
+		free_maybe_string(choice.finish_reason)
+		free_maybe_string(choice.delta.role)
+		free_maybe_string(choice.delta.content)
+		free_maybe_string(choice.delta.reasoning_content)
+		for &call in choice.delta.tool_calls {
+			free_maybe_string(call.id)
+			free_maybe_string(call.type)
+			if fn, ok := call.function.?; ok {
+				free_maybe_string(fn.name)
+				free_maybe_string(fn.arguments)
+			}
+		}
+		delete(choice.delta.tool_calls)
+	}
+	delete(chunk.choices)
+	if err_info, ok := chunk.error.?; ok {
+		free_maybe_string(err_info.message)
+		free_maybe_string(err_info.type)
+		free_maybe_string(err_info.code)
+	}
 }
 
 normalize_finish_reason :: proc(reason: string) -> (Stop_Reason, bool) {
@@ -763,6 +827,9 @@ provider_stream :: proc(
 	if !is_ok(berr) {
 		return {kind = .Protocol, message = berr.message, retryable = false}
 	}
+	// 请求体随对话一起增长，只在本次 HTTP 调用内有效；不释放的话，
+	// 每次重试都会把整份上下文再留一份。
+	defer delete(body)
 
 	a: Stream_Assembler
 	assembler_init(&a, sink, req.model)

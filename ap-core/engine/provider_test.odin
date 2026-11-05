@@ -1,6 +1,8 @@
 package engine
 
 import "core:encoding/json"
+import "core:fmt"
+import "core:mem"
 import "core:strings"
 import "core:testing"
 
@@ -344,4 +346,42 @@ test_context_too_long_detection :: proc(t: ^testing.T) {
 	testing.expect(t, is_context_too_long_string("This model's maximum context length is 8192 tokens"))
 	testing.expect(t, is_context_too_long_string("context_length_exceeded"))
 	testing.expect(t, !is_context_too_long_string("bad request"))
+}
+
+// 一个回答会拆成上千个 SSE chunk，每个 chunk 都要 JSON 解析一次。
+// 如果解析结果不释放，内存会随 chunk 数线性泄漏；这里断言净增长
+// 只应接近必须保留的文本缓冲。
+@(test)
+test_assembler_feed_does_not_leak_per_chunk :: proc(t: ^testing.T) {
+	ta: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&ta, context.allocator)
+	old := context.allocator
+	context.allocator = mem.tracking_allocator(&ta)
+
+	a: Stream_Assembler
+	assembler_init(&a, {}, "m")
+
+	CHUNKS :: 500
+	before := ta.current_memory_allocated
+	for i in 0 ..< CHUNKS {
+		chunk := fmt.tprintf(
+			`{{"id":"c1","model":"m","choices":[{{"index":0,"delta":{{"content":"token %d 文本"}}}}]}}`,
+			i,
+		)
+		testing.expect_value(t, assembler_feed(&a, chunk).kind, Provider_Error_Kind.None)
+	}
+	after := ta.current_memory_allocated
+	retained := after - before
+
+	assembler_destroy(&a)
+	context.allocator = old
+	mem.tracking_allocator_destroy(&ta)
+
+	// 必须留下的只有 a.text 里的字节（约 20 字节/chunk）加上扩容余量。
+	testing.expectf(
+		t,
+		retained < CHUNKS * 64,
+		"per-chunk retained memory is %d bytes; SSE chunk 的解析结果没有被释放",
+		retained / CHUNKS,
+	)
 }

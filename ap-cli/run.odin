@@ -304,6 +304,8 @@ run :: proc(args: []string) -> int {
 	}
 
 	output_final(&out, session.session_id, result)
+	// Loop_Result.result_text 是 engine 给调用方的独立副本。
+	delete(result.result_text)
 	exit_code := exit_code_for(result.error_kind)
 	if result.cancelled {
 		signal_code := signal_exit_code()

@@ -97,6 +97,7 @@ loop_init :: proc(
 loop_run_turn :: proc(l: ^Loop, prompt: string) -> Loop_Result
 
 context_build :: proc(project: Project, events: []Event) -> (system_prompt: string, messages: []Chat_Message, err: Error)
+context_build_in :: proc(project: Project, events: []Event, allocator: runtime.Allocator) -> (system_prompt: string, messages: []Chat_Message, err: Error)
 build_system_prompt :: proc(opts: System_Prompt_Options) -> string
 
 Session_Request :: struct { ... }
@@ -119,6 +120,7 @@ Registry :: struct { ... }
 registry_init :: proc(tools: []Tool) -> (Registry, platform.Error)
 registry_select :: proc(registry: ^Registry, names: []string) -> ([]string, platform.Error)
 registry_definitions :: proc(registry: ^Registry, active_tools: []string) -> ([]Tool_Def, platform.Error)
+registry_definitions_in :: proc(registry: ^Registry, active_tools: []string, allocator: runtime.Allocator) -> ([]Tool_Def, platform.Error)
 registry_prompt_section :: proc(registry: ^Registry, active_tools: []string) -> string
 tool_execute :: proc(registry: ^Registry, name: string, args: json.Value, ctx: ^Tool_Context) -> Tool_Result
 ```
@@ -129,6 +131,7 @@ tool_execute :: proc(registry: ^Registry, name: string, args: json.Value, ctx: ^
 - `platform.Cancel_Token` 只有一个原子标志；信号处理器设置它，Provider 在 curl 的进度回调里轮询。没有关闭通知或额外的 `loop_cancel` 接口。
 - `Tool_Result` / `Tool_Context` / `Tool` / `Registry` 定义在 `ap-core/tool`，见 [tools.md](tools.md)。`Tool_Context` 只含通用字段（cwd、project、cancel、session_id、tool_call_id、agent_name、agent_depth、回调），宿主配置通过 `Tool.user` 绑定。
 - 技能发现、`AGENTS.md`、环境段、agent 正文与用户追加段都在应用层；`context_build` 只从 transcript 的 `session_start` 取冻结的 system prompt。
+- `context_build_in` / `registry_definitions_in` 与不带 `_in` 的版本语义完全相同，只是把全部中间分配交给传入的 allocator。Loop 每个 step 都要重建一次上下文，用 step arena 承接这些分配，step 结束时整体回收；不带 `_in` 的版本等价于传入 `context.allocator`，供测试与一次性调用使用。
 - 子代理没有独立的 `subagent_run` 接口；它由 `ap-cli/tools` 的 `tool_task` 通过 `run_child` 拉起当前 ap 可执行文件实现。
 
 ### SDK 门面（`apcore`）
@@ -205,6 +208,17 @@ session_options_append :: proc(opts: ^Session_Options, section: string)
 3. 配置与 agent 定义是外部输入，不进 transcript；但 `session_start` 冻结当次使用的 system prompt、model、provider、agent_name、agent_depth、cwd，保证恢复可解释
 4. blob 是 transcript 的一部分（按引用计入），不是缓存；内容寻址、只读、用户负责清理
 
+## 内存契约
+
+长对话的内存峰值必须与 transcript 大小成线性，不能与 step 数的平方成正比。以下几条是硬约束：
+
+1. **每个 step 的中间量必须整体回收。** Loop 按契约每 step 重新 `context_build`，因此 tools、messages、请求体都各有一份。它们存进 `Step_Arena`，step 结束（包括提前 return 的所有路径）一次性释放。
+2. **每个 SSE chunk 的解析结果必须释放。** 一次回答会拆成上千个 chunk，`assembler_feed` 每轮 `json.unmarshal` 出一棵临时对象树。需要留下来的 `message_id` / `model` / `finish_reason` / `slot.id` / `slot.name` 先拷进 assembler 自己的 arena，剩下的在返回前销毁。
+3. **序列化中间结果用完就放。** `json_marshal_utf8` 的 Unicode 还原缓冲、`transcript_append_line` 的规范化结果都只在一次调用内有效；`Transcript_Event.line` 是单独 clone 的副本，`type` 统一用静态字面量，调用方不需要管理所有权。
+4. **所有权归持有者。** `Loop.events` 只释放自己追加的行（`initial_event_count` 之前的历史事件属于 `Session.events`）；`Loop.last_text` 只在 `loop_destroy` 释放；`Loop_Result.result_text` 是独立副本，归调用方所有（`ap-cli` / `magi` 负责释放）。Provider 借给 loop 的 `message_id` 与 tool call 的 `id` / `name` 由 loop 自己 clone，因为 assembler 的临时缓冲在 `provider_stream` 返回时就回收了。
+
+回归用例：`test_transcript_append_does_not_leak_per_event`、`test_assembler_feed_does_not_leak_per_chunk` 用 tracking allocator 断言每事件 / 每 chunk 的净分配低于阈值。
+
 ## 包布局与边界
 
 ```
@@ -279,6 +293,7 @@ Odin 没有 Go 的 `internal` 机制，边界由 `tools/check-deps.sh` / `.ps1` 
 3. **进程清理**：bash 启动多层子进程后取消，验证 Unix 递归后代扫描与 Windows Job 内全部退出
 4. **跨平台路径**：Windows 大小写/分隔符变体落到同一 project hash；`-s` 跨目录失败并给出清晰错误
 5. **blob**：超过阈值的工具结果/参数落 blob；删除 blob 后恢复明确失败
+6. **内存线性**：用 fake provider 跑 10/20/40/80/160 step 的 turn，堆峰值应随 step 线性增长；修复前 80 step 会到 62MB，现在约 1.8MB
 
 ## 后续扩展
 

@@ -259,6 +259,8 @@ run_member :: proc(
 		if !apcore.is_ok(close_err) {
 			magi_log("%s 关闭 session 失败：%s", role.id, close_err.message)
 		}
+		// Turn_Result.result_text 归调用方所有。
+		delete(result.result_text)
 	}
 
 	turn_result, terr := apcore.turn_run(
@@ -295,6 +297,8 @@ run_member :: proc(
 	}
 	if !ok {
 		repair_result, rerr := apcore.turn_run(&session, REPAIR_PROMPT, cancel, {})
+		// 上一轮的结果文本即将被覆盖，先释放。
+		delete(result.result_text)
 		result = repair_result
 		if !apcore.is_ok(rerr) {
 			close_reason = "error"

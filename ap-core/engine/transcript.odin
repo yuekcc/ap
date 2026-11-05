@@ -3,6 +3,7 @@ package engine
 import "../platform"
 import "../protocol"
 
+import "base:runtime"
 import "core:encoding/json"
 import "core:os"
 import "core:strings"
@@ -52,6 +53,37 @@ Transcript_Store :: struct {
 	file:       ^os.File,
 	next_seq:   int,
 	settings:   ^Settings,
+}
+
+// 已知事件类型一律映射到静态字面量，让 Event.type 不需要所有权管理。
+event_type_canonical :: proc(typ: string) -> string {
+	switch typ {
+	case "session_start":
+		return "session_start"
+	case "session_end":
+		return "session_end"
+	case "user_message":
+		return "user_message"
+	case "turn_start":
+		return "turn_start"
+	case "turn_end":
+		return "turn_end"
+	case "step_start":
+		return "step_start"
+	case "message_start":
+		return "message_start"
+	case "message_end":
+		return "message_end"
+	case "tool_execution_start":
+		return "tool_execution_start"
+	case "tool_execution_end":
+		return "tool_execution_end"
+	case "error":
+		return "error"
+	case "cancel":
+		return "cancel"
+	}
+	return typ
 }
 
 event_type_known :: proc(typ: string) -> bool {
@@ -181,35 +213,62 @@ resume_transcript_store :: proc(project: Project, session_id: string, settings: 
 	return store, ok_error()
 }
 
+// 事件结构里的 header 是 using 嵌入字段，json.marshal 会输出成嵌套对象；
+// transcript schema 要求 header 字段平铺在顶层。这里直接把两段序列化结果
+// 拼成一行，省掉「解析成 JSON 树 → 合并 → 再序列化」的整套临时对象
+// （那条路径每条事件都要留一棵树加两份字节）。
+flatten_event_json :: proc(header_json, event_json: string) -> ([]byte, Error) {
+	prefix := `{"header":`
+	if !strings.has_prefix(event_json, prefix) {
+		return nil, make_error(.Internal, "transcript event does not start with the embedded header")
+	}
+	rest_start := len(prefix) + len(header_json)
+	if rest_start >= len(event_json) {
+		return nil, make_error(.Internal, "transcript event header is malformed")
+	}
+	rest := event_json[rest_start:]
+	if rest[0] != ',' && rest[0] != '}' {
+		return nil, make_error(.Internal, "transcript event header is malformed")
+	}
+	if len(header_json) < 2 || header_json[len(header_json) - 1] != '}' {
+		return nil, make_error(.Internal, "transcript event header is malformed")
+	}
+	// 去掉 header 对象自己的两个花括号，字段直接平铺到顶层。
+	b := strings.builder_make(0, len(event_json))
+	strings.write_byte(&b, '{')
+	strings.write_string(&b, header_json[1:len(header_json) - 1])
+	strings.write_string(&b, rest)
+	return transmute([]byte)strings.to_string(b), ok_error()
+}
+
+// 从事件值里取出 using 嵌入的 header。调用方只传带 header 的事件结构。
+event_header_of :: proc(event: any) -> Event_Header {
+	data := rawptr(uintptr(event.data))
+	return (^Event_Header)(data)^
+}
+
 transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string, Error) {
 	// 用 platform.json_marshal_utf8 而不是 json.marshal：后者遇到非法 UTF-8 会输出 \xNN，
-	// 下面的 parse_string 无法识别这种转义，会把字符串字段解析成空。
-	data, jerr := platform.json_marshal_utf8(event)
+	// 后续解析无法识别这种转义，会把字符串字段解析成空。
+	event_json, jerr := platform.json_marshal_utf8(event)
 	if jerr != nil {
 		return "", make_error(.Internal, "cannot serialize transcript event: %v", jerr)
 	}
-	// json 包不会展开 using 嵌入字段；把 header 对象合并回顶层，保证事件 schema 平坦。
-	value, perr := json.parse_string(string(data), .JSON, true)
-	if perr != nil {
-		return "", make_error(.Internal, "cannot normalize transcript event: %v", perr)
+	defer delete(event_json)
+
+	header_json, herr := platform.json_marshal_utf8(event_header_of(event))
+	if herr != nil {
+		return "", make_error(.Internal, "cannot serialize transcript event header: %v", herr)
 	}
-	obj, is_obj := value.(json.Object)
-	if !is_obj {
-		return "", make_error(.Internal, "transcript event is not an object")
+	defer delete(header_json)
+
+	flat, ferr := flatten_event_json(string(header_json), string(event_json))
+	if !is_ok(ferr) {
+		return "", ferr
 	}
-	if header_value, has_header := obj["header"]; has_header {
-		if header, header_is_obj := header_value.(json.Object); header_is_obj {
-			for key, field in header {
-				obj[key] = field
-			}
-			delete_key(&obj, "header")
-		}
-	}
-	normalized, merr := platform.json_marshal_utf8(obj)
-	if merr != nil {
-		return "", make_error(.Internal, "cannot serialize transcript event: %v", merr)
-	}
-	if !write_all_file(store.file, normalized) {
+	defer delete(flat)
+
+	if !write_all_file(store.file, flat) {
 		return "", make_error(.Internal, "cannot write transcript %s", store.path)
 	}
 	nl: []byte = transmute([]byte)string("\n")
@@ -217,10 +276,11 @@ transcript_append_line :: proc(store: ^Transcript_Store, event: any) -> (string,
 	if werr2 != nil || n2 != 1 {
 		return "", make_error(.Internal, "cannot write transcript %s: %v", store.path, werr2)
 	}
-	if ferr := os.flush(store.file); ferr != nil {
-		return "", make_error(.Internal, "cannot flush transcript %s: %v", store.path, ferr)
+	if ferr2 := os.flush(store.file); ferr2 != nil {
+		return "", make_error(.Internal, "cannot flush transcript %s: %v", store.path, ferr2)
 	}
-	return string(normalized), ok_error()
+	// 返回的行会进入 Loop.events 并活到 session 结束，必须单独持有一份。
+	return strings.clone(string(flat)), ok_error()
 }
 
 transcript_append :: proc(store: ^Transcript_Store, event: any) -> Error {
@@ -271,6 +331,10 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 			}
 			return nil, make_error(.Usage, "transcript %s is corrupt at line %d: %v", path, idx + 1, perr)
 		}
+		// 每行解析出的 JSON 树只在本次循环有效；不释放的话，恢复一个长 session
+		// 会为每行永久保留一份解析结果和数据副本。
+		defer json.destroy_value(value)
+
 		obj, is_obj := value.(json.Object)
 		if !is_obj {
 			if idx == last_nonempty {
@@ -287,12 +351,13 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 			}
 			return nil, make_error(.Usage, "transcript %s is corrupt at line %d: missing type", path, idx + 1)
 		}
+		type_name := string(typ)
 		version := 1
 		if v, ok := obj["v"].(json.Integer); ok {
 			version = int(v)
 		}
-		if !event_type_known(string(typ)) {
-			log_debug("transcript %s: skipping unknown event type %q", path, string(typ))
+		if !event_type_known(type_name) {
+			log_debug("transcript %s: skipping unknown event type %q", path, type_name)
 			continue
 		}
 		if version > SCHEMA_VERSION {
@@ -312,8 +377,21 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 		if t, ok := obj["ts"].(json.Integer); ok {
 			ts = i64(t)
 		}
-		append(&events, Event{v = version, seq = seq, ts = ts, type = string(typ), line = strings.clone(line)})
+		// 只有 line 需要拷贝（它指向 data）；type 统一用静态字面量，
+		// 这样调用方永远不需要释放 Event.type。
+		append(
+			&events,
+			Event {
+				v = version,
+				seq = seq,
+				ts = ts,
+				type = event_type_canonical(type_name),
+				line = strings.clone(line),
+			},
+		)
 	}
+	delete(data)
+	delete(lines)
 	return events[:], ok_error()
 }
 
@@ -417,8 +495,16 @@ last_session_start :: proc(events: []Event) -> (Session_Start_Event, bool) {
 }
 
 session_start_content :: proc(project: Project, ev: Session_Start_Event) -> (string, Error) {
+	return session_start_content_in(project, ev, context.allocator)
+}
+
+session_start_content_in :: proc(
+	project: Project,
+	ev: Session_Start_Event,
+	allocator: runtime.Allocator,
+) -> (string, Error) {
 	if ref, ok := ev.content_ref.?; ok {
-		data, berr := blob_read(project, ref)
+		data, berr := blob_read(project, ref, allocator)
 		if !is_ok(berr) {
 			return "", berr
 		}
@@ -428,11 +514,19 @@ session_start_content :: proc(project: Project, ev: Session_Start_Event) -> (str
 }
 
 session_system_prompt :: proc(project: Project, events: []Event) -> (Session_Start_Event, string, Error) {
+	return session_system_prompt_in(project, events, context.allocator)
+}
+
+session_system_prompt_in :: proc(
+	project: Project,
+	events: []Event,
+	allocator: runtime.Allocator,
+) -> (Session_Start_Event, string, Error) {
 	start, found := last_session_start(events)
 	if !found {
 		return {}, "", make_error(.Usage, "transcript has no session_start event")
 	}
-	content, cerr := session_start_content(project, start)
+	content, cerr := session_start_content_in(project, start, allocator)
 	if !is_ok(cerr) {
 		return start, "", cerr
 	}

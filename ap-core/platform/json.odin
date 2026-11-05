@@ -8,12 +8,24 @@ import "core:unicode/utf8"
 // Odin 标准库的 json.marshal 会把非 Latin-1 的 Unicode 全部转成 \uXXXX。
 // 这里在 marshal 之后把字符串里的合法 Unicode 转义还原成 UTF-8 原文；
 // 控制字符、引号、反斜杠以及非法 UTF-8 序列仍然保持转义，保证 JSON 合法。
+//
+// 返回的字节由调用方释放。还原过程要么原地返回 marshal 输出，要么用同一
+// allocator 新建一份并释放旧的；绝不能把两份都留着，否则每次 marshal 都漏
+// 一块中间缓冲（大对话里每 step 都要 marshal 整份上下文）。
 json_marshal_utf8 :: proc(v: any, allocator := context.allocator) -> ([]byte, json.Marshal_Error) {
 	data, err := json.marshal(v, {}, allocator)
 	if err != nil {
 		return nil, err
 	}
-	return json_unescape_unicode(data, allocator), nil
+	// 纯 ASCII 或合法 UTF-8、且没有 \u / \x 转义时输出已经满足要求，直接复用。
+	if utf8.valid_string(string(data)) &&
+	   !strings.contains(string(data), `\u`) &&
+	   !strings.contains(string(data), `\x`) {
+		return data, nil
+	}
+	converted := json_unescape_unicode(data, allocator)
+	delete(data, allocator)
+	return converted, nil
 }
 
 json_hex_digit :: proc(c: byte) -> (u32, bool) {
@@ -227,8 +239,13 @@ json_canonical_string :: proc(value: json.Value) -> string {
 			if i > 0 {
 				strings.write_byte(&b, ',')
 			}
-			key_json, _ := json_marshal_utf8(key)
-			strings.write_string(&b, string(key_json))
+			key_json, kerr := json_marshal_utf8(key)
+			if kerr == nil {
+				strings.write_string(&b, string(key_json))
+				delete(key_json)
+			} else {
+				strings.write_string(&b, `""`)
+			}
 			strings.write_byte(&b, ':')
 			strings.write_string(&b, json_canonical_string(v[key]))
 		}

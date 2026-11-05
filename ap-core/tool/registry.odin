@@ -2,6 +2,7 @@ package tool
 
 import "../platform"
 
+import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
@@ -75,16 +76,27 @@ registry_definitions :: proc(
 	registry:     ^Registry,
 	active_tools: []string,
 ) -> ([]Tool_Def, platform.Error) {
+	return registry_definitions_in(registry, active_tools, context.allocator)
+}
+
+// registry_definitions_in 语义与 registry_definitions 相同，只是把工具 schema
+// 的解析结果放到 allocator。Loop 每个 step 都要重建一次，交给 step arena
+// 可以随 step 结束整体回收。
+registry_definitions_in :: proc(
+	registry:     ^Registry,
+	active_tools: []string,
+	allocator:    runtime.Allocator,
+) -> ([]Tool_Def, platform.Error) {
 	active := active_set(active_tools)
 	defer delete(active)
 
-	defs := make([dynamic]Tool_Def, 0, len(active))
+	defs := make([dynamic]Tool_Def, 0, len(active), allocator)
 	if registry != nil {
 		for tool in registry.tools {
 			if !(tool.name in active) {
 				continue
 			}
-			params, perr := json.parse_string(tool.parameters_json, .JSON, true)
+			params, perr := json.parse_string(tool.parameters_json, .JSON, true, allocator)
 			if perr != nil {
 				return nil, platform.errorf("invalid tool schema for %s: %v", tool.name, perr)
 			}
