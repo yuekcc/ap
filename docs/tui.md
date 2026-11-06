@@ -76,7 +76,7 @@ TUI 与 ap 共用 `ap-core/platform` 的 project 识别规则（绝对路径 →
 ## 渲染
 
 - 普通终端滚动区，**不使用 alternate screen**，输出保留在 scrollback 里
-- 每轮结束回到 `› ` 行输入；`› ` 同时用于输入框和 History 重放，提交后无需重画（非 TTY 回退路径仍打印 `> `，保持管道行为不变）
+- 每轮 turn 结束后先空一行，再画下一条 `› ` 提示符（raw 编辑框和非 TTY 回退路径都是如此）；`› ` 同时用于输入框和 History 重放，提交后无需重画（非 TTY 回退路径仍打印 `> `，保持管道行为不变）
 - turn 运行时 TUI 不读 stdin；这期间的按键由终端留在输入缓冲里，turn 结束后会被当成下一条提示词
 - ANSI 颜色在 stdout 不是 TTY、`NO_COLOR` 或 `--no-color` 时关闭
 - assistant 文本按 delta 实时输出；`message_end` 只在没有 delta 时补文本，避免重复

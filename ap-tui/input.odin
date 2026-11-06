@@ -13,7 +13,28 @@ Input :: struct {
 	stdin_tty: bool,
 }
 
+// 一轮 turn 的输出之后先空一行，再画下一条提示符；只在本轮真的跑过 ap 时生效。
+// read_prompt 在 term_enter 之后调用，所以 raw 分支要把 \r 带进换行里。
+write_turn_gap :: proc(app: ^App, input: ^Input) {
+	if !app.prompt_gap {
+		return
+	}
+	app.prompt_gap = false
+	if input.term != nil {
+		// raw 下 OPOST 被关闭，不能经 renderer 写裸 \n。
+		if !app.renderer.at_line_start {
+			term_write(input.term, "\r\n")
+		}
+		term_write(input.term, "\r\n")
+		app.renderer.at_line_start = true
+		return
+	}
+	ensure_line_start(&app.renderer)
+	write_text(&app.renderer, "\n")
+}
+
 read_prompt :: proc(app: ^App, input: ^Input) -> (text: string, eof: bool) {
+	write_turn_gap(app, input)
 	if input.term != nil {
 		return read_prompt_raw(app, input.term)
 	}

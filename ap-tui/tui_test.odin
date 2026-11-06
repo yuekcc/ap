@@ -261,3 +261,50 @@ test_on_agent_event_remembers_session :: proc(t: ^testing.T) {
 	on_agent_event(&app, ev)
 	testing.expect_value(t, app.session_id, "ses_x")
 }
+
+@(test)
+test_turn_gap_before_prompt :: proc(t: ^testing.T) {
+	dir := test_temp_dir("gap")
+	defer os.remove_all(dir)
+	project := client.Project {
+		config_dir = dir,
+		root = dir,
+		hash = "test",
+		dir = dir,
+		blobs_dir = fmt.aprintf("%s/blobs", dir),
+	}
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	app := App {
+		project = project,
+		renderer = {
+			out = file,
+			color = false,
+			project = &project,
+			at_line_start = true,
+		},
+	}
+
+	// 首轮之前（没有跑过 ap）不额外空行。
+	input := Input{}
+	write_turn_gap(&app, &input)
+	ensure_line_start(&app.renderer)
+
+	// 模拟一轮 turn 的输出结束后设置标志。
+	note(&app.renderer, "agent done")
+	app.prompt_gap = true
+	write_turn_gap(&app, &input)
+	ensure_line_start(&app.renderer)
+	// 标志只生效一次。
+	write_turn_gap(&app, &input)
+	os.close(file)
+
+	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
+	out := string(data)
+	testing.expect_value(t, out, "agent done\n\n")
+}

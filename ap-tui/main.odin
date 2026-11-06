@@ -15,6 +15,8 @@ App :: struct {
 	renderer:   Renderer,
 	agent_bin:  string,
 	session_id: string,
+	// 刚跑完一轮 ap，下一条提示符前需要先留一个空行。
+	prompt_gap: bool,
 }
 
 renderer_note :: proc(app: ^App, text: string) {
@@ -143,6 +145,7 @@ run_input_loop :: proc(app: ^App, term: ^Term) {
 		case .Not_Command:
 		}
 		run_agent_turn(app, text)
+		app.prompt_gap = true
 		free_all(context.temp_allocator)
 	}
 }
