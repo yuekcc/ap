@@ -262,12 +262,19 @@ run :: proc(args: []string) -> int {
 	cancel: apcore.Cancel_Token
 	install_signal_handlers(&cancel)
 	out := Output_State{format = opts.output_format}
+	if out.format == .Text {
+		// text 的 stderr 用 ap-tui 风格渲染；非 TTY（管道、重定向）时关掉颜色。
+		console_init(&out.console, os.stderr, env.project, console_color_enabled())
+	}
 	if out.format == .Stream_Json && len(info.initial_line) > 0 {
 		write_stdout(transmute([]byte)info.initial_line)
 		write_stdout(transmute([]byte)string("\n"))
 	}
 	emitter := make_loop_emitter(&out)
 	result, terr := apcore.turn_run(&session, prompt, &cancel, emitter)
+	if out.format == .Text {
+		console_finish(&out.console)
+	}
 	if !apcore.is_ok(terr) {
 		apcore.log_error("%s", terr.message)
 		err_end_line, _ := apcore.session_close(&session, {reason = "error", usage = {}})

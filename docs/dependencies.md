@@ -10,7 +10,7 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `cmd/ap-tui/` | `main` | 入口：`os.exit(aptui.run(os.args))` |
 | `cmd/ap-web/` | `main` | 入口：`os.exit(apweb.run(os.args))` |
 | `cmd/magi-cli/` | `main` | 入口：`os.exit(magi.run(os.args))` |
-| `ap-cli/` | `apcli` | CLI adapter 与组装根：参数、加载 `settings.json`、定位 bash、agent 定义解析、system prompt sections、输出格式、退出码、信号 |
+| `ap-cli/` | `apcli` | CLI adapter 与组装根：参数、加载 `settings.json`、定位 bash、agent 定义解析、system prompt sections、输出格式（含 `text` 的 stderr 渲染）、退出码、信号 |
 | `ap-cli/tools/` | `aptools` | 五个内置工具、`Tool_Config`、进程树清理、子代理启动 |
 | `ap-cli/skills/` | `apskills` | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 |
 | `ap-core/` | `apcore` | SDK 门面：接收 `config_dir` / `settings` / `tools`，`env_open`、`Session_Request` 组装、会话生命周期 |

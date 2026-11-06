@@ -8,11 +8,13 @@ import "core:time"
 
 Output_State :: struct {
 	format: Output_Format,
-	// stderr 的 markdown 排版状态：块与块之间恰好一个空行。
+	// stderr 的 markdown 排版状态：`json` / `stream-json` 使用，块与块之间恰好一个空行。
 	stderr_wrote:     bool, // 已向 stderr 写过内容
 	stderr_line_open: bool, // 上一行还没换行
 	stderr_spaced:    bool, // 上一个块已用空行收尾
 	stderr_in_block:  bool, // 正处在工具输出的原始块中
+	// text 格式的 stderr 交给 ap-tui 风格的渲染器。
+	console:          Console,
 }
 
 output_write_json :: proc(obj: json.Object) {
@@ -30,11 +32,15 @@ now_ms :: proc() -> i64 {
 
 output_transcript :: proc(user: rawptr, event: protocol.Transcript_Event) {
 	out := (^Output_State)(user)
-	if out.format != .Stream_Json {
-		return
+	switch out.format {
+	case .Stream_Json:
+		write_stdout(transmute([]byte)event.line)
+		write_stdout(transmute([]byte)string("\n"))
+	case .Text:
+		// text 只把人类可读的进度写到 stderr；结果仍然统计到 turn 后一次性输出。
+		console_transcript_line(&out.console, event.line)
+	case .Json:
 	}
-	write_stdout(transmute([]byte)event.line)
-	write_stdout(transmute([]byte)string("\n"))
 }
 
 // 所有增量事件共享 {"type":"message_update","ts":...,"delta":{}} 信封。
@@ -175,20 +181,29 @@ output_line :: proc(out: ^Output_State, line: string) {
 
 output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 	out := (^Output_State)(user)
-	if out.format == .Stream_Json {
+	switch out.format {
+	case .Stream_Json:
 		obj := make(json.Object)
 		obj["type"] = json.String("tool_execution_update")
 		obj["ts"] = json.Integer(now_ms())
 		obj["tool_call_id"] = json.String(tool_call_id)
 		obj["chunk"] = json.String(platform.sanitize_utf8(transmute([]byte)chunk))
 		output_write_json(obj)
-	} else {
-		output_raw(out, chunk)
+	case .Text:
+		console_tool_update(&out.console, chunk)
+	case .Json:
 	}
 }
 
 output_progress :: proc(user: rawptr, style: apcore.Progress_Style, line: string) {
 	out := (^Output_State)(user)
+	if out.format == .Text {
+		// text 已经由 transcript 事件渲染工具行与错误；这里只剩子代理输出等行式内容。
+		if style == .Line {
+			console_progress_line(&out.console, line)
+		}
+		return
+	}
 	switch style {
 	case .Block:
 		output_block(out, line)

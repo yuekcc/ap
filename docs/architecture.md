@@ -8,7 +8,7 @@
 
 | 模块 | 负责 | 明确不做 |
 | --- | --- | --- |
-| CLI adapter（`ap-cli`，package `apcli`） | 参数解析、读取 `settings.json`、定位 bash、agent 定义解析、system prompt 段落组装、输出格式、退出码、信号安装、stdout/stderr、**组装根** | 不实现 agent loop/provider/transcript，不直接 import `engine` |
+| CLI adapter（`ap-cli`，package `apcli`） | 参数解析、读取 `settings.json`、定位 bash、agent 定义解析、system prompt 段落组装、输出格式（含 `text` 的 stderr 渲染）、退出码、信号安装、stdout/stderr、**组装根** | 不实现 agent loop/provider/transcript，不直接 import `engine` |
 | CLI tools（`ap-cli/tools`，package `aptools`） | 五个内置工具、工具配置、进程树清理、子代理启动 | 不增减 transcript 事件，不控制 loop |
 | CLI skills（`ap-cli/skills`，package `apskills`） | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 | 不执行技能正文 |
 | SDK 门面（`ap-core`，package `apcore`） | 接收已解析的 `config_dir` / `settings` / `tools`，定位 project、填充 `Session_Request`、暴露会话生命周期 | 不读 argv、不读环境变量、不打开 `settings.json`、不写 stdout（诊断日志只走 stderr）、不装信号、不决定退出码 |
@@ -69,6 +69,7 @@ Session ──► Loop ──► Context ──► (纯计算)
 4. 子代理只能通过命令行 + stdout/stderr 协议交互，不允许依赖父进程内存结构；`task` 属于 `ap-cli/tools`
 5. `ap-core/protocol` 只依赖 `core:`；`ap-core/platform` 只依赖 `core:`/`vendor:`；`ap-core/tool` 只依赖 platform/protocol；`engine` 只依赖 tool/platform/protocol；`apcore` 依赖 engine/tool/platform/protocol；`ap-cli` 依赖 apcore、tool、platform、protocol 与自己的 tools/skills 子包，不直接 import `engine`；前端只依赖 `ap-core/client` 与 `ap-core/protocol`
 6. 子目录就是独立包：`ap-cli/*.odin` 是 `package apcli`，`ap-cli/tools/*.odin` 是 `package aptools`，`ap-cli/skills/*.odin` 是 `package apskills`，`ap-core/*.odin` 是 `package apcore`（SDK 门面），`ap-core/tool/*.odin` 是 `package tool`，`ap-core/engine/*.odin` 是 `package engine`。`cmd/*` 里只有 `main`，`odin build cmd/ap` 只链接需要的那部分
+7. `text` 格式的 stderr 渲染在 `ap-cli/console.odin`（package `apcli`），只依赖 `ap-core/protocol` 与 `ap-core/platform`。它与 `ap-tui/render.odin` 保持同一套视觉语言，但两份实现独立：`ap-cli` 不允许 import `ap-core/client`，且 `ap-cli` 不需要流式 assistant 文本与历史重放。展示规则（参数格式化、结果预览截断）与 `ap-core/client/history.odin` 等价，改一处要同时改另一处。
 
 ## 关键接口
 
@@ -228,7 +229,7 @@ cmd/ap/              package main：os.exit(apcli.run(os.args))
 cmd/ap-tui/          package main：os.exit(aptui.run(os.args))
 cmd/ap-web/          package main：os.exit(apweb.run(os.args))
 cmd/magi-cli/        package main：os.exit(magi.run(os.args))
-ap-cli/              package apcli：options / settings / agent / prompt / run / output / app / signals
+ap-cli/              package apcli：options / settings / agent / prompt / run / output / console / app / signals
 ap-cli/tools/        package aptools：五个内置工具、Tool_Config、process
 ap-cli/skills/       package apskills：技能发现与提示词块
 ap-core/             package apcore：SDK 门面（env_open / session_request / 会话生命周期）

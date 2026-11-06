@@ -80,9 +80,14 @@ ap 本体只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑
 
 ### 输出格式
 
-stdout 只放结果，所有日志、进度、工具执行信息走 stderr。
+stdout 只放结果，所有日志、进度、工具执行信息走 stderr。这一条在三种格式下都成立；`text` 模式下 `ap -p ... > out.md` 拿到的仍是一份干净结果。
 
-stderr 上的进度按 markdown 排版：一次 step 是一行 `## Step N`，一次工具调用是一行 `### <工具名>`，工具输出后跟一行斜体状态 `_<工具名> ok (26ms)_`；标题行与内容块之间各留一个空行，`ap -p ... > out.md 2>&1` 的产物可直接当 markdown 读。
+stderr 的排版取决于 `--output-format`：
+
+- `text`（默认）：人类可读风格，与 `ap-tui` 的实时渲染同一套视觉语言——工具行 `◆ <工具名> (<参数>)`，工具输出两格缩进暗色，结束时一行 `✓ <耗时> [exit N]` / `✗ <耗时> [exit N] <错误>`；错误行 `…`（可重试）/ `!`（不可重试）；异常终止打 `turn ended: <stop_reason>`。ANSI 颜色只在 stderr 是 TTY 且未设 `NO_COLOR` 时开启，被管道或重定向接住时自动关掉
+- `json` / `stream-json`：进度按 markdown 排版，一次 step 是一行 `## Step N`，一次工具调用是一行 `### <工具名>`，工具输出后跟一行斜体状态 `_<工具名> ok (26ms)_`；标题行与内容块之间各留一个空行，`ap -p ... > out.md 2>&1` 的产物可直接当 markdown 读。这两种格式的消费者是程序，维持稳定的行结构比好看更重要
+
+`text` 模式不把 assistant 文本流式打到 stderr：答案仍然在 turn 结束后一次性写 stdout，所以 stdout 可以继续被脚本和子代理消费。工具结果超过 200 行 / 20000 字节时只留预览并提示完整内容在 transcript，实时 `bash` 流不截断。
 
 turn 结束、进程退出前，还会向 stderr 打印续聊提示（`---` 分隔线后是 `继续对话，执行：<可执行文件> -s <session_id>`），可直接复制该命令继续同一段对话；三种输出格式下都会打印。
 
@@ -99,9 +104,9 @@ turn 结束、进程退出前，还会向 stderr 打印续聊提示（`---` 分�
 
 | 格式 | stdout |
 | --- | --- |
-| `text` | 最后一条包含文本的 assistant 消息，在 turn 结束后一次性输出；不输出中间步骤文本 |
-| `json` | 单个 JSON 对象，turn 结束后输出 |
-| `stream-json` | 每行一个事件；包含持久事件与临时 stream 事件，见 [react-loop-and-session.md](react-loop-and-session.md) |
+| `text` | 最后一条包含文本的 assistant 消息，在 turn 结束后一次性输出；不输出中间步骤文本；stderr 为 ap-tui 风格进度 |
+| `json` | 单个 JSON 对象，turn 结束后输出；stderr 为 markdown 风格进度 |
+| `stream-json` | 每行一个事件；包含持久事件与临时 stream 事件，见 [react-loop-and-session.md](react-loop-and-session.md)；stderr 为 markdown 风格进度 |
 
 `json` 对象：
 
