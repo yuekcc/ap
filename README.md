@@ -200,6 +200,7 @@ $AP_CONFIG/
   settings.json
   SYSTEM.md                       # 存在时替换内置固定指令段
   agents/<name>.md
+  logs/app-YYYY-MM-DD.log         # 诊断日志，按本地日期一天一个
   projects/<fnv32a(规范化 cwd)>/
     path.txt
     blobs/<sha256>
@@ -209,6 +210,8 @@ $AP_CONFIG/
 ```
 
 transcript 只追加完整事件；恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行，它从未成为事件。system prompt、model、agent、cwd 和工具集在 `session_start` 冻结。blob 不自动回收，删除后引用它的 session 无法完整恢复。
+
+warning 及以上级别的诊断日志同时写 stderr 与 `logs/app-YYYY-MM-DD.log`（`--verbose` / `--debug` 会提高文件日志的级别）；日志写入失败不影响运行与退出码。
 
 ## 测试
 

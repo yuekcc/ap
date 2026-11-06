@@ -57,6 +57,7 @@ ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 
 | 工具集 | 仅 read_file / write_file / edit_file / bash / task | 见 [tools.md](tools.md) |
 | 路径 | 无 `--add-dir`；相对路径只相对启动目录 | 跨目录操作使用绝对路径 |
 | 会话存储 | JSONL 只追加 transcripts + 内容寻址 blob | 事件 schema 见 [react-loop-and-session.md](react-loop-and-session.md) |
+| 诊断日志 | stderr + `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，默认 warning 及以上 | 一天一个文件，写入失败不影响运行 |
 | 上下文管理 | 不做压缩、不做 token 预算；超限即终止 | 记录 usage；`context_too_long` 是唯一超限出口 |
 | 会话恢复 | 以 transcripts 为准，system prompt / model / agent 全部冻结 | 只在当前项目内查找 |
 | 记忆文件 | `AGENTS.md` | 全局 `~/.agents/AGENTS.md` + 项目向上查找 |

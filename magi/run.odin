@@ -23,12 +23,35 @@ Exit_Code :: enum int {
 
 log_mu: sync.Mutex
 
+// magi 自己的日志和 ap 共用同一个 stderr 前缀规则与日志文件：
+// 进度（magi_log）只走 stderr，失败（error / warn）另外追加到 $AP_CONFIG/logs。
+// 文件写入由 platform 层按本地日期分文件，失败静默。
+
 magi_log :: proc(format: string, args: ..any) {
+	magi_log_at("", format, ..args)
+}
+
+magi_log_warn :: proc(format: string, args: ..any) {
+	magi_log_at("warn", format, ..args)
+}
+
+magi_log_error :: proc(format: string, args: ..any) {
+	magi_log_at("error", format, ..args)
+}
+
+magi_log_at :: proc(level: string, format: string, args: ..any) {
+	message := fmt.aprintf(format, ..args)
+	defer delete(message)
+
 	sync.mutex_lock(&log_mu)
 	defer sync.mutex_unlock(&log_mu)
-	fmt.eprintf("magi: ")
-	fmt.eprintf(format, ..args)
-	fmt.eprintln()
+
+	fmt.eprintf("magi: %s\n", message)
+	if len(level) > 0 {
+		tagged := fmt.aprintf("magi: %s", message)
+		defer delete(tagged)
+		platform.log_file_write(level, tagged)
+	}
 }
 
 write_stdout :: proc(data: []byte) -> bool {
@@ -40,7 +63,7 @@ run :: proc(args: []string) -> int {
 	normalized := platform.normalize_args(args)
 	opts, perr := parse_args(normalized)
 	if !apcore.is_ok(perr) {
-		magi_log("%s", perr.message)
+		magi_log_error("%s", perr.message)
 		magi_log("hint: run magi-cli --help for usage")
 		return int(Exit_Code.Usage)
 	}
@@ -62,31 +85,35 @@ run :: proc(args: []string) -> int {
 
 	config_dir, cerr := platform.default_config_dir(opts.config_dir)
 	if !platform.is_ok(cerr) {
-		magi_log("%s", cerr.message)
+		magi_log_error("%s", cerr.message)
 		return int(Exit_Code.Usage)
 	}
+	// SDK 的 warning/error 与 ap 一样落到 $AP_CONFIG/logs；magi 自己的进度日志仍只走 stderr。
+	apcore.log_file_open(config_dir)
+	defer apcore.log_file_close()
+
 	cwd, cwderr := platform.canonicalize_path(".", true)
 	if !platform.is_ok(cwderr) {
-		magi_log("%s", cwderr.message)
+		magi_log_error("%s", cwderr.message)
 		return int(Exit_Code.Usage)
 	}
 
 	request, rerr := read_request(opts, cwd)
 	if !apcore.is_ok(rerr) {
-		magi_log("%s", rerr.message)
+		magi_log_error("%s", rerr.message)
 		return int(Exit_Code.Usage)
 	}
 
 	loaded, serr := load_settings(config_dir)
 	if !apcore.is_ok(serr) {
-		magi_log("%s", serr.message)
+		magi_log_error("%s", serr.message)
 		return exit_code_for(serr.kind)
 	}
 	settings := loaded.sdk
 	if opts.model != nil {
 		value, _ := opts.model.?
 		if len(value) == 0 {
-			magi_log("--model must not be empty")
+			magi_log_error("--model must not be empty")
 			return int(Exit_Code.Usage)
 		}
 		settings.model = value
@@ -104,7 +131,7 @@ run :: proc(args: []string) -> int {
 		tools      = nil,
 	})
 	if !apcore.is_ok(eerr) {
-		magi_log("%s", eerr.message)
+		magi_log_error("%s", eerr.message)
 		return exit_code_for(eerr.kind)
 	}
 
@@ -117,7 +144,7 @@ run :: proc(args: []string) -> int {
 	votes := run_members(&env, request, &cancel, opts.verbose)
 
 	if code := signal_exit_code(); code != 0 {
-		magi_log("投票被中断")
+		magi_log_warn("投票被中断")
 		return code
 	}
 
@@ -131,7 +158,7 @@ run :: proc(args: []string) -> int {
 	} else {
 		data, ok := marshal_decision(decision)
 		if !ok {
-			magi_log("cannot serialize decision")
+			magi_log_error("cannot serialize decision")
 			return int(Exit_Code.Internal)
 		}
 		write_stdout(data)
@@ -238,12 +265,12 @@ run_member :: proc(
 	if !apcore.is_ok(oerr) {
 		vote.reason = oerr.message
 		vote.stop_reason = "session_open"
-		magi_log("%s 无法启动 session：%s", role.id, oerr.message)
+		magi_log_error("%s 无法启动 session：%s", role.id, oerr.message)
 		return vote
 	}
 	vote.session_id = session.session_id
 	for warning in info.warnings {
-		magi_log("%s: %s", role.id, warning)
+		magi_log_warn("%s: %s", role.id, warning)
 	}
 	if verbose {
 		magi_log("%s 开始投票（session %s）", role.id, session.session_id)
@@ -257,7 +284,7 @@ run_member :: proc(
 			{reason = close_reason, usage = result.session_usage},
 		)
 		if !apcore.is_ok(close_err) {
-			magi_log("%s 关闭 session 失败：%s", role.id, close_err.message)
+			magi_log_warn("%s 关闭 session 失败：%s", role.id, close_err.message)
 		}
 		// Turn_Result.result_text 归调用方所有。
 		delete(result.result_text)
@@ -274,7 +301,7 @@ run_member :: proc(
 		close_reason = "error"
 		vote.reason = terr.message
 		vote.stop_reason = "turn_run"
-		magi_log("%s 投票失败：%s", role.id, terr.message)
+		magi_log_error("%s 投票失败：%s", role.id, terr.message)
 		return vote
 	}
 	if result.cancelled {
@@ -287,7 +314,7 @@ run_member :: proc(
 		close_reason = "error"
 		vote.reason = result.fatal_error
 		vote.stop_reason = result.stop_reason
-		magi_log("%s 投票失败：%s", role.id, vote.reason)
+		magi_log_error("%s 投票失败：%s", role.id, vote.reason)
 		return vote
 	}
 
@@ -304,7 +331,7 @@ run_member :: proc(
 			close_reason = "error"
 			vote.reason = rerr.message
 			vote.stop_reason = "repair_turn"
-			magi_log("%s 修复轮失败：%s", role.id, rerr.message)
+			magi_log_error("%s 修复轮失败：%s", role.id, rerr.message)
 			return vote
 		}
 		if result.cancelled {
@@ -317,7 +344,7 @@ run_member :: proc(
 			close_reason = "error"
 			vote.reason = result.fatal_error
 			vote.stop_reason = result.stop_reason
-			magi_log("%s 修复轮失败：%s", role.id, vote.reason)
+			magi_log_error("%s 修复轮失败：%s", role.id, vote.reason)
 			return vote
 		}
 		parsed, ok = parse_vote_response(result.result_text)
@@ -330,7 +357,7 @@ run_member :: proc(
 			excerpt(result.result_text, 200),
 		)
 		vote.stop_reason = result.stop_reason
-		magi_log("%s 投票无效：%s", role.id, vote.reason)
+		magi_log_warn("%s 投票无效：%s", role.id, vote.reason)
 		return vote
 	}
 

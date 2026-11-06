@@ -107,7 +107,7 @@ JSON 请求格式：
 
 `--output-format text` 输出同样的裁决与逐成员理由，适合人读；机器调用应使用 `json`。
 
-stdout 只放决议。进度、重试、成员失败等人类可读信息只写 stderr；`--verbose` 打开成员进度。
+stdout 只放决议。进度、重试、成员失败等人类可读信息只写 stderr；`--verbose` 打开成员进度。成员失败、无效投票与恢复冲突 warning 另外追加到 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，与 ap 共用同一套日志文件；纯进度不写文件。
 
 ## 决策规则
 

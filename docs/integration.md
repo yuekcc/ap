@@ -360,7 +360,7 @@ project 识别规则（必须与 ap 完全一致）：
 外部语言没有 `ap-core/client` 可用，以下规则必须自己复刻：
 
 1. **路径**：绝对化 → 清理 → 解析链接 → 反斜杠转 `/` → 去尾斜杠 → Windows 小写 → FNV-1a 32 位 hex。任何一步不同都会落到不同 project 目录。
-2. **配置目录**：`--config-dir` 优先，其次 `AP_CONFIG`，最后 `~/.ap`；只用于定位 transcript，前端不需要读 `settings.json`。
+2. **配置目录**：`--config-dir` 优先，其次 `AP_CONFIG`，最后 `~/.ap`；只用于定位 transcript，前端不需要读 `settings.json`。ap 自己也把诊断日志写到同一目录的 `logs/app-YYYY-MM-DD.log`，前端不必展示，展示 stderr 尾部即可。
 3. **进程创建**：参数数组、`cwd`、三个管道；不经过 shell。
 4. **Windows**：清理管道继承标志；用 Job Object 终止进程树；路径用宽字符 API；控制台输出前设置 UTF-8 code page。
 5. **事件 JSON**：宽松解析、保留原始行、未知字段不报错、未知类型跳过。

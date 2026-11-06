@@ -16,14 +16,14 @@ Odin 没有 Go 的 `internal` 包机制：同仓库的相对 import 永远可达
 | `ap-core/` | `apcore` | SDK 门面：接收 `config_dir` / `settings` / `tools`，`env_open`、`Session_Request` 组装、会话生命周期 |
 | `ap-core/tool/` | `tool` | 工具契约、参数助手、注册表、执行管线、blob 文本读取 |
 | `ap-core/protocol/` | `protocol` | 事件 schema、宽松解析、`Line_Reader`、usage 计算 |
-| `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON/文本、平台原语、进程树、取消 token |
+| `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON/文本、平台原语、进程树、取消 token、文件日志 |
 | `ap-core/engine/` | `engine` | agent 机制：errors/config/session/loop/provider/sse/context/transcript |
 | `ap-core/client/` | `client` | 前端 kit：spawn、逐行泵、取消、只读 session/blob、历史展示辅助、错误类型 |
 | `ap-tui/` | `aptui` | 终端前端库（`run` + 渲染、按键/输入、多行编辑、终端控制） |
 | `ap-web/` | `apweb` | HTTP/SSE 前端库（`run` + server/http_util/api/sse/runner/assets/pickdir/net） |
 | `magi/` | `magi` | MAGI 决策器：参数、输入、三角色提示词、并行 session、投票聚合、输出与信号 |
 
-同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter 与组装根，也是 ap 本体唯一读 `settings.json`、定位 bash、解析 agent 文件与组装 prompt sections 的地方；`magi/settings.odin` 另有一份只读 provider 字段的子集读取器；`AP_CONFIG` / `AP_API_KEY` / `AP_BASH` 分别在 platform 与 settings 层读取，前端通过 `ap-core/client` 读取 `AP_CONFIG` / `AP_AGENT_BIN` / `AP_BIN`。技能扫描在 `ap-cli/skills`，工具实现在 `ap-cli/tools`，它们是独立子包。`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
+同目录 = 同包。`ap-cli/*.odin` 是 CLI adapter 与组装根，也是 ap 本体唯一读 `settings.json`、定位 bash、解析 agent 文件、组装 prompt sections 与打开文件日志的地方；`magi/settings.odin` 另有一份只读 provider 字段的子集读取器；`AP_CONFIG` / `AP_API_KEY` / `AP_BASH` 分别在 platform 与 settings 层读取，前端通过 `ap-core/client` 读取 `AP_CONFIG` / `AP_AGENT_BIN` / `AP_BIN`。技能扫描在 `ap-cli/skills`，工具实现在 `ap-cli/tools`，它们是独立子包。`ap-core/*.odin` 是 SDK 门面，只接收宿主解析好的 `Config`，不读配置文件、不读环境变量、不写 stdout、不装信号。`odin build cmd/ap` 只链接它 import 到的子包。`cmd/*` 只有 `main`，不得承载业务逻辑。
 
 ## 允许的边
 

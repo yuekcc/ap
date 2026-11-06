@@ -116,7 +116,17 @@ Windows 没有 Unix 信号：Ctrl+C 走 console handler；`TerminateProcess` 无
 4. 完整事件只追加；恢复时只截掉崩溃留下的不完整尾行
 5. blob 缺失或 hash 不匹配 → 恢复失败，退出 2
 6. `error` 事件必须包含 `scope`、`kind`（可空）、`message`、`retryable`、`attempt`，便于事后统计失败分布
-7. 配置错误发生在 transcript 创建前时，只有 stderr，没有 transcript
+7. 配置错误发生在 transcript 创建前时，只有 stderr 与日志文件，没有 transcript
+
+## 日志文件
+
+stderr 是给人实时看的；排查已结束的进程需要日志文件。两者写同一批消息：
+
+1. warning / error 默认都写 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`；`--verbose` 加上 info，`--debug` 再加上 debug
+2. 级别过滤在 `engine.log_message` 里只做一次，stderr 打什么，文件里就有什么；文件器不重复判断级别
+3. 写入失败（`$AP_CONFIG` 不可写、磁盘满）静默，不影响退出码，也不影响 stderr 输出——日志不能成为新的失败点
+4. 日志不含 `api_key`；`session_end`、`stderr_preview` 等前端需要的内容仍以 transcript / stdout 为准
+5. 一天一个文件，按本地日期切换；子代理进程写同一个文件，靠追加模式拼接
 
 ## 退出码
 

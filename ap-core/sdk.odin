@@ -203,9 +203,22 @@ session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error) {
 }
 
 // ---- 日志 ----
+//
+// 诊断日志同时写 stderr 与 $AP_CONFIG/logs/app-YYYY-MM-DD.log。
+// 文件输出默认关闭，由宿主 adapter 在解析出 $AP_CONFIG 后显式打开：
+// SDK 不读环境变量、不猜配置目录，只有显式传进来的目录才会被写。
 
 log_set_level :: proc(level: Log_Level) {
 	engine.log_set_level(level)
+}
+
+// log_file_open 打开当天的日志文件（已在其它位置初始化过目录时可省略）。
+log_file_open :: proc(config_dir: string) {
+	platform.log_file_init(config_dir)
+}
+
+log_file_close :: proc() {
+	platform.log_file_close()
 }
 
 log_error :: proc(format: string, args: ..any) {

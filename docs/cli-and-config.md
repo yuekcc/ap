@@ -33,7 +33,7 @@ ap 本体只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑
 | `--agent-depth <n>` | 非负整数 | 当前 agent 深度；默认 0，子代理为父 + 1；恢复时以记录为准 |
 | `--no-agents-md` | — | 不注入 `~/.agents/AGENTS.md` 与项目 `AGENTS.md`；只在新 session 生效，恢复时忽略 |
 | `--no-skills` | — | 不扫描、不注入技能清单；不影响 `--list-skills`；只在新 session 生效，恢复时忽略 |
-| `--verbose` / `--debug` | — | 日志级别，输出到 stderr |
+| `--verbose` / `--debug` | — | 日志级别，同时写 stderr 与日志文件 |
 | `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
 | `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型、不需要 API key |
 | `--help` / `--version` | — | 用法与版本 |
@@ -85,6 +85,17 @@ stdout 只放结果，所有日志、进度、工具执行信息走 stderr。
 stderr 上的进度按 markdown 排版：一次 step 是一行 `## Step N`，一次工具调用是一行 `### <工具名>`，工具输出后跟一行斜体状态 `_<工具名> ok (26ms)_`；标题行与内容块之间各留一个空行，`ap -p ... > out.md 2>&1` 的产物可直接当 markdown 读。
 
 turn 结束、进程退出前，还会向 stderr 打印续聊提示（`---` 分隔线后是 `继续对话，执行：<可执行文件> -s <session_id>`），可直接复制该命令继续同一段对话；三种输出格式下都会打印。
+
+### 日志文件
+
+除 stderr 之外，诊断日志同时追加到 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，一天一个文件，按本地日期切分。
+
+- 默认级别是 warning：`log_warn` 与 `log_error` 写文件；`--verbose` 加上 info，`--debug` 再加上 debug
+- 一条日志一行：`YYYY-MM-DD HH:MM:SS [level] message`；消息自带换行时，续行沿用同前缀并缩进两格
+- 进程内第一条日志才创建 `logs/` 与文件；整次运行没有日志就不留空文件
+- 目录不可写、磁盘满等写入失败一律吞掉，不影响退出码，也不影响 stderr 输出
+- 子代理是独立进程，和父进程写同一个文件，靠追加模式拼接；跨天时各自切到新文件
+- `--print-system-prompt` 等不写 transcript 的路径同样写日志；日志里不记录 `api_key`
 
 | 格式 | stdout |
 | --- | --- |
@@ -227,6 +238,8 @@ $AP_CONFIG/
   SYSTEM.md                          # 存在时替换内置固定指令段
   agents/
     <name>.md                        # 子代理定义
+  logs/
+    app-YYYY-MM-DD.log               # 诊断日志，按本地日期一天一个文件
   projects/
     <project_path_hash>/
       path.txt                       # 规范化后的项目路径，便于反向排查

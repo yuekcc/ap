@@ -173,7 +173,9 @@ session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error)
 session_options_append :: proc(opts: ^Session_Options, section: string)
 ```
 
-另有 `settings_defaults`（只给默认值，不读文件）、`registry_init`、`is_ok` / `errorf`、`log_set_level` / `log_warn` / `log_error`（诊断写 stderr），以及给宿主用的 `Error` / `Settings` / `Session` / `Emitter` / `Tool` / `Tool_Result` / `Registry` 等类型别名。
+另有 `settings_defaults`（只给默认值，不读文件）、`registry_init`、`is_ok` / `errorf`、`log_set_level` / `log_warn` / `log_error`（诊断同时写 stderr 与文件日志），以及给宿主用的 `Error` / `Settings` / `Session` / `Emitter` / `Tool` / `Tool_Result` / `Registry` 等类型别名。
+
+文件日志的目录由宿主显式打开（`apcore.log_file_open(config_dir)` → `platform.log_file_init`），SDK 不去猜 `$AP_CONFIG`。级别过滤只在 `engine` 的 `log_message` 里做一次，决定输出的消息同时写 stderr 与 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`；文件写入复用 `platform.log_file_write`，失败静默。新宿主不调用 `log_file_open` 时只剩 stderr，行为与之前一致。
 
 `settings.json` 由宿主 adapter 读取与校验：`ap-cli` 读取完整字段并拆成 `apcore.Settings` 与 `aptools.Tool_Config`，`magi` 只读取 provider 相关字段。`env_open` 不做 `setup_console`、不装信号、不写 stdout，只确保配置目录可写、解析 cwd/project、校验并保存工具注册表。`--list-skills` 的文本生成属于应用层；当前 CLI 不接受 `--list-tools`（与既有行为一致）。
 
@@ -197,8 +199,8 @@ session_options_append :: proc(opts: ^Session_Options, section: string)
    - Unix 的递归扫描不是运行期登记表：正常返回后 ap 不会在退出时再次清理后台后代
 5. 主进程正常退出、SIGTERM、SIGINT 走统一清理；panic 按运行时行为尽力清理，`kill -9` 与断电无法清理，可能留孤儿
 6. 子进程 stdout/stderr 分流：子代理把 stream-json 事件写 stdout，人类可读日志写 stderr；父进程解析 stdout、转发/捕获 stderr
-7. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → 读取提示词 → （新 session）解析 agent / 发现技能 / 读取 `$AP_CONFIG/SYSTEM.md` → 构造工具注册表 → 应用工具白名单与深度规则 → 组装 prompt sections（此处读取 `AGENTS.md`）→ `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
-8. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件
+7. 启动顺序（`ap-cli`）：解析参数 → 确定 `$AP_CONFIG` → 打开文件日志（`apcore.log_file_open`，只记录目录）→ 读取并校验 `settings.json`（拆成 SDK `Settings` 与 `Tool_Config`）→ 定位 bash → 读取提示词 → （新 session）解析 agent / 发现技能 / 读取 `$AP_CONFIG/SYSTEM.md` → 构造工具注册表 → 应用工具白名单与深度规则 → 组装 prompt sections（此处读取 `AGENTS.md`）→ `apcore.env_open` → `preview_prompt` 或 `session_open` → 写 `session_start` → 进入 Loop
+8. 退出顺序：停止循环 → 清理登记的 Job（仅 Windows；Unix 无登记）→ 写 `session_end` → 关闭 transcript 与 blob 文件 → 关闭日志文件
 9. 中断顺序：设置取消标志 → 中止 HTTP 请求 → 终止工具/子代理进程树 → 写 `cancel` → 写未闭合的 `tool_execution_end` → `message_end(cancelled)`（若正在流式）→ `turn_end` → `session_end(reason=signal)` → 退出
 
 ## 状态归属
