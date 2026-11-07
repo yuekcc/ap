@@ -10,6 +10,11 @@ import "core:sync"
 Project :: platform.Project
 SCHEMA_VERSION :: protocol.SCHEMA_VERSION
 PROVIDER_NAME :: protocol.PROVIDER_NAME
+
+// 产品版本：用于 provider 的 User-Agent 与 CLI 的 --version。与
+// SCHEMA_VERSION（transcript/stream 的 wire 兼容版本）不是一回事。
+VERSION :: "0.1.0"
+
 Tool_Def :: tool.Tool_Def
 Function_Def :: tool.Function_Def
 Error_Kind :: enum int {

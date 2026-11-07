@@ -52,6 +52,8 @@ user_message
 
 带 `omitempty` 的可选字段（各类 `*_ref`、`*_bytes`、`*_preview`、`args`、`input`）缺失时不出现。其余可选字段写 `null`。读取方把缺失与 `null` 按同一种缺省处理。
 
+事件名、`stop_reason`、`scope`、`session_end.reason`、角色与块类型的权威常量在 `ap-core/protocol/names.odin`。新增或改名事件类型时同步该文件与本文。
+
 ## usage
 
 `usage` 对象在 transcript 与 stream 事件中结构相同。

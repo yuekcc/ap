@@ -121,7 +121,7 @@ resolve_session :: proc(req: Session_Request) -> (Resolved_Session, Error) {
 		if !is_ok(rerr) {
 			return resolved, rerr
 		}
-		if len(source_events) > 0 && source_events[len(source_events) - 1].type != "session_end" {
+		if len(source_events) > 0 && source_events[len(source_events) - 1].type != EVENT_SESSION_END {
 			append(
 				&resolved.warnings,
 				fmt.tprintf(
@@ -435,7 +435,7 @@ turn_run :: proc(
 session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error) {
 	reason := opts.reason
 	if len(reason) == 0 {
-		reason = "signal" if opts.cancelled else "exit"
+		reason = SESSION_END_SIGNAL if opts.cancelled else SESSION_END_EXIT
 	}
 	usage := opts.usage
 	if events_now, eerr := transcript_read_all(s.project, s.session_id); is_ok(eerr) {
@@ -444,7 +444,7 @@ session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error) {
 			usage = summed
 		}
 	}
-	h := make_header(&s.store, "session_end")
+	h := make_header(&s.store, EVENT_SESSION_END)
 	ev := Session_End_Event {
 		header = h,
 		reason = reason,
@@ -467,12 +467,12 @@ append_session_start :: proc(
 	if len(resumed_from) > 0 {
 		var_resumed = resumed_from
 	}
-	h := make_header(store, "session_start")
+	h := make_header(store, EVENT_SESSION_START)
 	ev := Session_Start_Event {
 		header              = h,
 		session_id          = session_id,
 		content             = start.content,
-		role                = "system",
+		role                = ROLE_SYSTEM,
 		cwd                 = start.cwd,
 		model               = start.model,
 		provider            = start.provider,

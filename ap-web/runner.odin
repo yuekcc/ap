@@ -501,7 +501,7 @@ runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: stri
 	app := job.app
 
 	switch ev.type {
-	case "session_start":
+	case protocol.EVENT_SESSION_START:
 		if len(ev.session_id) > 0 && ev.session_id != job.session_id {
 			if len(job.session_id) > 0 {
 				delete(job.session_id, runtime.heap_allocator())
@@ -509,11 +509,11 @@ runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: stri
 			job.session_id = strings.clone(ev.session_id, runtime.heap_allocator())
 			runner_set_session_id(app, job.key, ev.session_id)
 		}
-	case "turn_start", "turn_end":
+	case protocol.EVENT_TURN_START, protocol.EVENT_TURN_END:
 		if ev.turn > 0 {
 			runner_set_turn(app, job.key, ev.turn)
 		}
-	case "session_end":
+	case protocol.EVENT_SESSION_END:
 		if len(ev.reason) > 0 {
 			if len(job.session_end) > 0 {
 				delete(job.session_end, runtime.heap_allocator())
@@ -530,7 +530,7 @@ runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: stri
 		_ = sse_hub_broadcast(&app.hub, "ap", forwarded, job.key, job.session_id)
 	}
 
-	if ev.type == "turn_end" {
+	if ev.type == protocol.EVENT_TURN_END {
 		if len(ev.stop_reason) > 0 {
 			if len(job.stop_reason) > 0 {
 				delete(job.stop_reason, runtime.heap_allocator())
@@ -541,7 +541,7 @@ runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: stri
 			job.usage = ev.usage
 			job.have_usage = true
 		}
-	} else if ev.type == "session_end" && !job.have_usage && usage_has_values(ev.usage) {
+	} else if ev.type == protocol.EVENT_SESSION_END && !job.have_usage && usage_has_values(ev.usage) {
 		job.usage = ev.usage
 		job.have_usage = true
 	}
@@ -577,7 +577,7 @@ runner_thread :: proc(user: rawptr) {
 	// Windows 的 Job Object 终止会让 ap 来不及写 turn_end/session_end；
 	// 用户主动取消时必须让前端能把「取消」和「失败」区分开。
 	if stop_reason == nil && result.cancelled {
-		stop_reason = "cancelled"
+		stop_reason = protocol.STOP_REASON_CANCELLED
 	}
 	done := Sse_Turn_Done {
 		exit_code = result.exit_code,

@@ -214,7 +214,9 @@ console_turn_end :: proc(c: ^Console, stop_reason: string) {
 	if c.out == nil {
 		return
 	}
-	if len(stop_reason) == 0 || stop_reason == "stop" || stop_reason == "tool_use" {
+	if len(stop_reason) == 0 ||
+	   stop_reason == protocol.STOP_REASON_STOP ||
+	   stop_reason == protocol.STOP_REASON_TOOL_USE {
 		return
 	}
 	console_ensure_line_start(c)
@@ -242,20 +244,20 @@ console_transcript_line :: proc(c: ^Console, line: string) {
 		return
 	}
 	switch ev.type {
-	case "tool_execution_start":
+	case protocol.EVENT_TOOL_EXECUTION_START:
 		console_tool_start(c, ev.name, console_args_text(c, ev))
-	case "tool_execution_end":
+	case protocol.EVENT_TOOL_EXECUTION_END:
 		content, has_content := console_result_text(c, ev)
 		err := ""
 		if value, has_err := ev.error.?; has_err {
 			err = value
 		}
 		console_tool_end(c, ev.ok, content, has_content, err, ev.duration_ms, ev.exit_code)
-	case "error":
+	case protocol.EVENT_ERROR:
 		console_error(c, ev.scope, ev.message, ev.retryable)
-	case "cancel":
+	case protocol.EVENT_CANCEL:
 		console_note(c, fmt.tprintf("cancelled [%s]", ev.scope))
-	case "turn_end":
+	case protocol.EVENT_TURN_END:
 		console_turn_end(c, ev.stop_reason)
 	case:
 		// session_start / step_start / message_* / user_message 不直接展示。

@@ -174,7 +174,7 @@ project_messages_in :: proc(
 	// 先收集 tool result，之后按 assistant 的 tool_use 顺序配对。
 	results := make(map[string]Tool_Execution_End_Event, 8, allocator)
 	for ev in events {
-		if ev.type != "tool_execution_end" {
+		if ev.type != EVENT_TOOL_EXECUTION_END {
 			continue
 		}
 		end: Tool_Execution_End_Event
@@ -187,18 +187,18 @@ project_messages_in :: proc(
 	messages := make([dynamic]Chat_Message, 0, len(events), allocator)
 	for ev in events {
 		switch ev.type {
-		case "user_message":
+		case EVENT_USER_MESSAGE:
 			user: User_Message_Event
 			if uerr := json.unmarshal_string(ev.line, &user, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
 				return nil, make_error(.Usage, "cannot parse user_message event: %v", uerr)
 			}
-			append_chat_message(&messages, Chat_Message{role = "user", content = user.content})
-		case "message_end":
+			append_chat_message(&messages, Chat_Message{role = ROLE_USER, content = user.content})
+		case EVENT_MESSAGE_END:
 			end: Message_End_Event
 			if uerr := json.unmarshal_string(ev.line, &end, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
 				return nil, make_error(.Usage, "cannot parse message_end event: %v", uerr)
 			}
-			if end.stop_reason == "cancelled" {
+			if end.stop_reason == STOP_REASON_CANCELLED {
 				continue
 			}
 
@@ -207,7 +207,7 @@ project_messages_in :: proc(
 			has_any_block := false
 			for block in end.content {
 				switch block.type {
-				case "text":
+				case BLOCK_TEXT:
 					text, terr := content_block_text_in(project, block, allocator)
 					if !is_ok(terr) {
 						return nil, terr
@@ -216,7 +216,7 @@ project_messages_in :: proc(
 						append(&text_parts, text)
 						has_any_block = true
 					}
-				case "tool_use":
+				case BLOCK_TOOL_USE:
 					id, has_id := block.id.?
 					name, has_name := block.name.?
 					if !has_id || len(id) == 0 || !has_name || len(name) == 0 {
@@ -248,7 +248,7 @@ project_messages_in :: proc(
 				continue
 			}
 			msg := Chat_Message {
-				role = "assistant",
+				role = ROLE_ASSISTANT,
 				tool_calls = tool_calls[:],
 			}
 			if reasoning, has_reasoning := end.reasoning.?; has_reasoning && len(reasoning) > 0 {
@@ -268,7 +268,7 @@ project_messages_in :: proc(
 				append(
 					&messages,
 					Chat_Message {
-						role = "tool",
+						role = ROLE_TOOL,
 						content = content,
 						tool_call_id = call.id,
 					},
@@ -284,7 +284,7 @@ append_chat_message :: proc(messages: ^[dynamic]Chat_Message, msg: Chat_Message)
 		last := &messages[len(messages) - 1]
 		if last.role == msg.role {
 			switch msg.role {
-			case "user":
+			case ROLE_USER:
 				left, left_ok := last.content.?
 				right, right_ok := msg.content.?
 				if left_ok && right_ok {
@@ -296,7 +296,7 @@ append_chat_message :: proc(messages: ^[dynamic]Chat_Message, msg: Chat_Message)
 					return
 				}
 				return
-			case "assistant":
+			case ROLE_ASSISTANT:
 				left, left_ok := last.content.?
 				right, right_ok := msg.content.?
 				if left_ok && right_ok && len(left) > 0 && len(right) > 0 {

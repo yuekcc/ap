@@ -9,7 +9,7 @@ import "core:fmt"
 import "core:strings"
 
 Task_State :: struct {
-	line_buf:            [dynamic]byte,
+	lines:               protocol.Line_Reader,
 	stderr_ring:         [dynamic]byte,
 	child_session_id:    string,
 	last_error:          string,
@@ -116,25 +116,27 @@ task_handle_line :: proc(state: ^Task_State, project: platform.Project, line: st
 		return
 	}
 	switch string(typ) {
-	case "session_start":
+	case protocol.EVENT_SESSION_START:
 		start: protocol.Session_Start_Event
 		if json.unmarshal_string(line, &start) == nil {
 			state.saw_session_start = true
 			state.child_session_id = start.session_id
 		}
-	case "message_update":
+	case protocol.EVENT_MESSAGE_UPDATE:
 		if delta, ok := obj["delta"].(json.Object); ok {
 			if text, ok_text := delta["text"].(json.String); ok_text {
 				task_forward_text(state, string(text))
 			}
 		}
-	case "message_end":
+	case protocol.EVENT_MESSAGE_END:
 		end: protocol.Message_End_Event
-		if json.unmarshal_string(line, &end) == nil && end.role == "assistant" && end.stop_reason != "cancelled" {
+		if json.unmarshal_string(line, &end) == nil &&
+		   end.role == protocol.ROLE_ASSISTANT &&
+		   end.stop_reason != protocol.STOP_REASON_CANCELLED {
 			text := strings.builder_make()
 			has_text := false
 			for block in end.content {
-				if block.type != "text" {
+				if block.type != protocol.BLOCK_TEXT {
 					continue
 				}
 				block_text, terr := tool.content_block_text(project, block)
@@ -151,42 +153,30 @@ task_handle_line :: proc(state: ^Task_State, project: platform.Project, line: st
 				state.last_text = strings.to_string(text)
 			}
 		}
-	case "turn_end":
+	case protocol.EVENT_TURN_END:
 		end: protocol.Turn_End_Event
 		if json.unmarshal_string(line, &end) == nil {
 			state.stop_reason = end.stop_reason
 			state.usage = end.usage
 		}
-	case "error":
+	case protocol.EVENT_ERROR:
 		err_ev: protocol.Error_Event
 		if json.unmarshal_string(line, &err_ev) == nil {
 			state.last_error = err_ev.message
 		}
-	case "session_end":
+	case protocol.EVENT_SESSION_END:
 		state.saw_session_end = true
 	}
 }
 
+task_stdout_line :: proc(user: rawptr, line: string) {
+	state := (^Task_State)(user)
+	task_handle_line(state, state.project, line)
+}
+
 task_stdout_chunk :: proc(user: rawptr, chunk: string) {
 	state := (^Task_State)(user)
-	append(&state.line_buf, ..transmute([]byte)chunk)
-	for {
-		nl := -1
-		for i in 0 ..< len(state.line_buf) {
-			if state.line_buf[i] == '\n' {
-				nl = i
-				break
-			}
-		}
-		if nl < 0 {
-			break
-		}
-		line := string(state.line_buf[:nl])
-		task_handle_line(state, state.project, line)
-		remaining := state.line_buf[nl + 1:]
-		copy(state.line_buf[:], remaining)
-		resize(&state.line_buf, len(state.line_buf) - (nl + 1))
-	}
+	protocol.line_reader_feed(&state.lines, transmute([]byte)chunk)
 }
 
 task_stderr_chunk :: proc(user: rawptr, chunk: string) {
@@ -250,12 +240,15 @@ tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 	exec_args := task_child_args(ctx, cfg, agent_name, cfg.max_steps)
 
 	state: Task_State
-	state.line_buf = make([dynamic]byte, 0, 8192)
+	state.lines = protocol.Line_Reader {
+		callback = task_stdout_line,
+		user     = &state,
+	}
 	state.stderr_ring = make([dynamic]byte, 0, 8192)
 	state.project = ctx.project
 	state.on_progress = ctx.on_progress
 	state.progress_user = ctx.progress_user
-	defer delete(state.line_buf)
+	defer delete(state.lines.buf)
 	defer delete(state.stderr_ring)
 	defer delete(state.pending_stdout)
 	defer delete(state.pending_stderr)
@@ -274,9 +267,7 @@ tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 		},
 	)
 	defer free_run_result(&run)
-	if len(state.line_buf) > 0 {
-		task_handle_line(&state, ctx.project, string(state.line_buf[:]))
-	}
+	protocol.line_reader_flush(&state.lines)
 	task_flush_pending(&state)
 	if !run.spawned {
 		res := tool.tool_fail(run.error)
@@ -284,7 +275,7 @@ tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 		return res
 	}
 	if run.cancelled {
-		return task_fail_with_state(&state, run.duration_ms, "cancelled")
+		return task_fail_with_state(&state, run.duration_ms, protocol.TOOL_ERROR_CANCELLED)
 	}
 	if len(run.error) > 0 {
 		res := task_fail_with_state(&state, run.duration_ms, run.error)

@@ -8,7 +8,7 @@ import "core:strings"
 // 前端历史富化用的事件 / blob 辅助。纯展示逻辑，不参与 agent 运行。
 
 event_text_block :: proc(block: json.Object, project: ^Project) -> (string, bool) {
-	if typ, ok := protocol.json_string_field(block, "type"); !ok || typ != "text" {
+	if typ, ok := protocol.json_string_field(block, "type"); !ok || typ != protocol.BLOCK_TEXT {
 		return "", false
 	}
 	if text, ok := protocol.json_string_field(block, "text"); ok {

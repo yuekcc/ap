@@ -30,7 +30,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | `ap-core/engine` | session、loop、provider、context、transcript 的编排 | 不 import `apcore`、`ap-cli` 或前端 |
 | `ap-core/tool` | `Tool`、`Tool_Context`、`Tool_Result`、`Registry`、执行管线 | 不 import engine，不提供具体工具 |
 | `ap-core/platform` | 路径与 project hash、session 发现、blob、JSON 与文本、平台原语、进程树、取消 token、日志文件 | 不 import 任何本地包，不含 agent 逻辑 |
-| `ap-core/protocol` | 事件 schema、宽松解析、`Line_Reader`、usage | 不 import 任何本地包，不含 IO、路径或 agent 逻辑 |
+| `ap-core/protocol` | 事件 schema 与 wire 常量、宽松解析、`Line_Reader`、usage | 不 import 任何本地包，不含 IO、路径或 agent 逻辑 |
 | `ap-core/client` | spawn、拼 argv、逐行泵、取消、只读 project/session/blob、历史展示辅助 | 不 import engine 或 `apcore` 根包，不含 agent |
 | `ap-tui`（`aptui`） | 终端渲染、输入、编辑器、按键、terminal 控制、历史重放 | 不 import engine 或 platform，不含 agent |
 | `ap-web`（`apweb`） | HTTP/1.1、SSE、API、turn runner、前端资源、目录选择 | 不 import engine 或 platform，不含 agent |

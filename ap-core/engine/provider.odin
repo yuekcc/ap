@@ -1,7 +1,6 @@
 package engine
 
 import "../platform"
-import "../protocol"
 
 import "base:runtime"
 import c "core:c/libc"
@@ -24,13 +23,13 @@ Stop_Reason :: enum {
 stop_reason_string :: proc(reason: Stop_Reason) -> string {
 	switch reason {
 	case .Stop:
-		return "stop"
+		return STOP_REASON_STOP
 	case .Tool_Use:
-		return "tool_use"
+		return STOP_REASON_TOOL_USE
 	case .Max_Tokens:
-		return "max_tokens"
+		return STOP_REASON_MAX_TOKENS
 	}
-	return "stop"
+	return STOP_REASON_STOP
 }
 
 Provider_Error_Kind :: enum {
@@ -852,7 +851,7 @@ provider_stream :: proc(
 
 	headers: ^curl.slist
 	auth := fmt.tprintf("Authorization: Bearer %s", p.api_key)
-	user_agent := fmt.tprintf("User-Agent: ap/%s", protocol.VERSION)
+	user_agent := fmt.tprintf("User-Agent: ap/%s", VERSION)
 	headers = curl.slist_append(headers, cstring("Content-Type: application/json"))
 	headers = curl.slist_append(headers, cstring("Accept: text/event-stream"))
 	headers = curl.slist_append(headers, strings.clone_to_cstring(user_agent, context.temp_allocator))

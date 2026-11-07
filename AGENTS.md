@@ -52,7 +52,7 @@ odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 | `ap-core/engine` | loop、provider、context、transcript、session | 不 import `apcore`、`ap-cli`、前端 |
 | `ap-core/tool` | 工具契约、注册表、执行管线 | 不 import engine 或具体工具 |
 | `ap-core/platform` | 路径、project/session、blob、JSON/文本、进程树、取消 token | 不 import 任何本地包 |
-| `ap-core/protocol` | 事件 schema、解析、行分帧、usage | 只依赖 `core:` |
+| `ap-core/protocol` | 事件 schema 与 wire 常量、宽松解析、行分帧、usage | 只依赖 `core:` |
 | `ap-core/client` | 前端 kit：spawn、逐行泵、取消、只读 session | 不 import engine 或 `apcore` |
 | `ap-tui`、`ap-web` | 前端库，提供 `run` | 本地包只允许 `ap-core/client` 和 `ap-core/protocol`，另可用 `core:`/`vendor:`；不互相 import |
 | `magi` | 三角色投票 CLI：参数、输入、提示词、并行 session、一票否决 | 不直接 import `ap-core/engine`、`ap-cli` 或前端；不执行工具 |

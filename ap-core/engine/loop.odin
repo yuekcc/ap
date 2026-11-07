@@ -125,7 +125,7 @@ loop_default_sleep :: proc(ms: int) {
 historical_usage_from_events :: proc(events: []Event) -> Usage {
 	total := Usage{}
 	for ev in events {
-		if ev.type != "turn_end" {
+		if ev.type != EVENT_TURN_END {
 			continue
 		}
 		end: Turn_End_Event
@@ -139,7 +139,7 @@ historical_usage_from_events :: proc(events: []Event) -> Usage {
 next_turn_from_events :: proc(events: []Event) -> int {
 	max_turn := 0
 	for ev in events {
-		if ev.type != "turn_start" {
+		if ev.type != EVENT_TURN_START {
 			continue
 		}
 		start: Turn_Start_Event
@@ -251,11 +251,11 @@ loop_start_message :: proc(l: ^Loop, model: string) -> Error {
 	if len(message_model) == 0 {
 		message_model = l.model
 	}
-	h := make_header(l.store, "message_start")
+	h := make_header(l.store, EVENT_MESSAGE_START)
 	ev := Message_Start_Event {
 		header = h,
 		message_id = id,
-		role = "assistant",
+		role = ROLE_ASSISTANT,
 		model = message_model,
 	}
 	if err := loop_append(l, ev, h); !is_ok(err) {
@@ -267,7 +267,7 @@ loop_start_message :: proc(l: ^Loop, model: string) -> Error {
 
 // 大于阈值的内容写入 blob，失败时调用方决定是保留原文还是报错。
 make_text_block :: proc(l: ^Loop, text: string) -> (Content_Block, Error) {
-	block := Content_Block{type = "text", text = text}
+	block := Content_Block{type = BLOCK_TEXT, text = text}
 	if len(text) <= l.settings.blob_threshold_bytes {
 		return block, ok_error()
 	}
@@ -295,7 +295,7 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 		append(&blocks, block)
 	}
 	for call in end.tool_calls {
-		block := Content_Block{type = "tool_use", id = call.id, name = call.name}
+		block := Content_Block{type = BLOCK_TOOL_USE, id = call.id, name = call.name}
 		args_text := platform.json_arguments_string(call.input)
 		if len(args_text) > l.settings.blob_threshold_bytes {
 			fields, berr := maybe_blob(l.store, transmute([]byte)args_text)
@@ -321,11 +321,11 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 	if len(end.reasoning) > 0 {
 		var_reasoning = end.reasoning
 	}
-	h := make_header(l.store, "message_end")
+	h := make_header(l.store, EVENT_MESSAGE_END)
 	ev := Message_End_Event {
 		header = h,
 		message_id = l.current_message_id,
-		role = "assistant",
+		role = ROLE_ASSISTANT,
 		content = blocks[:],
 		stop_reason = stop_reason_string(end.stop_reason),
 		usage = var_usage,
@@ -404,7 +404,7 @@ loop_write_error :: proc(
 	if len(kind_name) > 0 {
 		var_kind = kind_name
 	}
-	h := make_header(l.store, "error")
+	h := make_header(l.store, EVENT_ERROR)
 	ev := Error_Event {
 		header = h,
 		scope = scope,
@@ -421,7 +421,7 @@ loop_write_cancel :: proc(l: ^Loop, scope: string, target: string) -> Error {
 	if len(target) > 0 {
 		var_target = target
 	}
-	h := make_header(l.store, "cancel")
+	h := make_header(l.store, EVENT_CANCEL)
 	ev := Cancel_Event {
 		header = h,
 		scope = scope,
@@ -431,7 +431,7 @@ loop_write_cancel :: proc(l: ^Loop, scope: string, target: string) -> Error {
 }
 
 loop_write_turn_end :: proc(l: ^Loop, stop_reason: string) -> Error {
-	h := make_header(l.store, "turn_end")
+	h := make_header(l.store, EVENT_TURN_END)
 	ev := Turn_End_Event {
 		header = h,
 		turn = l.turn - 1,
@@ -450,13 +450,13 @@ loop_write_cancelled_message :: proc(l: ^Loop) {
 		block, _ := make_text_block(l, string(l.attempt_text[:]))
 		append(&blocks, block)
 	}
-	h := make_header(l.store, "message_end")
+	h := make_header(l.store, EVENT_MESSAGE_END)
 	ev := Message_End_Event {
 		header = h,
 		message_id = l.current_message_id,
-		role = "assistant",
+		role = ROLE_ASSISTANT,
 		content = blocks[:],
-		stop_reason = "cancelled",
+		stop_reason = STOP_REASON_CANCELLED,
 		usage = nil,
 		reasoning = nil,
 	}
@@ -474,8 +474,8 @@ loop_tool_update :: proc(user: rawptr, chunk: string) {
 loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind: Error_Kind) {
 	for call in l.pending_calls {
 		if platform.cancel_token_cancelled(l.cancel) {
-			_ = loop_write_cancel(l, "step", l.current_tool_call_id)
-			_ = loop_write_turn_end(l, "cancelled")
+			_ = loop_write_cancel(l, SCOPE_STEP, l.current_tool_call_id)
+			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
 			return true, ok_error(), .None
 		}
 
@@ -489,7 +489,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 			args_bytes: []byte = transmute([]byte)args_text
 			sha, berr := blob_write(l.project, args_bytes)
 			if !is_ok(berr) {
-				_ = loop_write_error(l, "session", .None, berr.message, false, 1)
+				_ = loop_write_error(l, SCOPE_SESSION, .None, berr.message, false, 1)
 				return false, berr, .Tool
 			}
 			start_ev.args = nil
@@ -499,7 +499,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		} else {
 			start_ev.args = call.input
 		}
-		h := make_header(l.store, "tool_execution_start")
+		h := make_header(l.store, EVENT_TOOL_EXECUTION_START)
 		start_ev.header = h
 		if aerr := loop_append(l, start_ev, h); !is_ok(aerr) {
 			return false, aerr, .Internal
@@ -521,11 +521,11 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		}
 		res := tool.tool_execute(&l.registry, call.name, call.input, &tool_ctx)
 
-		was_cancelled := platform.cancel_token_cancelled(l.cancel) || (!res.ok && res.error == "cancelled")
+		was_cancelled := platform.cancel_token_cancelled(l.cancel) || (!res.ok && res.error == TOOL_ERROR_CANCELLED)
 		if was_cancelled {
-			_ = loop_write_cancel(l, "step", call.id)
+			_ = loop_write_cancel(l, SCOPE_STEP, call.id)
 			res.ok = false
-			res.error = "cancelled"
+			res.error = TOOL_ERROR_CANCELLED
 			res.content = ""
 		}
 
@@ -557,18 +557,18 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 			end_ev.content = nil
 			end_ev.error = res.error
 		}
-		h2 := make_header(l.store, "tool_execution_end")
+		h2 := make_header(l.store, EVENT_TOOL_EXECUTION_END)
 		end_ev.header = h2
 		if aerr := loop_append(l, end_ev, h2); !is_ok(aerr) {
 			return false, aerr, .Internal
 		}
 		progress(l, .Block, "_%s %s (%dms)_", call.name, "ok" if end_ev.ok else "failed", res.duration_ms)
 		if was_cancelled {
-			_ = loop_write_turn_end(l, "cancelled")
+			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
 			return true, ok_error(), .None
 		}
 		if res.fatal {
-			_ = loop_write_error(l, "tool", .None, res.error, false, 1)
+			_ = loop_write_error(l, SCOPE_TOOL, .None, res.error, false, 1)
 			return false, make_error(.Tool, "%s", res.error), .Tool
 		}
 	}
@@ -595,7 +595,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	delete(l.last_text)
 	l.last_text = ""
 
-	h_user := make_header(l.store, "user_message")
+	h_user := make_header(l.store, EVENT_USER_MESSAGE)
 	if err := loop_append(l, User_Message_Event{header = h_user, content = prompt}, h_user); !is_ok(err) {
 		result.error_kind = .Internal
 		result.fatal_error = err.message
@@ -603,7 +603,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	}
 	turn := l.turn
 	l.turn += 1
-	h_turn := make_header(l.store, "turn_start")
+	h_turn := make_header(l.store, EVENT_TURN_START)
 	if err := loop_append(l, Turn_Start_Event{header = h_turn, turn = turn}, h_turn); !is_ok(err) {
 		result.error_kind = .Internal
 		result.fatal_error = err.message
@@ -613,18 +613,18 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	step := 0
 	for {
 		if platform.cancel_token_cancelled(l.cancel) {
-			_ = loop_write_cancel(l, "turn", "")
+			_ = loop_write_cancel(l, SCOPE_TURN, "")
 			loop_write_cancelled_message(l)
-			_ = loop_write_turn_end(l, "cancelled")
+			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
 			result.cancelled = true
-			result.stop_reason = "cancelled"
+			result.stop_reason = STOP_REASON_CANCELLED
 			result.num_steps = step
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
 			return result
 		}
 		if step >= l.max_steps {
-			_ = loop_write_turn_end(l, "max_steps")
-			result.stop_reason = "max_steps"
+			_ = loop_write_turn_end(l, STOP_REASON_MAX_STEPS)
+			result.stop_reason = STOP_REASON_MAX_STEPS
 			result.result_text = strings.clone(l.last_text)
 			result.num_steps = step
 			result.usage = l.turn_usage
@@ -632,7 +632,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			return result
 		}
 		step += 1
-		h_step := make_header(l.store, "step_start")
+		h_step := make_header(l.store, EVENT_STEP_START)
 		if err := loop_append(l, Step_Start_Event{header = h_step, step = step}, h_step); !is_ok(err) {
 			result.error_kind = .Internal
 			result.fatal_error = err.message
@@ -656,7 +656,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			step_arena_allocator(&step_arena, arena_ok),
 		)
 		if !is_ok(cerr) {
-			_ = loop_write_error(l, "session", .None, cerr.message, false, 1)
+			_ = loop_write_error(l, SCOPE_SESSION, .None, cerr.message, false, 1)
 			result.error_kind = .Usage
 			result.fatal_error = cerr.message
 			result.num_steps = step
@@ -668,14 +668,14 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			step_arena_allocator(&step_arena, arena_ok),
 		)
 		if !platform.is_ok(terr) {
-			_ = loop_write_error(l, "session", .None, terr.message, false, 1)
+			_ = loop_write_error(l, SCOPE_SESSION, .None, terr.message, false, 1)
 			result.error_kind = .Internal
 			result.fatal_error = terr.message
 			result.num_steps = step
 			return result
 		}
 		all_messages := make([dynamic]Chat_Message, 0, len(messages) + 1, step_arena_allocator(&step_arena, arena_ok))
-		append(&all_messages, Chat_Message{role = "system", content = system_prompt})
+		append(&all_messages, Chat_Message{role = ROLE_SYSTEM, content = system_prompt})
 		append(&all_messages, ..messages)
 		req := Chat_Message_Request {
 			model = l.model,
@@ -696,7 +696,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			perr := l.provider_call(&l.provider, &req, sink, l.cancel)
 			if !is_ok(l.callback_error) {
 				err := l.callback_error
-				_ = loop_write_error(l, "session", .None, err.message, false, attempt)
+				_ = loop_write_error(l, SCOPE_SESSION, .None, err.message, false, attempt)
 				result.error_kind = .Tool if err.kind == .Tool else .Internal
 				result.fatal_error = err.message
 				result.num_steps = step
@@ -719,7 +719,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				break
 			}
 
-			_ = loop_write_error(l, "llm", perr.kind, perr.message, perr.retryable, attempt)
+			_ = loop_write_error(l, SCOPE_LLM, perr.kind, perr.message, perr.retryable, attempt)
 			if perr.retryable && attempt <= MAX_LLM_RETRIES {
 				delay := 1000 * (1 << uint(attempt - 1))
 				if delay > 16000 {
@@ -744,21 +744,21 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		}
 
 		if cancelled {
-			_ = loop_write_cancel(l, "step", l.current_message_id)
+			_ = loop_write_cancel(l, SCOPE_STEP, l.current_message_id)
 			loop_write_cancelled_message(l)
-			_ = loop_write_turn_end(l, "cancelled")
+			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
 			result.cancelled = true
-			result.stop_reason = "cancelled"
+			result.stop_reason = STOP_REASON_CANCELLED
 			result.num_steps = step
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
 			return result
 		}
 		if context_too_long {
-			_ = loop_write_error(l, "llm", .Context_Too_Long, "context too long; start a new session or reduce input", false, attempt)
-			_ = loop_write_turn_end(l, "context_too_long")
+			_ = loop_write_error(l, SCOPE_LLM, .Context_Too_Long, "context too long; start a new session or reduce input", false, attempt)
+			_ = loop_write_turn_end(l, STOP_REASON_CONTEXT_TOO_LONG)
 			result.error_kind = .Provider
 			result.fatal_error = "context_too_long"
-			result.stop_reason = "context_too_long"
+			result.stop_reason = STOP_REASON_CONTEXT_TOO_LONG
 			result.result_text = strings.clone(l.last_text)
 			result.num_steps = step
 			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
@@ -778,7 +778,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			cancelled_tools, terr2, tool_error_kind := loop_execute_tools(l)
 			if cancelled_tools {
 				result.cancelled = true
-				result.stop_reason = "cancelled"
+				result.stop_reason = STOP_REASON_CANCELLED
 				result.num_steps = step
 				result.session_usage = usage_add(l.historical_usage, l.turn_usage)
 				return result

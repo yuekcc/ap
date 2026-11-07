@@ -2,6 +2,7 @@ package apcli
 
 import apcore "../ap-core"
 import platform "../ap-core/platform"
+import protocol "../ap-core/protocol"
 import apskills "skills"
 import aptools "tools"
 
@@ -277,7 +278,7 @@ run :: proc(args: []string) -> int {
 	}
 	if !apcore.is_ok(terr) {
 		apcore.log_error("%s", terr.message)
-		err_end_line, _ := apcore.session_close(&session, {reason = "error", usage = {}})
+		err_end_line, _ := apcore.session_close(&session, {reason = protocol.SESSION_END_ERROR, usage = {}})
 		if out.format == .Stream_Json {
 			write_stdout(transmute([]byte)err_end_line)
 			write_stdout(transmute([]byte)string("\n"))
@@ -287,14 +288,14 @@ run :: proc(args: []string) -> int {
 
 	if result.error_kind == .None && !result.cancelled && signal_exit_code() != 0 {
 		result.cancelled = true
-		result.stop_reason = "cancelled"
+		result.stop_reason = protocol.STOP_REASON_CANCELLED
 	}
 	platform.cleanup_jobs()
-	reason := "exit"
+	reason := protocol.SESSION_END_EXIT
 	if result.cancelled {
-		reason = "signal"
+		reason = protocol.SESSION_END_SIGNAL
 	} else if result.error_kind != .None {
-		reason = "error"
+		reason = protocol.SESSION_END_ERROR
 	}
 	end_line, end_err := apcore.session_close(
 		&session,

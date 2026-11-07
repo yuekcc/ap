@@ -4,7 +4,6 @@ import apcore "../ap-core"
 import platform "../ap-core/platform"
 import protocol "../ap-core/protocol"
 import "core:encoding/json"
-import "core:time"
 
 Output_State :: struct {
 	format: Output_Format,
@@ -26,10 +25,6 @@ output_write_json :: proc(obj: json.Object) {
 	write_stdout(transmute([]byte)string("\n"))
 }
 
-now_ms :: proc() -> i64 {
-	return time.time_to_unix_nano(time.now()) / 1_000_000
-}
-
 output_transcript :: proc(user: rawptr, event: protocol.Transcript_Event) {
 	out := (^Output_State)(user)
 	switch out.format {
@@ -43,57 +38,12 @@ output_transcript :: proc(user: rawptr, event: protocol.Transcript_Event) {
 	}
 }
 
-// 所有增量事件共享 {"type":"message_update","ts":...,"delta":{}} 信封。
-// delta 必须完整构造后再赋给 obj：Odin 的 map header 按值复制，
-// 从 obj["delta"] 取出再原地写入不会反映到 obj 上。
-make_message_update :: proc() -> json.Object {
-	obj := make(json.Object)
-	obj["type"] = json.String("message_update")
-	obj["ts"] = json.Integer(now_ms())
-	return obj
-}
-
-make_text_delta_event :: proc(message_id, text: string) -> json.Object {
-	obj := make_message_update()
-	obj["message_id"] = json.String(message_id)
-	delta := make(json.Object)
-	delta["text"] = json.String(text)
-	obj["delta"] = delta
-	return obj
-}
-
-make_reasoning_delta_event :: proc(message_id, text: string) -> json.Object {
-	obj := make_message_update()
-	obj["message_id"] = json.String(message_id)
-	delta := make(json.Object)
-	delta["reasoning"] = json.String(text)
-	obj["delta"] = delta
-	return obj
-}
-
-make_tool_delta_event :: proc(index: int, id, name, args_delta: string) -> json.Object {
-	obj := make_message_update()
-	call := make(json.Object)
-	call["index"] = json.Integer(index)
-	if len(id) > 0 {
-		call["id"] = json.String(id)
-	}
-	if len(name) > 0 {
-		call["name"] = json.String(name)
-	}
-	call["args_delta"] = json.String(args_delta)
-	delta := make(json.Object)
-	delta["tool_call"] = call
-	obj["delta"] = delta
-	return obj
-}
-
 output_text_delta :: proc(user: rawptr, message_id, text: string) {
 	out := (^Output_State)(user)
 	if out.format != .Stream_Json {
 		return
 	}
-	output_write_json(make_text_delta_event(message_id, text))
+	output_write_json(protocol.make_text_delta_event(message_id, text))
 }
 
 output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
@@ -101,7 +51,7 @@ output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
 	if out.format != .Stream_Json {
 		return
 	}
-	output_write_json(make_reasoning_delta_event(message_id, text))
+	output_write_json(protocol.make_reasoning_delta_event(message_id, text))
 }
 
 output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string) {
@@ -109,7 +59,7 @@ output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string
 	if out.format != .Stream_Json {
 		return
 	}
-	output_write_json(make_tool_delta_event(index, id, name, args_delta))
+	output_write_json(protocol.make_tool_delta_event(index, id, name, args_delta))
 }
 
 // stderr 按 markdown 排版：每个块前留一个空行，必要时先给上一行收尾。
@@ -183,12 +133,9 @@ output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 	out := (^Output_State)(user)
 	switch out.format {
 	case .Stream_Json:
-		obj := make(json.Object)
-		obj["type"] = json.String("tool_execution_update")
-		obj["ts"] = json.Integer(now_ms())
-		obj["tool_call_id"] = json.String(tool_call_id)
-		obj["chunk"] = json.String(platform.sanitize_utf8(transmute([]byte)chunk))
-		output_write_json(obj)
+		output_write_json(
+			protocol.make_tool_update_event(tool_call_id, platform.sanitize_utf8(transmute([]byte)chunk)),
+		)
 	case .Text:
 		console_tool_update(&out.console, chunk)
 	case .Json:

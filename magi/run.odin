@@ -277,7 +277,7 @@ run_member :: proc(
 	}
 
 	result: apcore.Turn_Result
-	close_reason := "exit"
+	close_reason := apcore.SESSION_END_EXIT
 	defer {
 		_, close_err := apcore.session_close(
 			&session,
@@ -298,20 +298,20 @@ run_member :: proc(
 	)
 	result = turn_result
 	if !apcore.is_ok(terr) {
-		close_reason = "error"
+		close_reason = apcore.SESSION_END_ERROR
 		vote.reason = terr.message
 		vote.stop_reason = "turn_run"
 		magi_log_error("%s 投票失败：%s", role.id, terr.message)
 		return vote
 	}
 	if result.cancelled {
-		close_reason = "signal"
+		close_reason = apcore.SESSION_END_SIGNAL
 		vote.reason = "投票被取消"
-		vote.stop_reason = "cancelled"
+		vote.stop_reason = apcore.STOP_REASON_CANCELLED
 		return vote
 	}
 	if result.error_kind != .None {
-		close_reason = "error"
+		close_reason = apcore.SESSION_END_ERROR
 		vote.reason = result.fatal_error
 		vote.stop_reason = result.stop_reason
 		magi_log_error("%s 投票失败：%s", role.id, vote.reason)
@@ -328,20 +328,20 @@ run_member :: proc(
 		delete(result.result_text)
 		result = repair_result
 		if !apcore.is_ok(rerr) {
-			close_reason = "error"
+			close_reason = apcore.SESSION_END_ERROR
 			vote.reason = rerr.message
 			vote.stop_reason = "repair_turn"
 			magi_log_error("%s 修复轮失败：%s", role.id, rerr.message)
 			return vote
 		}
 		if result.cancelled {
-			close_reason = "signal"
+			close_reason = apcore.SESSION_END_SIGNAL
 			vote.reason = "投票被取消"
-			vote.stop_reason = "cancelled"
+			vote.stop_reason = apcore.STOP_REASON_CANCELLED
 			return vote
 		}
 		if result.error_kind != .None {
-			close_reason = "error"
+			close_reason = apcore.SESSION_END_ERROR
 			vote.reason = result.fatal_error
 			vote.stop_reason = result.stop_reason
 			magi_log_error("%s 修复轮失败：%s", role.id, vote.reason)

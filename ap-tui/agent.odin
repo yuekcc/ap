@@ -18,7 +18,7 @@ remember_session :: proc(app: ^App, session_id: string) {
 
 on_agent_event :: proc(user: rawptr, ev: protocol.Stream_Event) {
 	app := (^App)(user)
-	if ev.type == "session_start" && len(ev.session_id) > 0 {
+	if ev.type == protocol.EVENT_SESSION_START && len(ev.session_id) > 0 {
 		remember_session(app, ev.session_id)
 	}
 	render_event(&app.renderer, ev, .Live)

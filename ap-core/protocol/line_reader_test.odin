@@ -40,3 +40,28 @@ test_line_reader_splits_chunks :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(lines), 4)
 	testing.expect_value(t, lines[3], "tail")
 }
+
+@(test)
+test_line_reader_strips_carriage_return :: proc(t: ^testing.T) {
+	lines: [dynamic]string
+	defer {
+		for line in lines {
+			delete(line)
+		}
+		delete(lines)
+	}
+
+	reader: Line_Reader
+	reader.callback = collect_line
+	reader.user = &lines
+	defer delete(reader.buf)
+
+	line_reader_feed(&reader, transmute([]byte)string("one\r\ntwo\r\nhalf\r"))
+	testing.expect_value(t, len(lines), 2)
+	testing.expect_value(t, lines[0], "one")
+	testing.expect_value(t, lines[1], "two")
+
+	line_reader_flush(&reader)
+	testing.expect_value(t, len(lines), 3)
+	testing.expect_value(t, lines[2], "half")
+}

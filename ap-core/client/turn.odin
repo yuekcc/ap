@@ -97,7 +97,7 @@ on_agent_stdout_line :: proc(user: rawptr, line: string) {
 		free_all(context.temp_allocator)
 		return
 	}
-	if ev.type == "session_start" && len(ev.session_id) > 0 {
+	if ev.type == protocol.EVENT_SESSION_START && len(ev.session_id) > 0 {
 		alloc := pump_allocator(ctx.state)
 		cloned := strings.clone(ev.session_id, alloc)
 		if len(ctx.state.session_id) > 0 {

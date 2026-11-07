@@ -204,7 +204,9 @@ render_error :: proc(r: ^Renderer, scope, message: string, retryable: bool) {
 }
 
 render_turn_end :: proc(r: ^Renderer, stop_reason: string) {
-	if len(stop_reason) == 0 || stop_reason == "stop" || stop_reason == "tool_use" {
+	if len(stop_reason) == 0 ||
+	   stop_reason == protocol.STOP_REASON_STOP ||
+	   stop_reason == protocol.STOP_REASON_TOOL_USE {
 		return
 	}
 	finish_assistant(r)
@@ -216,16 +218,16 @@ render_turn_end :: proc(r: ^Renderer, stop_reason: string) {
 
 render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) {
 	switch ev.type {
-	case "user_message":
+	case protocol.EVENT_USER_MESSAGE:
 		if mode == .History {
 			user_message(r, client.user_message_text(ev))
 		}
-	case "message_start":
+	case protocol.EVENT_MESSAGE_START:
 		if mode == .Live {
 			finish_assistant(r)
 			r.message_had_text_delta = false
 		}
-	case "message_update":
+	case protocol.EVENT_MESSAGE_UPDATE:
 		if mode == .Live {
 			if text, ok := ev.delta.text.?; ok && len(text) > 0 {
 				assistant_text(r, text)
@@ -233,7 +235,7 @@ render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) 
 			}
 			// reasoning 在 phase 1 不展示。
 		}
-	case "message_end":
+	case protocol.EVENT_MESSAGE_END:
 		if mode == .History || !r.message_had_text_delta {
 			for text in client.message_texts(ev, r.project) {
 				assistant_text(r, text)
@@ -241,24 +243,24 @@ render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) 
 		}
 		finish_assistant(r)
 		r.message_had_text_delta = false
-	case "tool_execution_start":
+	case protocol.EVENT_TOOL_EXECUTION_START:
 		tool_start(r, ev.name, client.tool_args_text(ev, r.project))
-	case "tool_execution_update":
+	case protocol.EVENT_TOOL_EXECUTION_UPDATE:
 		if mode == .Live {
 			tool_update(r, ev.chunk)
 		}
-	case "tool_execution_end":
+	case protocol.EVENT_TOOL_EXECUTION_END:
 		content, has_content := client.tool_result_text(ev, r.project)
 		err := ""
 		if e, ok := ev.error.?; ok {
 			err = e
 		}
 		tool_end(r, ev.ok, content, has_content, err, ev.duration_ms, ev.exit_code)
-	case "error":
+	case protocol.EVENT_ERROR:
 		render_error(r, ev.scope, ev.message, ev.retryable)
-	case "cancel":
+	case protocol.EVENT_CANCEL:
 		note(r, fmt.tprintf("cancelled [%s]", ev.scope))
-	case "turn_end":
+	case protocol.EVENT_TURN_END:
 		render_turn_end(r, ev.stop_reason)
 	case:
 		// session_start / session_end / turn_start / step_start 等不直接展示。

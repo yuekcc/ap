@@ -25,6 +25,8 @@ next_line :: proc(it: ^Line_Iterator) -> (line: string, ok: bool) {
 }
 
 // session 发现只需要 session_start 的两个字段，不需要完整事件 schema。
+// platform 是叶子包，import 不了 protocol；这里的 "session_start" 必须与
+// protocol.EVENT_SESSION_START 保持一致。
 Session_Start_Probe :: struct {
 	type:              string         `json:"type"`,
 	parent_session_id: Maybe(string) `json:"parent_session_id"`,

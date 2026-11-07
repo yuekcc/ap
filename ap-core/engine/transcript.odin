@@ -33,6 +33,50 @@ Tool_Execution_End_Event :: protocol.Tool_Execution_End_Event
 Error_Event :: protocol.Error_Event
 Cancel_Event :: protocol.Cancel_Event
 
+// wire 取值别名；唯一权威在 ap-core/protocol/names.odin。
+event_type_known :: protocol.event_type_known
+event_type_canonical :: protocol.event_type_canonical
+
+EVENT_SESSION_START :: protocol.EVENT_SESSION_START
+EVENT_SESSION_END :: protocol.EVENT_SESSION_END
+EVENT_USER_MESSAGE :: protocol.EVENT_USER_MESSAGE
+EVENT_TURN_START :: protocol.EVENT_TURN_START
+EVENT_TURN_END :: protocol.EVENT_TURN_END
+EVENT_STEP_START :: protocol.EVENT_STEP_START
+EVENT_MESSAGE_START :: protocol.EVENT_MESSAGE_START
+EVENT_MESSAGE_END :: protocol.EVENT_MESSAGE_END
+EVENT_TOOL_EXECUTION_START :: protocol.EVENT_TOOL_EXECUTION_START
+EVENT_TOOL_EXECUTION_END :: protocol.EVENT_TOOL_EXECUTION_END
+EVENT_ERROR :: protocol.EVENT_ERROR
+EVENT_CANCEL :: protocol.EVENT_CANCEL
+
+STOP_REASON_STOP :: protocol.STOP_REASON_STOP
+STOP_REASON_TOOL_USE :: protocol.STOP_REASON_TOOL_USE
+STOP_REASON_MAX_TOKENS :: protocol.STOP_REASON_MAX_TOKENS
+STOP_REASON_MAX_STEPS :: protocol.STOP_REASON_MAX_STEPS
+STOP_REASON_CANCELLED :: protocol.STOP_REASON_CANCELLED
+STOP_REASON_CONTEXT_TOO_LONG :: protocol.STOP_REASON_CONTEXT_TOO_LONG
+
+SESSION_END_EXIT :: protocol.SESSION_END_EXIT
+SESSION_END_SIGNAL :: protocol.SESSION_END_SIGNAL
+SESSION_END_ERROR :: protocol.SESSION_END_ERROR
+
+SCOPE_LLM :: protocol.SCOPE_LLM
+SCOPE_TOOL :: protocol.SCOPE_TOOL
+SCOPE_SESSION :: protocol.SCOPE_SESSION
+SCOPE_STEP :: protocol.SCOPE_STEP
+SCOPE_TURN :: protocol.SCOPE_TURN
+
+ROLE_SYSTEM :: protocol.ROLE_SYSTEM
+ROLE_USER :: protocol.ROLE_USER
+ROLE_ASSISTANT :: protocol.ROLE_ASSISTANT
+ROLE_TOOL :: protocol.ROLE_TOOL
+
+BLOCK_TEXT :: protocol.BLOCK_TEXT
+BLOCK_TOOL_USE :: protocol.BLOCK_TOOL_USE
+
+TOOL_ERROR_CANCELLED :: protocol.TOOL_ERROR_CANCELLED
+
 Transcript_Error :: enum {
 	None,
 	Not_Found,
@@ -53,56 +97,6 @@ Transcript_Store :: struct {
 	file:       ^os.File,
 	next_seq:   int,
 	settings:   ^Settings,
-}
-
-// 已知事件类型一律映射到静态字面量，让 Event.type 不需要所有权管理。
-event_type_canonical :: proc(typ: string) -> string {
-	switch typ {
-	case "session_start":
-		return "session_start"
-	case "session_end":
-		return "session_end"
-	case "user_message":
-		return "user_message"
-	case "turn_start":
-		return "turn_start"
-	case "turn_end":
-		return "turn_end"
-	case "step_start":
-		return "step_start"
-	case "message_start":
-		return "message_start"
-	case "message_end":
-		return "message_end"
-	case "tool_execution_start":
-		return "tool_execution_start"
-	case "tool_execution_end":
-		return "tool_execution_end"
-	case "error":
-		return "error"
-	case "cancel":
-		return "cancel"
-	}
-	return typ
-}
-
-event_type_known :: proc(typ: string) -> bool {
-	switch typ {
-	case "session_start",
-	     "session_end",
-	     "user_message",
-	     "turn_start",
-	     "turn_end",
-	     "step_start",
-	     "message_start",
-	     "message_end",
-	     "tool_execution_start",
-	     "tool_execution_end",
-	     "error",
-	     "cancel":
-		return true
-	}
-	return false
 }
 
 make_header :: proc(store: ^Transcript_Store, typ: string) -> Event_Header {
@@ -483,7 +477,7 @@ fork_transcript :: proc(
 
 last_session_start :: proc(events: []Event) -> (Session_Start_Event, bool) {
 	for i := len(events) - 1; i >= 0; i -= 1 {
-		if events[i].type != "session_start" {
+		if events[i].type != EVENT_SESSION_START {
 			continue
 		}
 		ev: Session_Start_Event

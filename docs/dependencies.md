@@ -19,7 +19,7 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 | `ap-core/engine/` | `engine` | session、loop、provider、sse、context、transcript、errors、prompts |
 | `ap-core/tool/` | `tool` | 工具契约、参数助手、注册表、执行管线、blob 文本读取 |
 | `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON 与文本、平台原语、进程树、取消 token、文件日志 |
-| `ap-core/protocol/` | `protocol` | 事件 schema、宽松解析、`Line_Reader`、usage |
+| `ap-core/protocol/` | `protocol` | 事件 schema 与 wire 常量、宽松解析、`Line_Reader`、usage |
 | `ap-core/client/` | `client` | 前端 kit：spawn、逐行泵、取消、只读 project/session/blob、历史展示辅助 |
 | `ap-tui/` | `aptui` | 终端前端库：参数、agent 调度、渲染、输入、编辑器、按键、终端控制 |
 | `ap-web/` | `apweb` | HTTP 与 SSE 前端库：server、api、sse、runner、assets、pickdir、net |

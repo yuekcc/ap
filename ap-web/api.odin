@@ -476,7 +476,7 @@ session_turn_count :: proc(project: client.Project, session_id: string) -> int {
 		}
 		probe: Type_Probe
 		if json.unmarshal(transmute([]byte)line, &probe, json.DEFAULT_SPECIFICATION, context.temp_allocator) == nil {
-			if probe.type == "turn_start" {
+			if probe.type == protocol.EVENT_TURN_START {
 				count += 1
 			}
 		}
@@ -543,7 +543,7 @@ history_enrich_event :: proc(value: ^json.Value, ev: protocol.Stream_Event, proj
 	// map 头按值拷贝：所有写入先落到 obj，再写回 union。
 	defer value^ = obj
 	switch ev.type {
-	case "session_start":
+	case protocol.EVENT_SESSION_START:
 		if _, has_content := obj["content"]; has_content {
 			return
 		}
@@ -556,7 +556,7 @@ history_enrich_event :: proc(value: ^json.Value, ev: protocol.Stream_Event, proj
 		if preview, has_preview := protocol.json_string_field(obj, "content_preview"); has_preview {
 			json_object_set(&obj, "content", json.String(preview))
 		}
-	case "message_end":
+	case protocol.EVENT_MESSAGE_END:
 		blocks, ok := obj["content"].(json.Array)
 		if !ok {
 			return
@@ -568,18 +568,18 @@ history_enrich_event :: proc(value: ^json.Value, ev: protocol.Stream_Event, proj
 			}
 			block_type, _ := protocol.json_string_field(block, "type")
 			switch block_type {
-			case "text":
+			case protocol.BLOCK_TEXT:
 				history_resolve_text_block(&block, project)
-			case "tool_use":
+			case protocol.BLOCK_TOOL_USE:
 				history_resolve_tool_input(&block, project)
 			}
 			blocks[i] = block
 		}
-	case "tool_execution_start":
+	case protocol.EVENT_TOOL_EXECUTION_START:
 		local := project
 		args_text := client.tool_args_text(ev, &local)
 		json_object_set(&obj, "args_preview", json.String(args_text))
-	case "tool_execution_end":
+	case protocol.EVENT_TOOL_EXECUTION_END:
 		local_content := project
 		content, _ := client.tool_result_text(ev, &local_content)
 		preview, truncated := client.preview_content(content)

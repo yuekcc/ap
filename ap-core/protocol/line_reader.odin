@@ -4,11 +4,19 @@ import "core:strings"
 
 // 把管道里的字节流切成完整行；一行 stdout 就是一个 stream-json 事件。
 // 每次 feed 后压实缓冲，避免长 turn 的无界增长。
+// 行尾的单个 '\r' 会被去掉，Windows 的 CRLF 对调用方不可见。
 Line_Reader :: struct {
 	buf:      [dynamic]u8,
 	start:    int,
 	callback: proc(user: rawptr, line: string),
 	user:     rawptr,
+}
+
+trim_line_ending :: proc(line: string) -> string {
+	if len(line) > 0 && line[len(line) - 1] == '\r' {
+		return line[:len(line) - 1]
+	}
+	return line
 }
 
 line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
@@ -22,7 +30,7 @@ line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
 			break
 		}
 		line := view[:idx]
-		lr.callback(lr.user, line)
+		lr.callback(lr.user, trim_line_ending(line))
 		lr.start += idx + 1
 	}
 	if lr.start > 0 {
@@ -38,7 +46,7 @@ line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
 // 进程退出时把最后一截没有换行结尾的内容也交出去。
 line_reader_flush :: proc(lr: ^Line_Reader) {
 	if lr.start < len(lr.buf) {
-		lr.callback(lr.user, transmute(string)lr.buf[lr.start:])
+		lr.callback(lr.user, trim_line_ending(transmute(string)lr.buf[lr.start:]))
 	}
 	resize(&lr.buf, 0)
 	lr.start = 0

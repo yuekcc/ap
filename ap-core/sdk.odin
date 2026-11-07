@@ -2,7 +2,6 @@ package apcore
 
 import "engine"
 import "platform"
-import "protocol"
 import "tool"
 
 // SDK 门面。
@@ -13,7 +12,13 @@ import "tool"
 // 并且只 import 本包与 platform/protocol 原语，不直接 import engine。
 // 依赖方向：apcli → apcore → engine / tool。
 
-VERSION :: protocol.VERSION
+VERSION :: engine.VERSION
+
+// wire 取值：宿主拼 session_end 或比较 stop_reason 时使用，避免自己抄字面量。
+STOP_REASON_CANCELLED :: engine.STOP_REASON_CANCELLED
+SESSION_END_EXIT :: engine.SESSION_END_EXIT
+SESSION_END_SIGNAL :: engine.SESSION_END_SIGNAL
+SESSION_END_ERROR :: engine.SESSION_END_ERROR
 
 // ---- 对外类型别名：宿主不必 import engine ----
 

@@ -5,9 +5,13 @@ package protocol
 
 SCHEMA_VERSION :: 1
 PROVIDER_NAME :: "openai-chat-completions"
-VERSION :: "0.1.0"
 
 // transcript/stream 事件的公共信封字段。
+//
+// 类型化事件里的 `using header: Event_Header` 必须是第一个字段：
+// transcript 写入方（engine/transcript.odin 的 flatten_event_json）依赖
+// json.marshal 先输出 header、再把它的字段平铺到顶层。调整字段顺序会
+// 破坏 wire 格式。
 Event_Header :: struct {
 	v:    int    `json:"v"`,
 	seq:  int    `json:"seq"`,
