@@ -1,118 +1,124 @@
 # CLI 与配置
 
-## 形态
+`ap` 是单次运行的命令行程序：读取一条提示词，跑完一个 turn，写出结果后退出。
+本文件定义参数、提示词来源、输出格式、退出码、`settings.json`、环境变量、存储布局、项目识别，以及恢复、继续和 fork 的 CLI 行为。
+事件字段、`turn` 与 `step` 状态机、transcript 结构见 [react-loop-and-session.md](react-loop-and-session.md)。system prompt 的内容见 [context-management.md](context-management.md)。
 
-ap 本体只有一种形态：**一次性 CLI**。ap 读取一条提示词，跑完一个 turn（或达到终止条件），写 `session_end`，退出。ap 自身没有交互式 REPL、TUI 或 Esc 取消；交互界面由独立的 `ap-tui` / `ap-web` 通过 `--output-format stream-json` 调用 ap，见 [tui.md](tui.md) 与 [web.md](web.md)。
+## 运行形态
 
-脚本化与子代理复用同一套入口，差异只体现在参数上：
+`ap` 没有交互式 REPL、TUI 或内置取消键。`ap-tui` 与 `ap-web` 是独立前端，每轮拉起一个 `ap` 子进程，通过 `--output-format stream-json` 交互，见 [tui.md](tui.md)、[web.md](web.md) 与 [integration.md](integration.md)。
 
-- `--output-format json`：给脚本用的单个结果对象
-- `--output-format stream-json`：给子代理/流式消费者用的事件流
-- `--parent-session-id` / `--parent-tool-call-id` / `--agent-depth`：给子代理用的父子关联
-
-不提供 `--headless`：所有运行都是非交互的，这个开关没有意义。
+一次运行只处理一条提示词，因此一次运行最多产生一个 user turn。脚本、前端和子代理复用同一个入口，差异只在参数和输出格式。ap 不提供 `--headless`，所有运行都是非交互的。
 
 ## 参数
 
-| 参数 | 值 | 说明 |
+带值的长参数接受 `--flag value` 和 `--flag=value` 两种写法。短别名 `-s`、`-p` 只接受分开的值。`--` 与位置参数会被拒绝。
+
+| 参数 | 值 | 作用 |
 | --- | --- | --- |
-| `-s, --session <id>` | session_id | 恢复当前项目内的指定 session |
-| `-c, --continue` | — | 恢复当前项目内最近一次根 session，无需 id |
-| `--fork-session` | — | 与 `-s` / `-c` 连用：复制历史到新 session，不污染原记录 |
-| `--agent <name>` | agent 名 | 指定 agent。`$AP_CONFIG/agents/<name>.md` 存在时使用该定义；否则只接受内置 `general` |
-| `--input-file <path>` | 文件路径 | 从文件读取提示词（UTF-8） |
-| `-p, --print <prompt>` | 提示词 | 直接指定提示词 |
-| `--print0` | — | 从 fd 0（stdin）读取整条提示词，直到 EOF |
+| `-h`, `--help` | — | 打印用法，退出 0 |
+| `--version` | — | 打印版本，退出 0 |
+| `-s`, `--session <id>` | session_id | 恢复当前项目内的指定 session |
+| `-c`, `--continue` | — | 恢复当前项目内最近的根 session |
+| `--fork-session` | — | 与 `-s` 或 `-c` 连用，把历史复制到新 session |
+| `--agent <name>` | agent 名 | 使用 `$AP_CONFIG/agents/<name>.md`，缺省为内置 `general` |
+| `-p`, `--print <prompt>` | 提示词 | 直接提供提示词 |
+| `--input-file <path>` | 文件路径 | 从 UTF-8 文件读取提示词 |
+| `--print0` | — | 从 fd 0 读取提示词直到 EOF |
 | `--config-dir <path>` | 目录 | 设置 `$AP_CONFIG`，默认 `~/.ap` |
-| `--model <id>` | model_id | 覆盖配置文件中的 model；新 session 的优先级是 CLI > agent 定义 > `settings.json`；恢复 session 时只警告，不生效 |
-| `--max-steps <n>` | 正整数 | 单个 turn 的最大 step 数；新 session 的优先级是 CLI > agent 定义 > `settings.json` |
-| `--max-tokens <n>` | 正整数 | 单次响应的 `max_tokens`，默认取 `settings.json`；agent 定义不覆盖该字段 |
-| `--output-format <fmt>` | `text` / `json` / `stream-json` | 输出格式，默认 `text` |
-| `--parent-session-id <id>` | session_id | 标记当前进程是某个 session 的子代理；父 transcript 必须存在 |
-| `--parent-tool-call-id <id>` | tool_call_id | 父进程中对应的 `task` 调用；必须与 `--parent-session-id` 同时使用 |
-| `--agent-depth <n>` | 非负整数 | 当前 agent 深度；默认 0，子代理为父 + 1；恢复时以记录为准 |
-| `--no-agents-md` | — | 不注入 `~/.agents/AGENTS.md` 与项目 `AGENTS.md`；只在新 session 生效，恢复时忽略 |
-| `--no-skills` | — | 不扫描、不注入技能清单；不影响 `--list-skills`；只在新 session 生效，恢复时忽略 |
-| `--verbose` / `--debug` | — | 日志级别，同时写 stderr 与日志文件 |
-| `--list-skills` | — | 列出当前目录可见的技能后退出；不读配置、不需要 API key |
-| `--print-system-prompt` | — | 打印本次运行使用的 system prompt 后退出；不创建 session、不调用模型、不需要 API key |
-| `--help` / `--version` | — | 用法与版本 |
+| `--model <id>` | model_id | 覆盖 model |
+| `--max-steps <n>` | 正整数 | 单个 turn 的最大 step 数 |
+| `--max-tokens <n>` | 正整数 | 单次响应的 `max_tokens` |
+| `--output-format <fmt>` | `text`、`json`、`stream-json` | 输出格式，默认 `text` |
+| `--parent-session-id <id>` | session_id | 标记当前进程是某个 session 的子代理 |
+| `--parent-tool-call-id <id>` | tool_call_id | 父进程中对应的 `task` 调用 |
+| `--agent-depth <n>` | 非负整数 | 当前 agent 深度，默认 0 |
+| `--no-agents-md` | — | 不注入全局和项目 `AGENTS.md` |
+| `--no-skills` | — | 不扫描、不注入技能清单 |
+| `--print-system-prompt` | — | 打印本次 system prompt 后退出 |
+| `--list-skills` | — | 列出当前目录可见的技能后退出 |
+| `--verbose` | — | 输出 info 及更高级别日志 |
+| `--debug` | — | 输出 debug 及更高级别日志 |
 
-不提供 `--add-dir`。所有相对路径只相对启动目录；绝对路径不受限制。
+约束：
 
-### 提示词来源
+- `-s` 与 `-c` 互斥。`--fork-session` 必须与其中之一连用。
+- `--parent-tool-call-id` 必须与 `--parent-session-id` 同时使用。新 session 的父 transcript 必须存在。
+- `--session` 与 `--parent-session-id` 的取值不能是 `.`、`..`，也不能包含 `/`、`\` 或 NUL。
+- `--max-steps` 与 `--max-tokens` 必须是正整数。`--agent-depth` 必须是非负整数。
+- 新 session 的 `model` 与 `max_steps` 优先级是命令行 > agent 定义 > `settings.json`。`max_tokens` 只有命令行与 `settings.json` 两级，agent 定义没有该字段。
+- 不提供 `--add-dir`。相对路径只相对启动目录，绝对路径不受限制。
+- 参数非法、缺值或冲突时退出 2。
 
-`--print`、`--input-file`、`--print0` **三选一**：正常运行必须且只能给一个，同时出现或都没给都退出码 2。不需要提示词的检查命令（`--help`、`--version`、`--list-skills`、`--print-system-prompt`）不受此限制。`-s` 与 `-c` 也互斥；`--fork-session` 必须与其中之一连用。
+## 提示词来源
 
-- `--print`：参数即提示词；空字符串视为用法错误。提示词必须是合法 UTF-8；Windows 上若系统 ANSI 代码页不是 UTF-8，ap 会先按宽字符命令行重建参数并转成 UTF-8，转换不了的参数会直接报用法错误，而不是把乱码写进 transcript
-- `--input-file`：文件必须存在、可读、UTF-8；内容为空视为用法错误
-- `--print0`：读 fd 0 直到 EOF；帮助文本里明确写「0 = stdin」，避免被误认为 NUL 分隔
-- 三者都没给时：退出码 2，并提示可用的三个来源。ap **不再**根据 stdin 是否为 TTY 隐式读取；需要从 stdin 取提示词时必须显式传 `--print0`
-- 内嵌/集成场景统一用 `--print0` + stdin：写完提示词后关闭写端，EOF 就是输入结束信号
+`--print`、`--input-file`、`--print0` 三选一。正常运行必须且只能给一个。同时出现多个在解析参数时退出 2，一个都不给在读取提示词时退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt` 不需要提示词。
 
-一次运行只处理一条提示词，因此一次运行最多一个 user turn。
+- `--print`：参数即提示词。空字符串和非法 UTF-8 都退出 2。Windows 上若系统 ANSI 代码页不是 UTF-8，ap 会先用宽字符命令行重建参数，再转成 UTF-8。
+- `--input-file`：路径按启动目录解析，支持 `~`。文件必须存在、可读、非空且是合法 UTF-8。
+- `--print0`：从 fd 0 读到 EOF。帮助文本写明 `0 = stdin`，不要把它理解成 NUL 分隔。空输入和非法 UTF-8 都退出 2。
+- ap 不再根据 stdin 是否为 TTY 隐式读取。集成方需要从 stdin 取提示词时，必须显式传 `--print0`，写完提示词后关闭写端。
 
-### system prompt 约定与上下文开关
+## 上下文开关
 
-`$AP_CONFIG/SYSTEM.md`：
+`$AP_CONFIG/SYSTEM.md` 存在时替换 system prompt 的 base 段。文件校验、换行规范化、只影响新 session 的规则见 [context-management.md](context-management.md)。ap 不提供 `--append-system-prompt`。要追加提示词，写入 `~/.agents/AGENTS.md` 或项目 `AGENTS.md`。
 
-1. 存在时替换 system prompt 的第 1 段（内置固定指令）；工具说明、环境、技能、记忆、agent 定义仍按规则拼接
-2. 文件必须可读、非空且是合法 UTF-8；否则退出 2
-3. 文本统一规范化：CRLF / 单独 CR → LF，去掉首尾空白，结尾保证恰好一个 `\n`；内部空行与缩进保持不变
-4. 只影响新 session；恢复 / fork 使用 `session_start` 中冻结的 prompt
-5. 不存在“完全裸 prompt”模式：环境与工具说明等自动小节始终保留
+`--no-agents-md` 关闭全局与项目记忆的读取和注入，不改变磁盘上的文件。`--no-skills` 关闭技能扫描与清单注入。两个开关都只影响新 session，也都不是安全边界。技能规则见 [skills.md](skills.md)。
 
-需要追加提示词时，写入 `~/.agents/AGENTS.md`（全局）或项目 `AGENTS.md`，不提供 `--append-system-prompt`。
+## 检查命令
 
-`--no-agents-md`：不读取 `~/.agents/AGENTS.md`，也不从 cwd 向上发现项目 `AGENTS.md`；system prompt 中不会出现「全局记忆」「项目记忆」小节。不改变 `AGENTS.md` 文件本身，也不改变文件工具的读取能力。
+`--list-skills` 在加载配置之前处理。它扫描 `~/.agents/skills` 与 `<启动目录>/.agents/skills`，打印人读简表后退出 0。它不读 `settings.json`，不需要 API key，`--config-dir` 对它没有影响，`--no-skills` 也不改变输出。`--help` 与 `--version` 的优先级更高。格式见 [skills.md](skills.md)。
 
-`--no-skills`：只关闭“扫描技能并注入清单”；prompt 中不出现 `<available_skills>`，`--list-skills` 仍正常列出。它不是安全边界，模型仍可用 `bash` / `read_file` 读 `SKILL.md`。
+`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出 0。它不创建 session、不写 transcript、不调用模型，也不需要提示词。
 
-### 查看技能
+- 新 session 路径会加载 `settings.json`、定位 bash、解析 agent，并按开关重新扫描技能、记忆和 agent 定义。`model` 仍必填，API key 不要求。
+- 受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。
+- 与 `-s` 或 `-c` 连用时，打印该 session 在 `session_start` 中冻结的 prompt，不重新解析 agent。
+- 输出始终是纯文本，不受 `--output-format` 影响，末尾保证换行。
 
-`--list-skills` 在加载配置之前处理，列出 `~/.agents/skills` 与 `<启动目录>/.agents/skills` 中的有效技能后退出（退出码 0）。它不需要 `settings.json` 或 API key，`--config-dir` 对它没有影响；`--help` / `--version` 的优先级更高。`--no-skills` 只影响新 session 的提示词注入，不影响该命令。格式与发现规则见 [skills.md](skills.md)。
+## 输出
 
-### 查看 system prompt
+stdout 是机器通道，只放结果或事件。日志、进度和工具输出全部走 stderr。三种格式都遵守这一条。
 
-`--print-system-prompt` 把本次运行使用的 system prompt 原文写到 stdout 后退出（退出码 0），不创建 session、不写 transcript、不调用模型，也不需要提示词或 API key。它会正常加载配置、定位 bash 并解析 agent，因此需要可用的 `settings.json`（`model` 仍必填）和 `bash`；受 `--config-dir`、`--agent`、`$AP_CONFIG/SYSTEM.md`、`--no-agents-md`、`--no-skills` 影响。新 session 的组装入口与 `session_open` 共用应用的 `build_prompt_sections`，保证打印结果与模型收到的冻结 prompt 一致。
+| 格式 | stdout | stderr |
+| --- | --- | --- |
+| `text` | 最后一条含文本的 assistant 消息，turn 结束后一次性输出 | ap-tui 风格进度 |
+| `json` | 单个结果对象，turn 结束后输出 | markdown 风格进度 |
+| `stream-json` | 每行一个事件，包含持久事件与临时 stream 事件 | markdown 风格进度 |
 
-新 session 按 [context-management.md](context-management.md) 的规则现场组装（技能清单、记忆文件、agent 定义都会重新扫描）。存在 `SYSTEM.md` 时，打印的是**完整组装结果**，不是只打印 base 文本。与 `-s` / `-c` 连用时打印该 session 在 `session_start` 中冻结的 prompt。输出不受 `--output-format` 影响，始终是纯文本，末尾保证有换行。
+`stream-json` 的事件类型与字段见 [react-loop-and-session.md](react-loop-and-session.md)。临时 stream 事件不落盘，也不能用于恢复。
 
-### 输出格式
+### stderr 排版
 
-stdout 只放结果，所有日志、进度、工具执行信息走 stderr。这一条在三种格式下都成立；`text` 模式下 `ap -p ... > out.md` 拿到的仍是一份干净结果。
+`text` 模式：
 
-stderr 的排版取决于 `--output-format`：
+- 工具开始是一行 `◆ <工具名> (<参数摘要>)`。参数压成一行，超过 240 字节截断。
+- 工具输出缩进两格并显示为暗色。成功且没有增量输出时补一段结果预览，超过 200 行或 20000 字节时截断并提示 `… (truncated; full content is in the transcript)`。实时 bash 流不截断。
+- 工具结束是一行 `✓ <耗时>ms exit <code>` 或 `✗ <耗时>ms <错误>`。`exit` 只在工具返回退出码时出现。
+- 可重试错误是 `… [<scope>] <消息>`，不可重试错误是 `! [<scope>] <消息>`。取消提示是 `cancelled [<scope>]`。非 `stop` 结束时再打一行 `turn ended: <stop_reason>`。
+- assistant 文本不流式写到 stderr，答案仍只在 turn 结束后写 stdout。
+- ANSI 颜色只在 stderr 是 TTY 且 `NO_COLOR` 未设置或为空时开启。
 
-- `text`（默认）：人类可读风格，与 `ap-tui` 的实时渲染同一套视觉语言——工具行 `◆ <工具名> (<参数>)`，工具输出两格缩进暗色，结束时一行 `✓ <耗时> [exit N]` / `✗ <耗时> [exit N] <错误>`；错误行 `…`（可重试）/ `!`（不可重试）；异常终止打 `turn ended: <stop_reason>`。ANSI 颜色只在 stderr 是 TTY 且未设 `NO_COLOR` 时开启，被管道或重定向接住时自动关掉
-- `json` / `stream-json`：进度按 markdown 排版，一次 step 是一行 `## Step N`，一次工具调用是一行 `### <工具名>`，工具输出后跟一行斜体状态 `_<工具名> ok (26ms)_`；标题行与内容块之间各留一个空行，`ap -p ... > out.md 2>&1` 的产物可直接当 markdown 读。这两种格式的消费者是程序，维持稳定的行结构比好看更重要
+`json` 与 `stream-json` 模式用 markdown 排版。块与块之间留一个空行：
 
-`text` 模式不把 assistant 文本流式打到 stderr：答案仍然在 turn 结束后一次性写 stdout，所以 stdout 可以继续被脚本和子代理消费。工具结果超过 200 行 / 20000 字节时只留预览并提示完整内容在 transcript，实时 `bash` 流不截断。
+- 一个 step 是 `## Step N`。
+- 一次工具调用是 `### <工具名>`，随后是工具输出。
+- 工具结束是斜体状态行 `_<工具名> ok (<N>ms)_` 或 `_<工具名> failed (<N>ms)_`。
+- 重试提示是 `[retry] ...`。`text` 模式不重复打印重试提示，因为 `error` 事件已经显示过。
 
-turn 结束、进程退出前，还会向 stderr 打印续聊提示（`---` 分隔线后是 `继续对话，执行：<可执行文件> -s <session_id>`），可直接复制该命令继续同一段对话；三种输出格式下都会打印。
+turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示：
 
-### 日志文件
+```text
+---
 
-除 stderr 之外，诊断日志同时追加到 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，一天一个文件，按本地日期切分。
+继续对话，执行：<argv[0]> -s <session_id>
+```
 
-- 默认级别是 warning：`log_warn` 与 `log_error` 写文件；`--verbose` 加上 info，`--debug` 再加上 debug
-- 一条日志一行：`YYYY-MM-DD HH:MM:SS [level] message`；消息自带换行时，续行沿用同前缀并缩进两格
-- 进程内第一条日志才创建 `logs/` 与文件；整次运行没有日志就不留空文件
-- 目录不可写、磁盘满等写入失败一律吞掉，不影响退出码，也不影响 stderr 输出
-- 子代理是独立进程，和父进程写同一个文件，靠追加模式拼接；跨天时各自切到新文件
-- `--print-system-prompt` 等不写 transcript 的路径同样写日志；日志里不记录 `api_key`
-
-| 格式 | stdout |
-| --- | --- |
-| `text` | 最后一条包含文本的 assistant 消息，在 turn 结束后一次性输出；不输出中间步骤文本；stderr 为 ap-tui 风格进度 |
-| `json` | 单个 JSON 对象，turn 结束后输出；stderr 为 markdown 风格进度 |
-| `stream-json` | 每行一个事件；包含持久事件与临时 stream 事件，见 [react-loop-and-session.md](react-loop-and-session.md)；stderr 为 markdown 风格进度 |
-
-`json` 对象：
+### json 结果
 
 ```jsonc
 {
-  "session_id": "...",
+  "session_id": "ses_...",
   "result": "...",
   "stop_reason": "stop",
   "num_steps": 3,
@@ -126,148 +132,126 @@ turn 结束、进程退出前，还会向 stderr 打印续聊提示（`---` 分�
 }
 ```
 
-`stop_reason` 取值：`stop` / `max_tokens` / `max_steps` / `cancelled` / `context_too_long`。字段未知时写 `null`，不要写 0 冒充真实值。
+`stop_reason` 的取值是 `stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`。字段没有值时写 `null`，不要用 0 冒充真实值。`tool_use` 只出现在 provider 结束原因里，不是最终 turn 的 `stop_reason`。
 
-`usage` 只在正常结束路径（`stop` / `max_tokens` / `max_steps`）填入本 turn 的累加；取消、provider 最终失败、工具基础设施故障等提前退出路径可能返回全 null 的 usage，`stop_reason` 也可能为 `null`。整个 session 的累计始终看 `session_end.usage`。没有任何 assistant 文本时 `result` 为空字符串。
+`usage` 只在 `stop`、`max_tokens`、`max_steps` 三条正常结束路径填入本 turn 的累加。取消、`context_too_long`、provider 最终失败和工具基础设施故障的 usage 各字段为 `null`。取消的 `stop_reason` 是 `cancelled`。provider 最终失败和工具基础设施故障可能让 `stop_reason` 为 `null`。整个 session 的累计看 `session_end.usage`。
 
-### 恢复时的参数处理
+没有任何 assistant 文本时，`result` 是空字符串。`text` 格式下 stdout 不写任何字节。
 
-恢复以 transcript 为准，`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集不再重算。`$AP_CONFIG/SYSTEM.md` 只在新 session 生效；恢复时不会重新读取，也不再重新加载 agent 文件。以下输入与冻结值冲突时**在 stderr 打 warning 并忽略**，退出码不受影响：
+## 日志
 
-- `--model`（与记录不同值时）
-- `--agent`（与记录不同值时）
-- SDK 的 `base_system_prompt` 输入（CLI 通过 `$AP_CONFIG/SYSTEM.md` 提供等价内容）
-- 应用层 prompt sections
-- 工具集覆盖
-- `--parent-session-id` / `--parent-tool-call-id` / `--agent-depth`
+诊断日志追加到 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，按本地日期一天一个文件。
 
-warning 文案（宿主通过 SDK 传入这些输入时由 session 层产生；`ap-cli` 在恢复时不会构造 base/sections/tools，因此正常 CLI 恢复通常只看到 `--model` / `--agent` / 父链参数相关 warning）：
-
-```text
---base-system-prompt ignored on restore: session prompt is frozen
-prompt sections ignored on restore: session prompt is frozen
-tool set ignored on restore: session is frozen to its recorded tool set
---agent ignored on restore: session is frozen to "<name>"
-```
-
-`--no-agents-md` / `--no-skills` 在恢复时不影响冻结 prompt，也不会产生 warning；它们只在新建 session 时参与 sections 组装。
-
-恢复后的工具集以 `session_start.tools` 为准：改 `agents/<name>.md` 中的 `tools:` 或注册表新增工具都不再影响已有 session。冻结列表里在当前注册表中不存在的工具会跳过并 warning。旧 transcript 没有 `tools` 字段时不再回退到 agent 定义：使用当前注册表的全部工具并 warning。
-
-以下参数在恢复时照常生效：
-
-- `--max-steps`、`--max-tokens`
-- `--output-format`、`--verbose` / `--debug`
-- 提示词来源
-- `--fork-session`
-- `--config-dir`（必须先于查找生效，否则找不到 transcript）
-
-冻结的是 `session_start` 中的字段；`max_steps` / `max_tokens` 不在其中。恢复时若没有传 `--max-steps`，采用 `settings.json` 的值；`--max-tokens` 同理取配置或命令行。不再重新加载 agent 定义，因此 agent 文件里的 `max_steps` 不会影响已有 session。
-
-找不到 session 时退出码 2，并打印期望路径，例如：
-
-```
-session "abc" not found in project <hash> (expected .../projects/<hash>/abc.jsonl)
-hint: run ap from the directory where the session was created
-```
+- 默认级别是 warning。`log_error` 始终输出，`log_warn` 在 warning 及以上输出。`--verbose` 加上 info，`--debug` 再加上 debug。
+- 一条日志一行：`YYYY-MM-DD HH:MM:SS [level] message`。消息自带换行时，续行保留同一前缀并缩进两格。
+- 进程内第一条日志才创建 `logs/` 和文件。整次运行没有日志就不留空文件。
+- 目录不可写、磁盘满等写入失败一律吞掉，不影响退出码和 stderr。
+- 子代理是独立进程，和父进程写同一个文件，靠追加模式拼接。跨天时各自切到新文件。
+- 日志不记录 `api_key`。
 
 ## 退出码
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 正常结束（含 `stop_reason: max_steps` / `max_tokens`；具体原因看输出） |
-| 1 | 内部错误（panic、不可恢复的断言失败、transcript 写入/flush 失败、event 序列化失败） |
-| 2 | 用法或配置错误（参数非法、模型未配置、`$AP_CONFIG` 不可写、找不到 `bash`、session 不存在） |
-| 3 | provider 错误（鉴权失败、模型不存在、重试耗尽、`context_too_long`） |
-| 4 | 工具基础设施故障（无法 spawn shell、工具参数/system prompt 的 blob 写入失败等） |
-| 130 | 被 SIGINT 中断 |
-| 143 | 被 SIGTERM 中断 |
+| 0 | 正常结束，包括 `stop_reason` 为 `max_steps` 或 `max_tokens` |
+| 1 | 内部错误，例如 transcript 写入或 flush 失败、事件序列化失败 |
+| 2 | 用法或配置错误，例如参数非法、模型未配置、`$AP_CONFIG` 不可写、找不到 bash、session 不存在 |
+| 3 | provider 错误，例如鉴权失败、模型不存在、重试耗尽、`context_too_long` |
+| 4 | 工具基础设施故障，例如无法 spawn shell、工具参数或 system prompt 的 blob 写入失败 |
+| 130 | 收到 SIGINT 或 Windows Ctrl+C |
+| 143 | 收到 SIGTERM |
 
-`text` 格式下 stdout 只有最终文本，脚本若需要区分「正常说完」与「被 max_steps 截断」，应使用 `json`。
+`text` 格式的 stdout 只有最终文本。要区分“正常说完”和“被 max_steps 截断”，使用 `json`。
 
 ## 配置文件
 
-配置文件固定为 `$AP_CONFIG/settings.json`，由 `--config-dir` / `AP_CONFIG` 决定。文件只由宿主 adapter 读取与校验：`ap-cli` 读取完整字段，`magi` 只读取 provider 相关字段；`ap-core` 的 SDK 门面只接收解析后的 `Settings`，不打开这个文件，也不读 `AP_*` 环境变量。
+配置文件固定为 `$AP_CONFIG/settings.json`。`ap-cli` 读取完整字段，`magi` 只读取 provider 相关字段。`ap-core` 的 SDK 门面只接收解析后的 `Settings`，不打开这个文件，也不读 `AP_*` 环境变量。
 
 ```jsonc
 {
-  "model": "<model_id>",                 // 必填
-  "base_url": "https://api.openai.com/v1", // 可选，默认官方
-  "api_key": "<api_key>",                // 与环境变量二选一
+  "model": "<model_id>",                    // 必填
+  "base_url": "https://api.openai.com/v1",  // 可选，默认官方地址
+  "api_key": "<api_key>",                   // 与环境变量二选一
 
-  "max_steps": 100,                      // 单个 turn 的最大 step 数
-  "max_agent_depth": 1,                  // 子代理最大嵌套深度
-  "max_tokens": 8192,                    // 单次响应上限
-  "tool_timeout_ms": 120000,             // bash 默认超时
-  "llm_timeout_ms": 600000,              // 单次 LLM 请求总超时
-  "blob_threshold_bytes": 102400,        // 超过则写 blob
-  "max_capture_bytes": 67108864,         // 单次工具输出硬上限（64MB）
-  "stream_include_usage": true           // 请求 stream_options.include_usage
+  "max_steps": 100,                         // 单个 turn 的最大 step 数
+  "max_agent_depth": 1,                     // 子代理最大嵌套深度
+  "max_tokens": 8192,                       // 单次响应上限
+  "tool_timeout_ms": 120000,                // bash 默认超时
+  "llm_timeout_ms": 600000,                 // 单次 LLM 请求总超时
+  "blob_threshold_bytes": 102400,           // 超过则写 blob
+  "max_capture_bytes": 67108864,            // 单次工具输出硬上限
+  "stream_include_usage": true              // 请求 stream_options.include_usage
 }
 ```
 
 约束：
 
-1. `model` 必填；`base_url` 缺省为官方地址；`api_key` 必须由配置或 `AP_API_KEY` 提供
-2. `api_key` 支持用环境变量 `AP_API_KEY` 覆盖；日志与 transcript 中不记录
-3. 未知字段忽略并警告；类型错误按配置错误处理（退出码 2）
-4. 文件格式与字段名不变；`ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`
-5. 不再有 `context_window`、`auto_compact_threshold`、`output_limit_bytes` 等字段
+1. `model` 必填。即使命令行传了 `--model`，`settings.json` 中仍必须有 `model`。
+2. `api_key` 可以由 `AP_API_KEY` 覆盖。两处都没有时退出 2，`--print-system-prompt` 除外。
+3. `base_url` 缺省为官方地址，末尾斜杠会被去掉，空值报错。
+4. 未知字段忽略并警告。类型错误、非法取值都按配置错误退出 2。显式 `null` 按缺失处理。
+5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、两个超时和两个尺寸上限必须为正。`max_agent_depth` 必须非负。
+6. `ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`。
 
 字段归属：
 
 | 字段 | 归属 |
 | --- | --- |
-| `model`、`base_url`、`api_key` | SDK / provider |
-| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage` | SDK / loop |
-| `llm_timeout_ms` | SDK / provider |
-| `tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` | 应用层 / `aptools.Tool_Config` |
+| `model`、`base_url`、`api_key` | SDK provider |
+| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage` | SDK loop |
+| `llm_timeout_ms` | SDK provider |
+| `tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
 
-`path`（配置文件路径）不再属于 SDK `Settings`，由 `ap-cli` 自己持有。
+配置文件路径不属于 SDK `Settings`，由 `ap-cli` 自己持有。
 
 ## 环境变量
 
-| 变量 | 说明 |
+| 变量 | 作用 |
 | --- | --- |
-| `AP_CONFIG` | 配置根目录，默认 `~/.ap`；`--config-dir` 优先 |
-| `AP_API_KEY` | 覆盖 settings.json 中的 `api_key` |
-| `AP_BASH` | 指定 `bash` 可执行文件的绝对路径；设置后不再搜索 PATH 和常见安装位置 |
+| `AP_CONFIG` | 配置根目录，默认 `~/.ap`。`--config-dir` 优先 |
+| `AP_API_KEY` | 覆盖 `settings.json` 中的 `api_key` |
+| `AP_BASH` | 指定 bash 可执行文件的绝对路径。设置后不再搜索 PATH 和常见安装位置 |
+| `NO_COLOR` | 非空时关闭 `text` 模式 stderr 的 ANSI 颜色 |
 
 父子关联只走命令行参数，不使用 `AP_PARENT_*` 环境变量。`bash` 工具执行命令时会剔除 `AP_API_KEY`，避免把密钥暴露给模型可控的命令。
 
+bash 查找顺序是 `AP_BASH`、PATH、常见安装位置。Windows 跳过路径中含 `system32` 或 `windowsapps` 的 `bash.exe`，避免选中 WSL 的 bash。
+
 ## 工作区布局
 
-```
+```text
 $AP_CONFIG/
   settings.json
   SYSTEM.md                          # 存在时替换内置固定指令段
   agents/
-    <name>.md                        # 子代理定义
+    <name>.md                        # agent 定义
   logs/
-    app-YYYY-MM-DD.log               # 诊断日志，按本地日期一天一个文件
+    app-YYYY-MM-DD.log               # 诊断日志，按本地日期一天一个
   projects/
     <project_path_hash>/
-      path.txt                       # 规范化后的项目路径，便于反向排查
+      path.txt                       # 规范化后的项目路径
       blobs/
-        <sha256>                     # 内容寻址的大块数据，用户自行清理
+        <sha256>                     # 内容寻址的大块数据
+        <sha256>.txt                 # bash 分页续读用的完整输出
       <session_id>.jsonl             # transcript，一行一个事件
 
 ~/.agents/
-  AGENTS.md                          # 全局记忆 / 追加提示词
+  AGENTS.md                          # 全局记忆
 ```
 
-transcript 一行一个事件，完整事件只追加；恢复时若发现崩溃留下的不完整尾行，会先截掉它再追加新事件。blob 由用户自行清理。
+transcript 只追加完整事件。恢复时若发现崩溃留下的不完整尾行，会先截掉它再追加新事件。blob 由用户自行清理，删除 blob 会让引用它的 session 无法完整恢复。blob 规则见 [tools.md](tools.md)。
 
-技能不在 `$AP_CONFIG` 下，固定从两处发现：`~/.agents/skills/<name>/SKILL.md` 与 `<启动目录>/.agents/skills/<name>/SKILL.md`。见 [skills.md](skills.md)。
+技能不在 `$AP_CONFIG` 下。发现位置见 [skills.md](skills.md)。
 
 ## 项目识别
 
-1. 以启动目录为项目根；解析为绝对路径
-2. 规范化：解析 `.` / `..` / 符号链接 / junction，去掉尾部分隔符，把 `\` 统一成 `/`
-3. Windows 上把整条路径转小写（不能只小写盘符，`Z:\Projects\AP` 与 `Z:\projects\ap` 必须落到同一目录）
-4. `project_path_hash = fnv32a(规范化路径)`，取 8 位 hex
-5. `path.txt` 存规范化路径；若同一 hash 对应的 `path.txt` 内容不同，视为冲突并退出 2
-6. `-s` / `-c` **只在当前项目目录内查找**，不跨项目、不扫描其它 hash；从子目录启动会落到不同项目，找不到原 session
+1. 以启动目录为项目根，解析为绝对路径。
+2. 清理 `.`、`..`，解析符号链接和 Windows junction。
+3. 去掉尾部分隔符，把 `\` 统一成 `/`。
+4. Windows 上把整条路径转小写。`Z:\Projects\AP` 与 `Z:\projects\ap` 必须落到同一目录。
+5. `project_path_hash = fnv32a(规范化路径)`，取 8 位十六进制。
+6. `path.txt` 保存规范化路径。同一 hash 对应的 `path.txt` 内容不同时视为冲突，退出 2。
+7. `-s` 与 `-c` 只在当前项目目录内查找，不跨项目，不扫描其它 hash。从子目录启动会落到不同项目。
 
 `--config-dir` 只改变存储根目录，不改变 project hash。
 
@@ -275,33 +259,58 @@ transcript 一行一个事件，完整事件只追加；恢复时若发现崩溃
 
 ### `-s <id>`
 
-读取 `projects/<hash>/<id>.jsonl`，按文件行序重放（正常写入下即 `seq` 递增），重建消息与 usage，然后以追加方式继续写同一文件。恢复时追加一个新的 `session_start`：
-
-- `session_id` 不变
-- `resumed_from` 指向自身
-- `content` / `model` / `provider` / `agent_name` / `agent_depth` / `cwd` / `tools` 与上一次 `session_start` 完全一致
-- 读取方以最后一个 `session_start` 为准
+读取 `projects/<hash>/<id>.jsonl`，按文件行序重放事件，重建消息与 usage，然后以追加方式继续写同一文件。新 `session_start` 沿用原 id 与冻结值，`resumed_from` 指向自身。写入细节见 [react-loop-and-session.md](react-loop-and-session.md)。
 
 ### `-c`
 
-在当前项目内选择最近修改的根 session（最后一个 `session_start` 的 `parent_session_id` 为 null）。子代理 session 不参与 `-c`。
+在当前项目内选择最近修改的根 session。判断依据是文件修改时间，以及最后一个 `session_start` 的 `parent_session_id` 为空。子代理 session 不参与 `-c`。
 
 ### `--fork-session`
 
-必须与 `-s` / `-c` 连用。行为：
+必须与 `-s` 或 `-c` 连用。CLI 侧可见的行为是：
 
-1. 生成新的 `session_id`（`ses_<本地时间 YYYYMMDD_HHmmss>_<UUID 前 12 位十六进制>`）
-2. 复制源 transcript 的全部事件到同项目目录下的新文件
-3. 追加新的 `session_start`：
-   - `session_id` = 新 id
-   - `resumed_from` = 源 id
-   - `parent_session_id` / `parent_tool_call_id` = null（fork 后是独立根 session）
-   - `agent_depth` = 0
-   - `content` / `model` / `provider` / `agent_name` / `cwd` / `tools` 沿用源
-4. `seq` 从源文件最大 seq + 1 继续
-5. blob 不复制，按 sha256 共享；删除 blob 会同时破坏源 session 和 fork
-6. 新文件写在**源 session 所在的项目目录**（与当前项目相同）
+1. 生成新的 `session_id`，格式是 `ses_<本地时间 YYYYMMDD_HHmmss>_<UUID 前 12 位十六进制>`。
+2. 复制源 transcript 的全部完整事件到当前项目目录下的新文件。末尾半行不进入 fork。
+3. 新 session 是独立根 session，`resumed_from` 指向源 id，`agent_depth` 为 0，prompt、model、provider、agent、cwd 和工具集沿用源 session。
+4. blob 不复制，按 sha256 共享。删除 blob 会同时破坏源 session 和 fork。
 
-## 交互命令
+新 `session_start` 的字段与 `seq` 规则见 [react-loop-and-session.md](react-loop-and-session.md)。
 
-无。v1 不支持 `/clear`、`/compact`、`/model`、`/cost`、`/resume`、`/help` 等交互命令。所有行为通过命令行参数与输出格式表达。
+### 恢复时的参数
+
+恢复以 transcript 为准。`session_start` 中冻结的 system prompt、model、provider、agent_name、agent_depth、cwd 与工具集不再重算。`$AP_CONFIG/SYSTEM.md` 只在新 session 生效，恢复时不重新读取，也不重新加载 agent 定义。
+
+以下输入与冻结值冲突时，在 stderr 打 warning 并忽略，退出码不受影响：
+
+- `--model` 与记录不同时，warning 为 `--model ignored on restore: session is frozen to "<model>"`。
+- `--agent` 与记录不同时，warning 为 `--agent ignored on restore: session is frozen to "<agent>"`。
+- `--parent-session-id`、`--parent-tool-call-id` 或大于 0 的 `--agent-depth`，warning 为 `parent/agent-depth arguments ignored on restore`。
+
+`--no-agents-md` 与 `--no-skills` 在恢复时既不影响冻结 prompt，也不产生 warning。
+
+以下参数在恢复时照常生效：
+
+- `--max-steps` 与 `--max-tokens`。没有传时取 `settings.json`。
+- `--output-format`、`--verbose`、`--debug`。
+- 提示词来源。
+- `--fork-session`。
+- `--config-dir`，它必须先于查找生效。
+
+恢复后的工具集以 `session_start.tools` 为准。改 agent 文件里的 `tools:` 或注册表新增工具都不再影响已有 session。冻结列表里在当前注册表中不存在的工具会跳过并 warning。旧 transcript 没有 `tools` 字段时，使用当前注册表的全部工具并 warning。
+
+恢复时若发现上一次运行没有写 `session_end`，会 warning 并继续恢复。完整判断与恢复顺序见 [react-loop-and-session.md](react-loop-and-session.md)。
+
+找不到 session 时退出 2，并打印期望路径：
+
+```text
+session "abc" not found in project <hash> (expected .../projects/<hash>/abc.jsonl)
+hint: run ap from the directory where the session was created
+```
+
+## 相关文档
+
+- [react-loop-and-session.md](react-loop-and-session.md)：turn/step、事件 schema、恢复与 fork 的写入细节。
+- [context-management.md](context-management.md)：system prompt 的组装与消息投影。
+- [tools.md](tools.md)：五个工具的参数、blob 与进程树。
+- [skills.md](skills.md)：技能发现、`SKILL.md` 格式与 `--list-skills` 输出。
+- [integration.md](integration.md)：新前端如何拼命令行并消费三个输出流。

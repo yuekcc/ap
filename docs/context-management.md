@@ -1,169 +1,172 @@
-# 上下文与记忆
+# 上下文组装
 
-本文件定义 system prompt 的组成、记忆文件注入规则，以及 transcript 到 messages 的投影。v1 不做 token 预算、不做压缩；上下文超限时直接终止 turn。
+本文件定义 system prompt 的组成、`$AP_CONFIG/SYSTEM.md` 与 `AGENTS.md` 的读取、技能清单位置，以及 transcript 到 provider messages 的投影。事件 schema 见 [react-loop-and-session.md](react-loop-and-session.md)，blob 的存储格式见 [tools.md](tools.md)，provider 请求字段见 [provider.md](provider.md)。
 
-## system prompt 组成
+## system prompt 的三段
 
-SDK 只固定前两段，其余段落由应用层按顺序 append：
+`build_system_prompt` 按固定顺序拼接三段：
 
-1. **固定指令（SDK）**：ap 的身份与行为约束。正文在 `ap-core/engine/prompts/system.md`，构建时由 `#load` 内嵌进二进制；运行时不再读取该文件。存在 `$AP_CONFIG/SYSTEM.md` 时，应用层用规范化后的文本替换这一段
-2. **工具说明（SDK）**：由 `ap-core/tool` 的注册表按生效工具集生成——工具名、描述、参数 JSON Schema
-3. **应用层 sections**：`ap-cli` 按调用顺序追加的原始 Markdown 块；SDK 不解析、不加标题、不合并空白
+1. **base**：SDK 内置的 `ap-core/engine/prompts/system.md` 文本。编译期由 `#load` 内嵌，运行时不读取该文件。
+2. **工具段**：`## 工具` 标题加注册表生成的工具说明。
+3. **应用层 sections**：`ap-cli` 按顺序传入的原始 Markdown 块。
 
-默认顺序（`ap-cli/prompt.odin`）：
+拼接规则：
 
-```text
-## 环境
-## 可用技能
-## 全局记忆 (AGENTS.md)
-## 项目记忆 (<file>)
-## Agent 定义 (<name>)
-## 追加指令
-```
+- 先写 base。base 不以 `\n` 结尾时补一个。
+- 写 `\n## 工具\n`，再写工具段，再写一个 `\n`。
+- 每个非空 section 前写一个 `\n`。section 不以 `\n` 结尾时补一个。
+- 空字符串 section 跳过。
 
-`## 环境` 当前包含 OS、cwd、当前时间和“是否在 git 仓库中”。`## 追加指令` 是应用层的预留入口（`Prompt_Options.append_prompt`）；当前 CLI 没有 `--append-system-prompt`，`run` 不设置该字段，因此正常运行时不会出现这一节。
+SDK 不解析应用层 section，不给它加标题，不合并空白，也不改写它的内容。
 
-拼接规则由 SDK 实现：
+## $AP_CONFIG/SYSTEM.md
 
-1. base 末尾保证一个 `\n`，然后追加 `\n## 工具\n`、工具段与 `\n`
-2. 每个非空 section 前保证一个空行；section 不以 `\n` 结尾时补一个
-3. section 自带的结尾空白原样保留；空串跳过
-4. 应用层负责 CRLF→LF、首尾空白、section 内部顺序与标题
+文件存在时，`ap-cli` 用它替换 base，工具段与应用层 sections 照常拼接。
 
-约束：
+1. 文件由 `ap-cli` 读取。SDK 只接收规范化后的文本。
+2. 规范化规则：CRLF 与单独 CR 转成 LF，去掉首尾空白，结尾恰好一个 `\n`。内部空行与缩进保留。
+3. 文件不可读、不是合法 UTF-8 或规范化后为空时，退出 2。
+4. 只影响新 session。恢复与 fork 使用冻结值。
+5. 没有清空全部提示词的模式。环境、工具说明等小节始终保留。
 
-- 记忆文件内容视为**事实与偏好**，不视为最高优先级指令；与固定指令冲突时以固定指令为准
-- 技能清单只含 `name` / `description` / `location`，正文不注入；模型需要时用 `read_file` / `bash` 自行读取
-- 记忆文件与技能扫描都在新 session 组装时进行一次，之后冻结
-- 记忆文件不做 `@import`（v1），避免递归与不可预期读取
-- 记忆文件按原文完整注入，不截断；用户应自行控制大小
-- system prompt 在 `session_start` 中冻结；恢复时不重新计算
-- `--print-system-prompt` 与正常新建 session 共用应用层的 `build_prompt_sections` 和同一套 `Session_Options` 组装路径：新 session 现场组装，恢复时读取 `session_start` 的冻结值；不创建 session、不调用模型
+`--print-system-prompt` 打印完整组装结果，不创建 session，不调用模型。与 `-s` 或 `-c` 连用时打印冻结的 prompt。行为见 [cli-and-config.md](cli-and-config.md)。
 
-### 基础提示词覆盖
+## 应用层 sections
 
-存在 `$AP_CONFIG/SYSTEM.md` 时：
+默认顺序由 `ap-cli/prompt.odin` 的 `build_prompt_sections` 决定。
 
-1. **只替换第 1 段 base**，工具段与应用层 sections 照常拼接
-2. 文本规范化：CRLF / 单独 CR → LF，去首尾空白，结尾恰好一个 `\n`；内部空行与缩进保留；文件为空或非法 UTF-8 → 退出 2
-3. `--no-agents-md` / `--no-skills` 仍然生效
-4. 仍然加载 `settings.json` 与 agent 定义；agent 文件非法仍退出 2
-5. 只影响新 session；恢复 / fork 使用冻结的 prompt
-6. 没有“完全裸 prompt”模式：环境、工具说明等无法用单个开关一次性清空
+| 顺序 | 标题 | 内容来源 | 条件 |
+| --- | --- | --- | --- |
+| 1 | `## 环境` | OS、cwd、当前时间、是否在 git 仓库 | 总是出现 |
+| 2 | `## 可用技能` | 技能清单块 | 有技能且未传 `--no-skills` |
+| 3 | `## 全局记忆 (AGENTS.md)` | `~/.agents/AGENTS.md` | 未传 `--no-agents-md`，文件存在 |
+| 4 | `## 项目记忆 (<file>)` | 每个项目 `AGENTS.md` | 未传 `--no-agents-md`，文件存在 |
+| 5 | `## Agent 定义 (<name>)` | agent 文件的正文 | 正文非空 |
+| 6 | `## 追加指令` | `Prompt_Options.append_prompt` | 非空。当前 CLI 不设置该字段 |
 
-### 记忆与技能的裁剪
+环境段逐行写 `OS`、`cwd`、`当前时间`、`git 仓库`。时间取新 session 组装时的时刻，之后随 system prompt 冻结。
 
-- `--no-agents-md`：不做向上目录遍历，不读取任何 `AGENTS.md`，prompt 中完全不出现「全局记忆」「项目记忆」小节
-- `--no-skills`：不扫描技能目录，不注入 `<available_skills>`；`--list-skills` 不受影响
-- 两者都不是沙箱：模型仍可通过 `bash` / `read_file` 读取磁盘上的文件
+记忆文件按文件原文注入。agent 正文去掉开头换行后注入。两者都不做 CRLF 规范化，不截断，不做 `@import`。只有 `SYSTEM.md` 经过规范化。
 
-### 工具集冻结
+## AGENTS.md 发现
 
-- 生效工具集在 `session_start.tools` 中冻结
-- 白名单与深度规则由 `ap-cli` 在**建会话前**完成：`agent 定义 tools:` > 全部已注册工具；`task` 在 `agent_depth >= max_agent_depth` 时从生效集合移除。因此 `session_start.tools` 直接反映最终结果
-- 恢复 / fork 以冻结值为准；冻结列表中的工具名在当前注册表中不存在时**跳过并 warning**，不终止会话
-- 旧 transcript 没有 `tools` 字段时，不再回退到 agent 定义：使用当前注册表的全部工具并 warning
-- 工具说明（第 2 段）按同一生效工具集生成；零工具时写「（本次没有可用工具）」，provider 请求不发送 `tools` 字段
+全局记忆固定为 `~/.agents/AGENTS.md`。不存在时跳过。它与全局技能共用 `~/.agents`。
 
-## 记忆文件
+项目记忆从启动目录向上查找 `AGENTS.md`：
 
-### 全局
+1. 目录链从 cwd 开始，包含 cwd。
+2. 当前目录或其祖先存在 `.git` 时，链到该目录为止并包含它。否则一直到文件系统根。
+3. 目录名以 `.` 开头的层级不读取其中的 `AGENTS.md`。
+4. 只接受名为 `AGENTS.md` 的普通文件。不读取子目录。
+5. 收集顺序是近到远。按规范化后的物理路径去重，保留更近的那份。最终反转为远到近注入。
 
-`~/.agents/AGENTS.md`。不存在则跳过。与全局技能共用 `~/.agents`。
+同一个物理文件只出现一次。符号链接与 junction 在去重前解析。
 
-### 项目
+注入顺序是远到近，近的文件排在后面。约定冲突时以更近的文件为准。记忆与固定指令冲突时以固定指令为准。这两条是提示词层约定，代码不强制。
 
-从 cwd 开始向上查找 `AGENTS.md`：
+`--no-agents-md` 同时关闭全局与项目记忆，system prompt 中不出现这两个小节，也不产生相关 warning。它不改变磁盘上的文件，不是沙箱。
 
-1. 如果当前目录或其祖先存在 `.git`，向上直到该目录（含），不再越过
-2. 否则向上直到文件系统根
-3. 收集到的文件按「远 → 近」拼接，近的在后，覆盖前面的同名约定
-4. 同一个物理文件只注入一次（解析符号链接/junction 后去重）
+## 技能清单
 
-不读取子目录里的 `AGENTS.md`；不读取 `.git/` 等隐藏目录中的同名文件。
+技能清单只放元数据，正文不进入 system prompt。
 
-### 冲突
+- 位置：`~/.agents/skills/<name>/SKILL.md` 与 `<启动目录>/.agents/skills/<name>/SKILL.md`。同名时项目级覆盖全局级。
+- 清单块由一段读取说明加 `<available_skills>` 组成。每个条目只有 `name`、`description`、`location`。
+- `disable-model-invocation: true` 的技能不进入清单。
+- 没有任何可用技能，或传了 `--no-skills` 时，整个小节省略。
+- 技能发现、`SKILL.md` 格式与 `--list-skills` 见 [skills.md](skills.md)。
 
-- 文件级：近的文件整体排在后面
-- 约定级：近的明确约定覆盖远的；两者矛盾且无法判断时，以近的为准
-- 记忆文件与固定指令冲突时，固定指令优先
+清单块整体放进 `## 可用技能`。模型按 `location` 用 `read_file` 或 `bash` 读取正文。
 
-## 消息组装
+## Agent 定义段
 
-从 transcript 投影：
+agent 文件的正文以 `## Agent 定义 (<name>)` 追加。正文只补充指令，不替换 base、工具段、环境或记忆。agent 的 `tools:`、`model`、`max_steps` 不进入这一段。定义解析与工具白名单见 [subagents.md](subagents.md)。
 
-| 事件 | 投影为 |
+## 工具段
+
+工具段与 provider 请求里的 `tools` 使用同一个生效工具集。
+
+- 顺序按注册表声明顺序，不按名字排序。
+- 每个工具写 `### <name>`、描述、`参数 JSON Schema: <json>`。
+- 生效工具为零时，工具段只有 `（本次没有可用工具）`。provider 请求省略 `tools` 字段。
+- 工具定义的结构见 [tools.md](tools.md)。
+
+## 冻结与预览
+
+新 session 只组装一次 system prompt。结果写入 `session_start.content`。超过 `blob_threshold_bytes` 时改写 `content_ref` 与 `content_bytes`。
+
+`context_build` 每个 step 从 transcript 读取最后一个 `session_start`，不重新读取 `SYSTEM.md`、agent 文件、记忆文件或技能目录。恢复与 fork 因此得到同一份冻结 prompt。
+
+`--print-system-prompt` 与新 session 共用同一条组装路径，但不写 transcript，不调用模型。恢复时它读取冻结值。
+
+## transcript 到 messages
+
+`context_build` 是纯函数。同一 transcript 与同一 project 必须得到逐字节相同的 messages。它不调用 LLM，不压缩，不写 transcript，不重新扫描记忆或技能。
+
+Provider 请求中的 messages 由一条 `role=system` 消息加投影结果组成。system 消息的内容来自最后一个 `session_start`。
+
+| 事件 | 投影 |
 | --- | --- |
-| `user_message` | role=user |
-| `message_end`（role=assistant，stop_reason≠cancelled） | role=assistant，含 text / tool_use 块；有推理内容时带 `reasoning_content` |
-| `tool_execution_end` | role=tool，按 `tool_call_id` 与 tool_use 配对 |
-| `session_start` | 不进 messages；提供 system prompt |
-| `error` / `cancel` | 不进 messages |
+| `user_message` | 一条 `role=user` 消息 |
+| `message_end`，`stop_reason` 不是 `cancelled` | 一条 `role=assistant` 消息 |
+| `tool_execution_end` | 一条 `role=tool` 消息，跟在要求它的 assistant 消息后 |
+| `session_start` | 不进入 messages，只提供 system prompt |
+| `message_start`、`step_start`、`turn_start`、`turn_end`、`error`、`cancel`、`session_end` | 忽略 |
 
-### blob 解析
+assistant 消息的构造规则：
 
-事件里的 `content_ref` / `args_ref` / `input_ref` / `text_ref` 都是 blob 的 sha256。投影前必须在 transcript 同目录的 `blobs/` 下解析出完整内容：
+1. 遍历 `content` 块。`text` 块按出现顺序收集，非空文本用 `\n` 连接为 `content`。
+2. `tool_use` 块必须有非空 `id` 与 `name`，并且存在同 id 的 `tool_execution_end`。否则丢弃该块。
+3. 没有任何可用文本与 `tool_use` 的 assistant 消息不提交。
+4. 有 `reasoning` 时写入 `reasoning_content`。
+5. `tool_calls` 按 `tool_use` 块在消息内的顺序排列。`arguments` 是参数对象的 JSON 字符串。
+6. 每个保留的 `tool_call` 后立即追加一条 `role=tool` 消息，顺序与 `tool_calls` 相同。
 
-1. 工具结果：用完整 `content` 构造 role=tool 消息；预览不进入上下文
-2. tool_use 参数：用完整 `input` 构造 assistant 消息
-3. system prompt：`session_start.content` 为空时从 `content_ref` 还原
-4. blob 缺失、hash 不匹配、读取失败：恢复失败并退出 2，不静默降级
+## blob 解析
 
-### 配对校验
+投影前从 project 的 blob 目录解析引用。预览永不进入上下文。
 
-每次组装都跑：
+- `text_ref`：读出完整文本，作为 `text` 块。
+- `input_ref`：读出后按 JSON 解析，作为工具参数。解析失败视为上下文错误。
+- `content_ref`：读出完整内容，作为 tool result。
+- `session_start.content` 为空时，用 `content_ref` 还原 system prompt。
 
-1. 每个 `tool_use` 必须有对应 tool result。缺失时**删除该 tool_use 块**：
-   - 若 assistant 消息只剩这个块，整条消息不提交
-   - 若同一消息还有 text，保留 text
-   - 不写修复事件，不改 transcript
-2. 孤立的 tool result（找不到 tool_use）直接丢弃，不写日志
-3. 连续同角色的 `user` / `assistant` 消息合并，减少 provider 兼容问题；`tool` 消息不合并
-4. 空 assistant 消息（没有 text 也没有 tool_use）不提交
-5. `stop_reason=cancelled` 的 assistant 消息不提交；它的 tool result 也因此成为孤立结果被丢弃
-6. tool_use 与 tool result 的顺序按 assistant 消息内的顺序排列，不按 `seq` 重排
-7. assistant 消息的 `reasoning_content` 原样保留并回传；连续 assistant 消息合并时按出现顺序拼接
+blob 缺失、sha256 不匹配或读取失败时，组装返回 `.Usage` 错误，不静默降级。system prompt 的 blob 在打开 session 时失败。其它 blob 在第一个 step 失败。两者都退出 2。
 
-### tool result 内容
+## 配对与合并
 
-- `ok: true`：用 `content`（完整内容，不是预览）
-- `ok: false`：用 `error`；如果同时有部分输出，可拼接在错误信息后
-- `metadata` 不进入上下文
+1. 先按 `tool_call_id` 收集全部 `tool_execution_end`。重复 id 以后出现者为准。
+2. 每个 `tool_use` 只与同 id 的结果配对。没有结果的 `tool_use` 删除。
+3. 孤立的结果不被使用。它不会产生 tool 消息，也不会写修复事件。
+4. `stop_reason=cancelled` 的 assistant 消息整体跳过。它的 tool result 因此成为孤立结果。
+5. 连续的 `user` 消息合并。两边都有内容时用 `\n` 连接，否则保留有内容的一条。
+6. 连续的 `assistant` 消息合并。两边都有非空文本时用 `\n` 连接。左边没有内容时取右边。`reasoning_content` 同理。`tool_calls` 依次追加。
+7. `tool` 消息不合并，也不与其它角色合并。
+8. 合并只发生在投影结果里，不修改 transcript。
 
-## token 预算与压缩
+## tool result 内容
 
-v1 不做：
+- `ok: true`：使用 `content` 或 `content_ref` 的完整内容。空内容就是空字符串。
+- `ok: false`：使用 `error`。`error` 缺失时写 `tool failed`。存在部分输出时，在错误文本后用 `\n` 拼接内容。
+- `metadata`、`duration_ms`、`exit_code` 不进入 messages。
 
-1. 不计算 token 预算，不预留输出窗口
-2. 不做任何形式的历史压缩
-3. 不提供压缩命令
-4. 不在恢复时重新压缩
+## context_too_long
 
-usage 仍然记录，用于审计与 `--output-format json`，但不参与任何截断决策。
+当前不计算 token 预算，不做历史压缩，也不按 usage 截断。provider 返回 `context_too_long` 是唯一的上下文超限出口。识别规则见 [provider.md](provider.md)。
 
-## 上下文超限
+1. 不重试。
+2. 写 `error(scope=llm, kind=context_too_long, retryable=false)`。消息固定为 `context too long; start a new session or reduce input`。
+3. 写 `turn_end(stop_reason=context_too_long)`。
+4. 本次 turn 的 `result_text` 保留最后一个 assistant 文本。
+5. `ap-cli` 写 `session_end(reason=error)`，退出 3。
+6. 错误信息进入 `error` 事件。`json` 输出的 `stop_reason` 为 `context_too_long`。输出格式见 [cli-and-config.md](cli-and-config.md)。
 
-这是 v1 唯一的超限出口：
+当前没有 handoff。用户需要新建 session 或减少输入。
 
-1. provider 返回 `context_too_long`（HTTP 400，code/message 匹配）
-2. 不重试
-3. 写 `error(scope=llm, kind=context_too_long, retryable=false)`
-4. 写 `turn_end(stop_reason=context_too_long)`
-5. 写 `session_end(reason=error)`，退出码 3
-6. 错误消息写入 `error` 事件（`message` 为 `context too long; start a new session or reduce input`），并进入 JSON 输出的 `stop_reason`；不会额外打印一条独立的 stderr 提示
+## 相关文档
 
-后续 handoff 会替代这个退出路径：把任务移交给新 session，而不是直接失败。
-
-## 恢复
-
-1. 按文件行序应用事件（正常写入下即 `seq` 顺序）
-2. 最后一个 `session_start` 决定 system prompt、model 与工具集；不重新读记忆文件、不重新扫描技能目录、不重新解析 agent 文件
-3. 不重新调用 LLM 生成摘要
-4. 不重新执行工具
-5. `--fork-session` 复制事件后保留原 system prompt、工具集与事件序列
-
-## 未来
-
-- handoff：新 session 的 `session_start` 通过 `handoff_from` 指回旧 session，旧 transcript 保持不变
-- 可选的 token 估算：只用于展示与告警，不用于自动压缩
-- 记忆文件的深度上限与冲突合并规则可在 handoff 时细化
+- [react-loop-and-session.md](react-loop-and-session.md)：事件 schema、恢复与 fork
+- [provider.md](provider.md)：请求格式与 `context_too_long` 识别
+- [skills.md](skills.md)：技能发现与 `SKILL.md` 格式
+- [subagents.md](subagents.md)：agent 定义与工具白名单
+- [tools.md](tools.md)：工具契约与 blob

@@ -1,28 +1,21 @@
-# LLM Provider
+# Provider：OpenAI Chat Completions
 
-v1 只支持 **OpenAI chat completions 兼容接口**。Provider 的职责只有两件：
-
-1. 把统一请求翻译成 `POST {base_url}/chat/completions`，并把 SSE 流解析成统一事件
-2. 把 HTTP/API 错误翻译成统一错误类型
-
-Provider **不做**：重试、退避、中断决策、上下文管理、token 计数。这些在循环层（见 [errors-and-cancellation.md](errors-and-cancellation.md)）。
+Provider 只支持 OpenAI chat completions 兼容接口。它把统一请求翻译成一次 HTTP 流式调用，把 SSE chunk 组装成统一事件，并把 HTTP 与协议失败翻译成 `Provider_Error`。它不重试，不决定取消，不做上下文管理。重试策略见 [errors-and-cancellation.md](errors-and-cancellation.md)，消息构造见 [context-management.md](context-management.md)。
 
 ## 接口
 
-```
-Provider :: struct { ... }
-
+```odin
 provider_stream :: proc(
-    p:      ^Provider,
-    req:    ^Chat_Message_Request,
-    sink:   Stream_Sink,
-    cancel: ^Cancel_Token,
+	p:      ^Provider,
+	req:    ^Chat_Message_Request,
+	sink:   Stream_Sink,
+	cancel: ^platform.Cancel_Token,
 ) -> Provider_Error
 ```
 
-Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件是 **Provider 内部协议**；Loop 负责把它翻译成 transcript 事件，以及 `stream-json` 的 `message_update` / `tool_execution_update`。
+Odin 没有异步运行时。流式读取用阻塞 IO 加回调。
 
-`sink` 是 `{user, on_event}`，事件类型是 `Provider_Event` union：
+`sink` 是 `{user, on_event}`。`on_event` 接收 `Provider_Event` union：
 
 - `Provider_Message_Start{model, message_id}`
 - `Provider_Text_Delta{text}`
@@ -33,11 +26,28 @@ Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件�
 - `Provider_Message_End{message_id, stop_reason, usage, tool_calls, reasoning, text}`
 - `Provider_Error_Event{err}`
 
-`Provider_Error_Event` 只是通知；`provider_stream` 的返回值才是本次请求的最终错误。Loop 以返回值为准。
+`Provider_Error_Event` 只是即时通知。`provider_stream` 的返回值才是本次请求的最终结果。Loop 以返回值为准。
+
+`Provider_Error` 包含 `kind`、`message`、`retryable`、`retry_after_ms`。`kind` 取 `auth`、`model_not_found`、`invalid_request`、`context_too_long`、`rate_limit`、`server_error`、`network`、`timeout`、`protocol`、`cancelled`、`internal` 或空。
 
 ## 请求
 
-```jsonc
+请求地址由 `base_url` 得到。先去掉尾部 `/`。已经以 `/chat/completions` 结尾时直接使用，否则追加 `/chat/completions`。
+
+请求体字段：
+
+| 字段 | 值 |
+| --- | --- |
+| `model` | 本次请求的模型 id |
+| `messages` | system 消息加投影后的对话 |
+| `tools` | 生效工具定义。没有工具时省略 |
+| `tool_choice` | 有工具时为 `auto`，否则省略 |
+| `parallel_tool_calls` | 固定 `false` |
+| `max_tokens` | 单次响应上限，使用旧字段名 |
+| `stream` | 固定 `true` |
+| `stream_options` | `{"include_usage": true}`，仅当 `stream_include_usage` 为 true |
+
+```json
 {
   "model": "<model_id>",
   "messages": [
@@ -63,155 +73,158 @@ Odin 没有 async/await，流式用回调 + 阻塞 IO 实现。下面的事件�
 }
 ```
 
-约定：
+消息约定：
 
-1. system prompt 固定放在 `messages[0]`，`role=system`
-2. `parallel_tool_calls` 固定 false：ap 串行执行工具，不希望模型一次返回大量调用
-3. `stream_include_usage=true` 时才发送 `stream_options`；不支持的服务端可在配置里关掉
-4. `max_tokens` 使用旧字段（兼容自建服务）；不发送 `max_completion_tokens`
-5. `tools[].function.parameters` 是 JSON Schema，由 Tool Registry 生成；只有存在工具时才发送 `tool_choice: "auto"`，没有工具时省略 `tools` 和 `tool_choice`
-6. 每个 tool result 是一条独立的 `role=tool` 消息；多个结果按 tool call 顺序排列
-7. `base_url` 去掉尾部 `/`；如果已经以 `/chat/completions` 结尾则直接使用，否则追加 `/chat/completions`
-8. assistant 消息产生过推理内容时，按 `reasoning_content` 原样回传；没有就省略该字段。带工具调用的 thinking 模型依赖它继续推理，不能丢
-9. `tool_calls` 按 provider 流里的 `index` 升序排列，与 `role=tool` 消息的顺序一致；不按事件 `seq` 或任意 map 遍历顺序重排
+1. system prompt 固定在 `messages[0]`，`role` 为 `system`。
+2. assistant 消息没有文本时 `content` 为 `null`。有推理内容时带 `reasoning_content`。
+3. 每个 tool result 是一条独立的 `role=tool` 消息，按 tool call 顺序排列。
+4. tool call 的 `arguments` 是 JSON 字符串。参数对象由上下文投影生成。
+5. 工具定义来自注册表，顺序与注册表声明顺序一致。
+6. 没有工具时不发送 `tools` 与 `tool_choice`。`parallel_tool_calls` 仍为 `false`。
 
-## 流式事件
+请求头固定为 `Content-Type: application/json`、`Accept: text/event-stream`、`User-Agent: ap/<VERSION>` 与 `Authorization: Bearer <api_key>`。API key 不写日志，不写 transcript。
 
-| 事件 | 字段 | 说明 |
-| --- | --- | --- |
-| `message_start` | `model, message_id` | 收到首个有效 chunk 时发一次；`message_id` 可能为空，Loop 会补 UUID |
-| `text_delta` | `text` | `choices[*].delta.content`（按数组顺序处理） |
-| `reasoning_delta` | `text` | `choices[*].delta.reasoning_content`（模型支持时） |
-| `tool_call_start` | `index, id, name` | 一个 tool call 开始 |
-| `tool_call_delta` | `index, args_delta` | 参数 JSON 片段，只拼接不解析 |
-| `tool_call_end` | `index` | 参数收齐，此时解析 JSON |
-| `message_end` | `stop_reason, usage` | 流结束 |
-| `error` | `kind, message, retryable, retry_after_ms` | 出错终止；同时通过返回值报告 |
+## SSE 读取
 
-### tool call 组装
+响应必须是 SSE。非 200 响应的正文只用于生成错误信息，不进入 SSE 解析。
 
-OpenAI 的流式 tool call 有三个坑，必须按下面的规则处理：
+HTTP 头回调：
 
-1. 后续 chunk 可能只有 `index`，没有 `id` / `name`；**按 `index` 建槽**，不要只按 id 累积
-2. `id` 和 `name` 可能只在第一个片段出现；后续片段只追加 `function.arguments`
-3. 流结束后（`assembler_finish`，通常在 `[DONE]` 之后）统一解析每个槽的 JSON；解析失败、缺 `id` / `name` 都是协议错误（`retryable=false`）
+- 解析 `HTTP/` 状态行，只接受 200 到 599。
+- 解析 `Retry-After`，只接受整数秒，换算成毫秒。
+- 收到 200 时，把此前缓存的正文送入 SSE 解析器。
 
-连接在 `[DONE]` 之前断开 → 视为流中断，整条响应丢弃并重试同一个 step；不会只保留其中一部分 tool call。
+正文回调：
 
-### 其它规则
+- 状态为 200 时把字节送入 SSE 解析器。
+- 状态不是 200 时缓存正文，上限约 1MB。
+- 每个回调都更新收到数据的标记，供首字节超时判断。
 
-1. 流必须产出一个 `message_end`。缺少 `finish_reason`、空响应、`[DONE]` 之前断流都会报错；当前实现不专门检测重复的 `message_end`（最后一个 `finish_reason` 生效）
-2. 实现按数组顺序处理 `choices` 中的每一个；ap 不支持 `n>1`，服务端应只返回一个 choice
-3. usage 可能出现在最后一个 `choices` 为空的 chunk 里；没有就写 null
-4. `delta.content` 可能为 null；不要当成空字符串事件
-5. 推理内容写入 transcript 的 `message_end.reasoning`，并在下一轮作为 assistant 消息的 `reasoning_content` 回传
+SSE 解析规则：
+
+1. 按 `\n` 切行，去掉行尾 `\r`。
+2. 忽略空行与 `:` 开头的注释行。
+3. 只收集 `data:` 开头的行。冒号后的一个前导空格会去掉。多行 `data:` 用 `\n` 连接。
+4. 有累积 `data` 的空行触发一次回调，把累积内容作为 JSON 文本交给组装器。
+5. 数据恰好为 `[DONE]` 时结束流，不再回调。
+6. 单行上限 16MB。超过时返回协议错误。
+7. 连接关闭时处理最后一行，并冲刷仍未派发的 `data`。
+8. 跨 chunk 的字节保留在行缓冲里。被切断的多字节 UTF-8 字符不会丢失。
+9. 流结束前没有出现 `[DONE]` 时返回 `network`，`retryable=true`。
+
+## chunk 与 tool call 组装
+
+组装器读取每个 chunk 的 `id`、`model`、`choices`、`usage` 与 `error`。
+
+- 首个有效 chunk 发一次 `Provider_Message_Start`。`message_id` 可能为空。`model` 缺失时用请求的模型 id。
+- `choices[].delta.content` 非空时追加到全文并发出 `Provider_Text_Delta`。
+- `choices[].delta.reasoning_content` 非空时追加到推理并发出 `Provider_Reasoning_Delta`。
+- 每个 `choices[].delta.tool_calls[]` 按 `index` 建槽。槽第一次出现时发 `Provider_Tool_Start`。
+- `id` 与 `name` 可能只在第一个片段出现。出现时更新槽。后续片段通常只带 `function.arguments`。
+- 参数片段只追加，不即时解析。非空片段发 `Provider_Tool_Delta`。
+- `finish_reason` 取最后一个非空值。
+- `usage` 取最后一个带 usage 的 chunk。多个 chunk 的 usage 不累加。
+- chunk 自带的 `error` 对象直接终止本次流，映射见下文。
+
+收到 `[DONE]` 后调用一次组装收尾：
+
+1. 没有发出过 `Provider_Message_Start` 时报协议错误 `empty response from provider`。
+2. 没有 `finish_reason` 时报协议错误 `stream ended without finish_reason`。
+3. `finish_reason` 无法归一化时报协议错误。
+4. 槽按 `index` 升序排序。
+5. 每个槽必须有非空 `id` 与 `name`。缺失时报协议错误。
+6. 参数为空时按 `{}` 解析。JSON 解析失败时报协议错误。
+7. 每个槽发一次 `Provider_Tool_End`。
+8. `stop_reason` 不是 `tool_use` 却带 tool call，或 `tool_use` 却没有 tool call，都是协议错误。
+9. 发出 `Provider_Message_End`，带上全文、推理、usage 与组装好的 tool call。
+
+tool call 的顺序按 `index` 升序，不按 chunk 顺序或 map 遍历顺序。
 
 ## stop_reason 归一化
 
 | 统一值 | OpenAI `finish_reason` | 循环层处理 |
 | --- | --- | --- |
-| `stop` | `stop` / `content_filter` | 结束 turn；`content_filter` 额外在 stderr 警告 |
-| `tool_use` | `tool_calls` | 执行工具，进入下一 step |
+| `stop` | `stop`、`content_filter` | 结束 turn。`content_filter` 额外写 warning |
+| `tool_use` | `tool_calls` | 执行工具，进入下一个 step |
 | `max_tokens` | `length` | 结束 turn，`stop_reason=max_tokens` |
 
-`finish_reason` 缺失或未知 → 协议错误。
+缺失或未知的 `finish_reason` 是协议错误，`retryable=false`。
 
 ## usage
 
-```js
-{
-  input_tokens: 0,       // prompt_tokens
-  output_tokens: 0,      // completion_tokens
-  cached_tokens: 0,      // prompt_tokens_details.cached_tokens
-  reasoning_tokens: 0,   // completion_tokens_details.reasoning_tokens
-  total_tokens: 0        // total_tokens
-}
-```
+| 统一字段 | OpenAI 字段 |
+| --- | --- |
+| `input_tokens` | `prompt_tokens` |
+| `output_tokens` | `completion_tokens` |
+| `cached_tokens` | `prompt_tokens_details.cached_tokens` |
+| `reasoning_tokens` | `completion_tokens_details.reasoning_tokens` |
+| `total_tokens` | `total_tokens` |
 
-流式拿不到 usage 时所有字段为 null，不要写 0。没有 token 预算，usage 只用于记录与展示。
+缺失的字段保留 `null`。没有 usage 的响应写全 `null`，不写 0。
 
 ## 错误映射
 
-| HTTP / 情况 | 统一 kind | retryable |
+HTTP 错误正文按 `{"error":{"message","type","code"}}` 解析。`message` 缺失时用去掉首尾空白的正文。正文为空时写 `HTTP <status>`。消息截断到 2000 字节。
+
+| 情况 | kind | retryable |
 | --- | --- | --- |
-| 401 / 403 | `auth` | false |
-| 404 模型不存在 | `model_not_found` | false |
-| 400 参数错误 | `invalid_request` | false |
-| 400 `context_length_exceeded` / 等价 message | `context_too_long` | false |
-| 429 | `rate_limit` | true（带 `retry_after_ms`） |
+| 401、403 | `auth` | false |
+| 404 | `model_not_found` | false |
+| 400，code 或 message 匹配上下文超限 | `context_too_long` | false |
+| 400，其它 | `invalid_request` | false |
+| 429 | `rate_limit` | true |
 | 500 及以上 | `server_error` | true |
-| 连接失败 | `network` | true |
-| 连接超时 / 读超时 / 总超时 / 首字节超时 | `timeout` | true |
-| SSE 解析失败 / 结构非法 / 参数 JSON 非法 | `protocol` | false |
+| 其它 4xx | `invalid_request` | false |
+| 其它非 200 | `server_error` | true |
+| 连接失败、其它 curl 错误 | `network` | true |
+| curl 超时类错误 | `timeout` | true |
+| 首字节超过 120s | `timeout` | true |
+| SSE 解析失败、行超长、参数 JSON 非法、结构非法 | `protocol` | false |
+| 用户取消 | `cancelled` | false |
+| 流在 `[DONE]` 前结束 | `network` | true |
 
-错误体按 `{"error":{"message","type","code"}}` 解析；`context_too_long` 靠 `code` 与 message 子串双重匹配。libcurl 的 `CURLE_OPERATION_TIMEDOUT` 统一映射为 `timeout`，因此连接超时也归入这一类。SSE 流中内嵌的 `error` 对象也按同样规则识别；除 `context_too_long` / 限流 code 外，默认 `invalid_request`，且 `retryable=false`。
+上下文超限的匹配不区分大小写，检查 `context_length_exceeded`、`context_too_long`、`maximum context length`、`context length exceeded`、`too many tokens`。
 
-## 传输层：vendor:curl
+流内 `error` 对象不重试。先检查 `code` 或 `message` 是否匹配上下文超限，再检查限流 `code`，都不匹配时落到 `invalid_request`。流内错误没有 `Retry-After`。
 
-Odin 的 `core:net` 没有 HTTP/TLS 客户端，统一使用 `vendor:curl`。
+HTTP 头的 `Retry-After` 写入 `retry_after_ms`。循环层决定是否使用，见 [errors-and-cancellation.md](errors-and-cancellation.md)。
 
-### 平台差异
+## curl 传输
 
-- **Windows**：链接随 Odin 分发的静态 `lib/libcurl.lib`（8.17.0，Schannel，系统 CA）。可保持单 exe
-- **Linux / macOS**：绑定链接系统 libcurl（`system:curl`）。发布说明必须写清构建/运行依赖；若要单二进制，需要自带静态 libcurl
+HTTP 与 TLS 统一走 `vendor:curl`。Windows 链接 Odin 随附的静态 libcurl。Linux 与 macOS 链接系统 libcurl，需要开发包。
 
-### 关键选项
-
-| 选项 | 用途 |
+| 选项 | 值或用途 |
 | --- | --- |
-| `CURLOPT_URL` | `{base_url}/chat/completions` |
-| `CURLOPT_POST` / `CURLOPT_POSTFIELDS` | JSON 请求体 |
-| `CURLOPT_HTTPHEADER` | `Authorization: Bearer <key>`、`Content-Type: application/json`、`Accept: text/event-stream` |
-| `CURLOPT_WRITEFUNCTION` | 接收 SSE 字节流，写入行缓冲 |
-| `CURLOPT_XFERINFOFUNCTION` | 轮询取消标志；返回非 0 中止请求 |
+| `CURLOPT_URL` | 拼好的 `/chat/completions` 地址 |
+| `CURLOPT_POST`、`POSTFIELDS`、`POSTFIELDSIZE` | JSON 请求体 |
+| `CURLOPT_HTTPHEADER` | 鉴权、内容类型、SSE 接受头 |
+| `CURLOPT_WRITEFUNCTION` | 接收 SSE 或错误正文 |
+| `CURLOPT_HEADERFUNCTION` | 解析状态码与 `Retry-After` |
+| `CURLOPT_XFERINFOFUNCTION` | 轮询取消与首字节超时 |
 | `CURLOPT_NOSIGNAL` | 禁止 libcurl 安装信号处理器 |
-| `CURLOPT_CONNECTTIMEOUT_MS` | 连接超时，默认 30s |
-| `CURLOPT_TIMEOUT_MS` | 单次请求总超时，来自 `llm_timeout_ms` |
-| `CURLOPT_LOW_SPEED_LIMIT` / `LOW_SPEED_TIME` | 首字节/低速超时：1 字节 / 120s |
-| `CURLOPT_ACCEPT_ENCODING` | 设为 identity，避免 SSE 被压缩缓冲 |
-| `CURLOPT_HTTP_VERSION` | 固定 HTTP/1.1，减少代理兼容问题 |
+| `CURLOPT_ACCEPT_ENCODING` | `identity`，避免 SSE 被压缩缓冲 |
+| `CURLOPT_HTTP_VERSION` | 固定 HTTP/1.1 |
+| `CURLOPT_CONNECTTIMEOUT_MS` | 30000 |
+| `CURLOPT_TIMEOUT_MS` | `llm_timeout_ms` |
+| `CURLOPT_LOW_SPEED_LIMIT` | 1 字节 |
+| `CURLOPT_LOW_SPEED_TIME` | 120 秒 |
 
-### SSE 解析
+进度回调在取消标志置位时返回非 0，中止请求。没有收到任何正文且超过 120 秒时也中止，并归类为 `timeout`。
 
-1. 按 `\n` 切行；去掉行尾 `\r`
-2. 忽略空行和 `:` 开头的注释行
-3. 只处理 `data:` 前缀；`data: [DONE]` 结束
-4. 一个 chunk 可能包含多行，也可能一行被拆成多个 chunk；缓冲区必须跨回调保留
-5. 行缓冲按字节保留跨 chunk 的内容，直到换行后再解析 JSON；因此被切断的多字节 UTF-8 字符不会丢失。单行上限 16MB，超过按协议错误处理
-6. 连接关闭但没看到 `[DONE]` → `network`，由循环层重试同一个 step
+libcurl 的全局初始化不是线程安全的。首次调用用互斥锁串行完成初始化。
 
-### 取消
+## 非目标
 
-`Cancel_Token` 是原子布尔。`XFERINFOFUNCTION` 每次回调检查：
+- 不重试，不退避。循环层负责。
+- 不支持 Anthropic Messages API。
+- 不支持非流式 JSON 响应。
+- 不计算 token 或运行 tokenizer。
+- 不发送多模态内容。
+- 不支持 prompt cache 的显式标记。
 
-- 已取消 → 返回非 0，libcurl 以 `CURLE_ABORTED_BY_CALLBACK` 退出
-- 超过首字节时限 / 总时限 → 同样中止，映射成 `timeout`
+## 相关文档
 
-不要在信号处理器里直接调用 curl；信号处理器只设置标志。
-
-## 配置
-
-```jsonc
-{
-  "model": "<model_id>",
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "<api_key>",
-  "max_tokens": 8192,
-  "llm_timeout_ms": 600000,
-  "stream_include_usage": true
-}
-```
-
-1. `api_key` 可被 `AP_API_KEY` 覆盖；不写日志、不写 transcript
-2. 鉴权头固定 `Authorization: Bearer`
-3. 代理走 libcurl 的 `http_proxy` / `https_proxy` / `no_proxy`
-4. 不硬编码官方域名，`base_url` 可指向 vLLM、one-api 等自建服务
-
-## 不做的事
-
-- 不重试、不实现退避（循环层负责）
-- 不支持 Anthropic Messages API
-- 不支持 prompt cache 的显式标记
-- 不做 token 计数或 tokenizer 估算
-- 不支持原生多模态输入
-- 不提供 capabilities 协商；能力差异按“OpenAI 兼容”这一档处理
+- [errors-and-cancellation.md](errors-and-cancellation.md)：重试、取消与超时
+- [context-management.md](context-management.md)：messages 与工具段的来源
+- [react-loop-and-session.md](react-loop-and-session.md)：事件与 usage 的落盘
+- [cli-and-config.md](cli-and-config.md)：`settings.json` 中的 provider 字段

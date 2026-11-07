@@ -1,143 +1,143 @@
-# 错误、重试与中断
+# 错误、重试与取消
 
-无审批设计下，中断是用户唯一的止损手段，所以这一章的核心是：**每个失败点都必须有明确出口，且必须落盘。**
+本文件定义失败分类、LLM 重试边界、工具失败语义、信号取消、超时、落盘与退出码映射。完整事件 schema 见 [react-loop-and-session.md](react-loop-and-session.md)，provider 的状态码映射见 [provider.md](provider.md)，`context_too_long` 的终止流程见 [context-management.md](context-management.md)。诊断日志的路径、级别与格式见 [cli-and-config.md](cli-and-config.md)。
 
-## 错误分类
+## 错误分层
+
+引擎用两种错误类型。
+
+- `Error_Kind`：`None`、`Usage`、`Internal`、`Provider`、`Tool`。它决定 turn 结果和退出码。
+- `Provider_Error`：带 `kind`、`message`、`retryable`、`retry_after_ms`。它决定 LLM 是否重试，以及 `error.kind` 的文本。
+
+工具失败走 `Tool_Result`。普通工具失败是给模型的输入，不终止循环。
 
 | 类别 | 例子 | 处理 | 落盘 |
 | --- | --- | --- | --- |
-| 配置错误 | 未配置 api_key、模型 id 为空、`$AP_CONFIG` 不可写、agent 定义非法 | 启动即退出 | 无（stderr + exit 2） |
-| provider 网络 | 连接失败、连接超时、读超时、429、5xx | 退避重试 | `error`（retryable=true） |
-| provider 协议 | 非法 JSON、tool_call 参数不是合法 JSON、未知 `finish_reason` | 不重试，终止当前 turn | `error`（retryable=false） |
-| 上下文超限 | `context_too_long` | 不重试，终止当前 turn | `error` + `turn_end(context_too_long)` |
-| 流中断 | 已收到部分 delta 后连接断开 | 丢弃半截消息，重试同一 step | `error` |
-| 工具错误 | 路径不存在、编辑未匹配、参数非法、bash 超时 | 作为 tool result 返回，循环继续 | `tool_execution_end(ok=false)` |
-| 工具基础设施故障 | 无法 spawn shell、工具参数 blob 写入失败 | 终止 turn | `error`（scope=tool/session）；新 session 的 system prompt blob 写入失败发生在建会话阶段，只退出 4，没有 transcript 事件 |
-| transcript 写入失败 | 磁盘满、flush 失败、事件序列化失败 | 无法再可靠落盘，直接退出 | 尽力写 `error(scope=session)`；通常只能靠 stderr |
-| 用户中断 | SIGINT / SIGTERM | 见下 | `cancel` |
+| 用法、配置或恢复输入 | 参数非法、模型或 api_key 缺失、`$AP_CONFIG` 不可写、找不到 bash、session 不存在、transcript 损坏 | 启动或打开 session 时退出 | stderr 与日志，无新 transcript 事件 |
+| provider | 网络失败、超时、429、5xx、鉴权失败、协议错误 | 按 `retryable` 重试或终止 | `error(scope=llm)` |
+| 上下文组装 | blob 缺失、blob 损坏、参数 JSON 非法 | 终止 turn | `error(scope=session)`，无 `turn_end` |
+| 工具基础设施 | 无法 spawn shell、管道或 wait 失败、工具参数 blob 写入失败 | 终止 turn | `error(scope=tool)` 或 `error(scope=session)`，无 `turn_end` |
+| 普通工具失败 | 路径不存在、edit 未匹配、bash 超时、输出超限 | 作为 tool result 返回 | `tool_execution_end(ok=false)` |
+| transcript 写入 | 磁盘满、序列化失败、flush 失败 | 无法继续可靠落盘 | 尽力写 `error(scope=session)` |
+| 信号 | SIGINT、SIGTERM、Ctrl+C | 取消当前 step 或 turn | `cancel`、`turn_end` 等后续事件 |
 
-原则：**工具的错误是给模型的输入，不是给程序的异常**；provider、配置、基础设施的错误才是程序异常。
+## LLM 重试
 
-## LLM 侧重试
+Loop 只看 `Provider_Error.retryable`，不重新按 kind 分类。Provider 把以下失败标为可重试：HTTP 429 的 `rate_limit`、`server_error`、`network`、`timeout`，以及 `[DONE]` 前的流提前结束。SSE 流内嵌的 `rate_limit` 与 `invalid_request` 不重试。鉴权失败、模型不存在、参数错误、`context_too_long`、协议错误与取消都不可重试。
 
-1. 可重试：连接失败、超时、429、5xx（>=500）、流中断
-2. 不可重试：400 参数错误、401/403 鉴权、404 模型不存在、`context_too_long`、协议错误
-3. 退避：指数 + 抖动，基准 1s，最多重试 5 次（首次调用 + 5 次重试；延迟 1s / 2s / 4s / 8s / 16s，上限 16s）；429 优先用 `Retry-After`
-4. 退避用阻塞 sleep 实现。信号只会设置取消标志，当前退避 sleep 结束后才检查取消；若 `Retry-After` 很大，退出也会相应延后
-5. **重试边界**：尚未收到任何 delta 时直接重发；收到部分 delta 后断流，丢弃半截消息，**重试同一个 step**，不把半截内容放进上下文；如果这段文本已经展示给用户，stderr 明确提示「该段已作废」
-6. **重试不增加 step**：`step_start` 只写一次，重试只写 `error(attempt)`；`max_steps` 不受重试影响
-7. 丢弃的半截消息不写 `message_end`；如果已经写了 `message_start`，重放时按无 end 的消息忽略
-8. 重试对用户可见：每次写 `error` 事件，并在 stderr 输出一行
-9. 重试耗尽 → 终止当前 turn，写 `session_end(reason=error)`，退出码 3；这条路径没有 `turn_end`（`error` 已逐次落盘）
+1. `MAX_LLM_RETRIES` 为 5。首次调用算 attempt 1。`attempt` 为 1 到 5 时可再重试，最多共 6 次调用。
+2. 退避延迟是 `1000 * 2^(attempt-1)` 毫秒，上限 16000 毫秒。再加 0 到 250 毫秒抖动。
+3. HTTP 头带 `Retry-After` 时，直接用它覆盖延迟，不再加抖动，也不受 16000 毫秒上限约束。
+4. 退避用阻塞 sleep。取消标志在 sleep 期间不会打断等待。sleep 结束后，下一次 provider 调用会立即看到取消。
+5. 每次失败都写一条 `error(scope=llm)`。可重试失败在 `attempt` 为 1 到 5 时继续下一次，第 6 次失败后停止。最终那次的 `retryable` 仍可能为 true。
+6. 重试不写新的 `step_start`，不增加 step，也不影响 `max_steps`。
+7. 已经收到的文本在重试时作废。废弃的尝试不写 `message_end`，可能留下没有结束的 `message_start`，投影时忽略。stderr 会提示该段文本已作废。
+8. 丢弃的文本不进入下一轮上下文。`last_text` 只在成功的 `message_end` 时更新。
 
-重试事件只在 transcript 里，不进入下一轮上下文；模型不需要知道网络抖动。
-
-## 工具侧失败
-
-| 情况 | tool result |
-| --- | --- |
-| 参数校验失败 | `ok:false`，指明哪个参数、期望什么 |
-| 路径不存在 / 无权限 | `ok:false`，附规范化后的绝对路径 |
-| 文件非 UTF-8 | `ok:false`，建议改用 bash |
-| edit 未匹配 / 多处匹配 | `ok:false`，附匹配次数与建议 |
-| read_file 超出单次范围 | 截到 2000 行，附 `start_line` 继续提示 |
-| bash 非 0 退出 | `ok:true`，带 `exit_code` 与合并输出 |
-| bash 超出 2000 行 | 返回前 2000 行，附完整输出 `.txt` 路径与 `read_file` 续读提示 |
-| bash 超时 | `ok:false`，`error: "timeout after Nms"`，进程树已终止 |
-| 输出超过 `max_capture_bytes` | `ok:false`，`error: "output exceeded <max_capture_bytes> bytes"`，进程树已终止 |
-| 工具结果的 blob 写入失败 | `ok:false`，`error: "failed to persist output blob"`，循环继续 |
-| 工具被取消 | `ok:false`，`error: "cancelled"` |
-
-不做「同一工具连续失败 N 次熔断」；v1 由 `max_steps` 与模型自身收敛。后续可加。
-
-## 用户中断
-
-v1 没有交互模式，没有 Esc。中断只来自信号。
-
-### 信号语义
-
-| 输入 | 行为 |
-| --- | --- |
-| SIGINT（第一次） | 取消当前 step：中止 HTTP 请求、终止工具/子代理进程树，写事件后退出 130 |
-| SIGINT（1s 内第二次） | 直接退出 130，不再写事件 |
-| SIGTERM | 与第一次 SIGINT 相同，但退出码 143 |
-| 空闲时收到信号 | 写 `session_end(reason=signal)`，退出 130 / 143 |
-
-Windows 没有 Unix 信号：Ctrl+C 走 console handler；`TerminateProcess` 无法被捕获，视为异常退出。Odin 侧用 `core:sys/windows.SetConsoleCtrlHandler` 注册。
-
-### 取消传播
-
-1. 设置取消标志（原子布尔）
-2. 中止 HTTP 请求：curl 的进度回调返回非 0
-3. 正在执行的工具：终止整棵进程树
-   - Unix：通过 PPid 递归收集后代；先 `SIGTERM`，2s 后对同一快照 `SIGKILL`。不依赖进程组
-   - Windows：`TerminateJobObject` 或 `taskkill /T /F`
-   - 子代理：先递归终止其子进程树
-4. 已产生的副作用不回滚（写了一半的文件、已执行的命令），如实落盘
-5. 事件顺序：`cancel` → `tool_execution_end(ok=false, error="cancelled")`（若有）→ `message_end(stop_reason="cancelled")`（若正在流式）→ `turn_end(stop_reason="cancelled")` → `session_end(reason=signal)`
-6. 被取消的 assistant 消息保留在 transcript 里供人查看，但**不进入下一轮上下文**
-
-### 中断时的竞态
-
-- 工具已执行完但 `tool_execution_end` 未写入时被 kill：恢复时该 tool call 没有 end，投影时删除对应 `tool_use` 块，不补修复事件
-- provider 流中断（非用户取消）：丢弃已收到内容，不写 `message_end`；如果已经写了 `message_start`，重放时忽略。用户主动取消时按上面的顺序写 `message_end(cancelled)`
-- 中断发生在 blob 写入过程中：临时文件可能残留；最终 blob 不存在，引用事件也没有写，恢复不受影响
-- 中断发生在 `session_end` 写入前：恢复时按异常退出处理
-
-## 超时
-
-| 对象 | 默认 | 配置项 | 触发后 |
-| --- | --- | --- | --- |
-| 单次 LLM 请求 | 600s | `llm_timeout_ms` | 按可重试网络错误处理 |
-| LLM 首字节 | 120s | 固定 | 同上（连接已建立但无响应视为卡死） |
-| 单个 bash | 120s | `tool_timeout_ms` / `timeout_ms` | 终止进程树，返回 `ok:false` |
-| bash 上限 | 600s | 参数上限 | 参数超过上限 → `ok:false` 参数错误 |
-| 单个 task | 无超时 | — | 子代理自己的 LLM / bash 超时生效 |
-| 单个 turn | 无硬上限 | `max_steps` 控制步数 | 达到上限正常结束，`stop_reason=max_steps` |
-
-超时不是程序异常：bash 超时作为 `ok:false` 的 tool result 返回，LLM 超时按网络错误重试。
+重试耗尽或遇到不可重试错误时，Loop 返回 `.Provider`，不写 `turn_end`。`ap-cli` 写 `session_end(reason=error)`，退出 3。最后一次失败已在前一步落盘。
 
 ## 上下文超限
 
-1. provider 返回 `context_too_long`
-2. 不重试、不压缩
-3. 写 `error(scope=llm, kind=context_too_long, retryable=false)`
-4. 写 `turn_end(stop_reason=context_too_long)`
-5. 写 `session_end(reason=error)`，退出 3
-6. 错误消息进入 `error` 事件和 JSON 输出；不单独打印 stderr 提示。用户可据此开新 session 或缩小输入
+`context_too_long` 不重试，也不进入上述重试循环。Loop 写专用 `error` 与 `turn_end(context_too_long)`，退出 3。完整事件顺序与固定错误文本见 [context-management.md](context-management.md)。
 
-这是 v1 唯一的超限出口。后续 handoff 会替代它。
+## 工具失败
+
+普通失败写入 `tool_execution_end(ok=false)`，循环继续。包括参数错误、路径不存在、文件非 UTF-8、edit 未匹配、bash 超时、输出超过 `max_capture_bytes` 与工具结果 blob 写入失败。各工具的具体文本与范围见 [tools.md](tools.md)。
+
+`read_file` 请求超过 2000 行时截断并正常返回。bash 非 0 退出仍是 `ok=true`，`exit_code` 保留真实退出码。两者都不是失败。工具取消走信号取消路径，见下文。
+
+以下情况是 fatal，会终止 turn：
+
+1. `bash` 无法启动子进程。
+2. `bash` 的管道读取或 wait 失败。
+3. `task` 无法启动子代理，或子代理进程的管道与 wait 失败。
+4. 工具参数需要写 blob 但写入失败。
+
+前三种由工具结果带 `fatal=true`。Loop 写本工具的 `tool_execution_end`，再写 `error(scope=tool)`，然后返回 `.Tool`。同一 step 中尚未执行的 tool call 被跳过，没有 start 与 end。该路径不写 `turn_end`，`ap-cli` 写 `session_end(reason=error)`，退出 4。
+
+工具参数 blob 写入失败发生在 `tool_execution_start` 之前。Loop 写 `error(scope=session)`，跳过本次及本 step 剩余工具，返回 `.Tool`。
+
+工具结果 blob 写入失败不是 fatal。`tool_execution_end` 写 `ok=false` 与 `error="failed to persist output blob"`，循环继续。
+
+bash 超时与输出超限会先终止整棵进程树，再返回 `ok=false`。没有“连续失败 N 次熔断”，收敛依靠 `max_steps` 与模型自身判断。
+
+## 信号与取消
+
+`ap` 没有交互式取消入口，取消只来自信号。Unix 注册 SIGINT 与 SIGTERM。Windows 注册 Ctrl+C 与 Ctrl+Break。信号处理器只写原子取消标志和退出码，不调用普通过程，也不直接操作 curl。
+
+| 输入 | 行为 |
+| --- | --- |
+| 第一次 SIGINT 或 Ctrl+C | 置取消标志，记录 130 |
+| 第一次 SIGTERM | 置取消标志，记录 143 |
+| 1 秒内第二次 SIGINT | 直接退出，退出码 130，不再写事件 |
+| 1 秒内第二次 SIGTERM | 直接退出，退出码 143 |
+| `kill -9`、`TerminateProcess`、断电 | 无法捕获，按异常退出处理 |
+
+取消通过 `Cancel_Token` 传播。
+
+1. `provider_stream` 的进度回调看到标志后返回非 0，libcurl 中止请求。
+2. `run_child` 的轮询看到标志后终止进程树。bash 与 task 共用这条路径。
+3. 子代理是独立 `ap` 进程。父进程终止它的进程树，不等待它自己写完 `session_end`。
+4. Unix 先按 PPid 递归收集后代，发送 SIGTERM，2 秒后对同一快照发送 SIGKILL。Windows 优先 `TerminateJobObject`，失败时 `taskkill /T /F`。
+5. 已经产生的副作用不回滚。写了一半的文件、执行过的命令、残留的 blob 临时文件都按实际状态保留。
+
+取消的事件顺序取决于发生位置：
+
+- LLM 调用中：`cancel(scope=step)`，若已有消息则写 `message_end(stop_reason=cancelled)`，再写 `turn_end(cancelled)`。
+- 工具执行中：`cancel(scope=step)`，再写 `tool_execution_end(ok=false, error="cancelled", content=null)`，再写 `turn_end(cancelled)`。已收到的工具部分输出丢弃。
+- step 之间：`cancel(scope=turn)`，必要时写 `message_end(cancelled)`，再写 `turn_end(cancelled)`。
+- turn 已经结束、`session_end` 尚未写入时：保留原 `turn_end`，把结果标为取消，`session_end(reason=signal)`，按信号码退出。
+
+`cancel.target_id` 取当前记录的消息或工具调用 id，可能为 null。取消路径结束时，`ap-cli` 写 `session_end(reason=signal)`。如果 `session_end` 也写不进去，退出码改为 1。
+
+取消标志不能打断重试 sleep。`Retry-After` 很大时，退出会相应延后。第二次信号的 1 秒强退是这条延迟路径的兜底。
+
+## 超时
+
+| 对象 | 默认值 | 配置 | 触发后 |
+| --- | --- | --- | --- |
+| LLM 总请求 | 600000ms | `llm_timeout_ms` | 按 `timeout` 重试 |
+| LLM 建立连接 | 30000ms | 固定 | 按 curl 错误映射，通常为 `timeout` 或 `network` |
+| LLM 首字节 | 120000ms | 固定 | `timeout`，可重试 |
+| LLM 低速 | 1 字节每秒，持续 120s | 固定 | `timeout`，可重试 |
+| 单个 bash | `min(tool_timeout_ms, 600000)`，默认 120000ms | `tool_timeout_ms`、调用参数 `timeout_ms` | 终止进程树，返回 `ok=false` |
+| bash 超时参数上限 | 600000ms | 固定 | 超过上限按参数错误返回 |
+| 单个 task | 无 | 无 | 子代理自己的 LLM 与 bash 超时生效 |
+| 单个 turn | 无墙钟上限 | `max_steps` 控制步数 | 达到上限写 `turn_end(max_steps)` |
+
+bash 的 `timeout_ms` 必须为正数，且不超过 600000。超时不是 fatal，作为 tool result 返回。
 
 ## 落盘与恢复
 
-1. 进程异常退出（kill -9、断电）时没有 `session_end`。恢复时以此判断上次是异常退出，在 stderr 提示
-2. 恢复不重放工具，不重试 provider 请求；只重建上下文，等新提示词
-3. 未闭合的 tool call 在投影时忽略（删除 tool_use 块），不写修复事件
-4. 完整事件只追加；恢复时只截掉崩溃留下的不完整尾行
-5. blob 缺失或 hash 不匹配 → 恢复失败，退出 2
-6. `error` 事件必须包含 `scope`、`kind`（可空）、`message`、`retryable`、`attempt`，便于事后统计失败分布
-7. 配置错误发生在 transcript 创建前时，只有 stderr 与日志文件，没有 transcript
+1. transcript 每个事件追加后立即 flush。完整事件永不改写。
+2. 写入失败返回 `.Internal`，`ap-cli` 退出 1。Loop 可能在失败路径上补写 `error(scope=session)`，该补写也可能失败。
+3. 恢复前截掉没有换行结尾的尾行。读取时最后一条非空行损坏会忽略并 warning。中间行损坏直接失败，退出 2。
+4. 缺少 `session_end` 表示上次异常退出。恢复时追加 warning，不补写修复事件。
+5. 未闭合的 tool call 在投影时删除。不写修复事件，不改 transcript。
+6. blob 缺失或 sha256 不匹配时恢复失败。system prompt blob 在打开 session 时失败。其它 blob 在第一个 step 失败。两种情况都退出 2。
+7. 恢复不重新执行工具，不重试 provider 请求，不重新调用 LLM 生成摘要。
+8. `error` 事件必须带 `scope`、`kind`、`message`、`retryable`、`attempt`。配置错误发生在 transcript 创建前，只有 stderr 与日志。
+9. 取消发生在 blob 写入中时，临时文件可能残留。只要引用事件没有写，恢复不受影响。
 
-## 日志文件
+## 退出码映射
 
-stderr 是给人实时看的；排查已结束的进程需要日志文件。两者写同一批消息：
+`ap-cli` 把引擎的 `Error_Kind` 映射成退出码。SDK 与工具只返回错误值，不调用 `os.exit`。
 
-1. warning / error 默认都写 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`；`--verbose` 加上 info，`--debug` 再加上 debug
-2. 级别过滤在 `engine.log_message` 里只做一次，stderr 打什么，文件里就有什么；文件器不重复判断级别
-3. 写入失败（`$AP_CONFIG` 不可写、磁盘满）静默，不影响退出码，也不影响 stderr 输出——日志不能成为新的失败点
-4. 日志不含 `api_key`；`session_end`、`stderr_preview` 等前端需要的内容仍以 transcript / stdout 为准
-5. 一天一个文件，按本地日期切换；子代理进程写同一个文件，靠追加模式拼接
+- `None` → 0。包括 `max_steps` 与 `max_tokens` 正常终止。
+- `Internal` → 1。transcript 写入失败、工具 schema 解析失败、session 关闭失败。
+- `Usage` → 2。参数与配置错误、session 不存在、transcript 损坏、blob 缺失、上下文组装失败。
+- `Provider` → 3。重试耗尽、不可重试的 provider 错误、`context_too_long`。
+- `Tool` → 4。工具 fatal 故障、工具参数 blob 写入失败、建 session 时 system prompt blob 写入失败。
+- 信号 → 130 或 143。SIGINT、Ctrl+C 与 Ctrl+Break 为 130，SIGTERM 为 143。
 
-## 退出码
+退出码 0 不代表模型正常说完。`max_steps` 与 `max_tokens` 也返回 0，调用方应读 `turn_end.stop_reason` 或 `json` 输出的 `stop_reason`。
 
-与 [cli-and-config.md](cli-and-config.md) 一致：
+取消路径优先于错误映射。`result.cancelled` 为 true 时优先使用信号码，没有记录信号时用 130。用户可见的完整退出码表见 [cli-and-config.md](cli-and-config.md#退出码)。
 
-| 码 | 含义 |
-| --- | --- |
-| 0 | 正常结束 |
-| 1 | 内部错误 |
-| 2 | 用法 / 配置 / session 不存在 / blob 损坏 |
-| 3 | provider 错误 / 重试耗尽 / `context_too_long` |
-| 4 | 工具基础设施故障 |
-| 130 | SIGINT |
-| 143 | SIGTERM |
+## 相关文档
+
+- [react-loop-and-session.md](react-loop-and-session.md)：事件 schema 与恢复
+- [provider.md](provider.md)：HTTP、SSE 与错误 kind
+- [context-management.md](context-management.md)：`context_too_long`
+- [tools.md](tools.md)：单个工具的错误文本与上限
+- [cli-and-config.md](cli-and-config.md)：用户可见的退出码表、诊断日志与配置字段

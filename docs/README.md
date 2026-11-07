@@ -1,168 +1,131 @@
 # ap Coding Agent Spec
 
-ap 是一个跨平台的命令行 coding agent：接收一条提示词，通过 ReAct 循环调用 LLM 与本地工具，直到任务完成。ap 本体是一次性 CLI，运行结束即退出；交互界面由独立的 `ap-tui`（终端）和 `ap-web`（浏览器）进程通过 `stream-json` 调用 ap，分别见 [tui.md](tui.md) 与 [web.md](web.md)。
+ap 是用 Odin 写的 coding agent。输入一条提示词，它进入 ReAct 循环：请求模型、执行工具、把结果送回模型，直到任务完成或命中终止条件。`ap` 本体只做一次性 CLI，交互界面由独立前端承担。
 
-本文件是规格总入口，定义全局决策、术语和文档地图。子系统细节见各分篇。
+本文件是规格入口，说明 ap 的设计取舍、硬约束、已定决策、术语和文档地图。参数表、事件字段和模块契约分别由各分篇定义。
 
-## 目标
+## 三种进程形态
 
-1. 跨平台，Linux / macOS / Windows 行为一致；shell 统一用 Bash，差异封装在一层抽象里
-2. session 可持久化、可在同一项目内恢复（`ap -s` / `ap -c`）、可重放
-3. 工具集最小可用：读文件、写文件、编辑文件、执行 shell、启动子代理
-4. 子代理：`task` 工具拉起独立 `ap` 进程，隔离上下文，只回传结论
-5. 流式输出；工具执行过程对用户可见（stderr，或 `stream-json` 模式下的 stdout 事件）
-6. 全自动执行，不引入审批交互
-7. ap 本体只做 CLI：一条提示词进，一个 turn 出，没有交互式 REPL；交互由独立的 `ap-tui` / `ap-web` 承担
+- `ap` 是一次性 CLI。一条提示词进，一个 turn 出，然后退出。
+- `ap-tui` 与 `ap-web` 是独立前端。每个 turn 启动一个 `ap` 子进程，提示词走 stdin，事件走 stdout。
+- `magi-cli` 是第二个进程内宿主。它直接调用 `apcore`，为三名角色各开一个隔离 session。
 
-## 前置条件
+`ap` 本体不跨 turn 保存交互状态。session 的历史在 transcript 里，下一轮由 `-s` 或 `-c` 恢复。`ap-tui` 与 `ap-web` 因此可以随时重启，也能在刷新后从 transcript 重放。`magi-cli` 不启动 `ap` 子进程，也不注册工具。
 
-- 所有平台都需要可用的 `bash`。Windows 上由 **Git for Windows** 提供（`bash.exe` 在 PATH 中）；找不到时启动失败，退出码 2
-- Windows 上 ap 是原生程序，接收 Win32 路径；不依赖 MSYS 的 `/z/...` 形式。文件工具同时接受 `/` 与 `\` 作为分隔符
-- 实现语言 Odin；HTTP/TLS 通过 `vendor:curl`，Windows 使用随 Odin 分发的静态 libcurl，Linux/macOS 链接系统 libcurl
+进程契约与事件消费方式见 [integration.md](integration.md)。模块职责与生命周期顺序见 [architecture.md](architecture.md)。
 
-## 非目标（v1）
+## 五条设计取舍
 
-1. ap 本体不做交互模式、TUI、历史编辑、Esc 取消（只有信号中断）；交互由独立的 `ap-tui`（终端）与 `ap-web`（浏览器）承担
-2. 工具执行审批、权限规则、沙箱
-3. 上下文压缩、token 预算；压缩能力后续由 **handoff** 取代
-4. Hooks（PreToolUse / PostToolUse 等拦截机制）
-5. Plan mode、多 agent 并行编排（`magi` 的三角色并行投票是独立组件，不属于 ap 本体）
-6. MCP、插件系统
-7. 内置 WebFetch / WebSearch
-8. ap 本体不做图形界面、IDE 插件、Web 界面；浏览器界面由独立的 `ap-web` 提供
-9. 远程会话共享、服务端部署
-10. `--add-dir`：所有相对路径只相对启动目录
-11. 除 read_file / write_file / edit_file / bash / task 之外的任何工具（包括 grep / glob / ls / todo / 原生后台进程）
-12. blob 的自动回收（GC）；由用户自行清理
-13. 技能的脚本执行、参数传入、版本管理与远程安装；v1 只发现并注入清单
+**一次性 CLI 当内核。** ap 没有 REPL，也没有常驻服务。每条提示词启动一次进程，参数、输出格式和退出码保持稳定。脚本、子代理和前端都调用同一个可执行文件，不需要理解 agent 内部。代价是交互状态必须落到 transcript，前端要自己维护 session 选择。
 
-## 已知风险
+**transcript 是唯一事实来源。** 对话事件只追加到 JSONL，消息列表、usage 和 agent 信息都能从 transcript 重建。恢复只读历史，不重新执行工具，也不调用模型生成摘要。这样崩溃恢复和事后审计才有共同依据。细节见 [react-loop-and-session.md](react-loop-and-session.md)。
 
-全自动 + 无沙箱意味着 agent 可以静默删文件、跑任意命令，用户唯一的止损手段是信号中断。因此以下四条是**硬约束**，不是可选项：
+**全自动执行。** ap 没有审批弹窗、权限规则或沙箱。安全边界放在可追溯的记录、实时可见的工具输出和信号取消上，而不是交互确认。这个选择意味着 agent 可以静默修改文件或运行任意命令，部署前必须接受这一点。取消语义见 [errors-and-cancellation.md](errors-and-cancellation.md)。
 
-1. 所有 tool call 与结果必须可追溯：transcripts 内联，或通过 blob 引用；blob 缺失时恢复必须失败而不是静默降级
-2. 中断必须及时：收到信号后立即停止循环并开始终止对应进程树；Unix 先 `SIGTERM`、2s 后 `SIGKILL`，Windows 用 Job Object；`kill -9` / 断电无法保证清理残留子进程
-3. 危险操作不做隐藏：工具调用与输出必须实时对用户可见（stderr；`stream-json` 模式下为 stdout 事件）
-4. 完整事件只追加，永不改写；恢复只读取记录，不重新执行工具、不重新调用 LLM 生成摘要。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行（它从未成为事件）
+**工具保持最小。** 内置工具只有 `read_file`、`write_file`、`edit_file`、`bash` 和 `task`。搜索、列目录和管道组合交给 bash，减少工具 schema 的数量和模型的选择成本。代价是模型需要写出更长的 shell 命令。工具边界见 [tools.md](tools.md)。
+
+**SDK 只保留机制。** agent loop、provider、transcript、context 和工具契约在 `ap-core`。具体工具、技能、`AGENTS.md`、agent 定义和 CLI 语义在 `ap-cli`。这条分界让 `magi` 能作为第二个宿主复用 `apcore`，也让前端二进制不必链接 agent 代码。模块划分见 [architecture.md](architecture.md)。
+
+## 硬约束
+
+以下五条不是可选项。
+
+1. 所有 tool call 与结果必须可追溯。内容内联在 transcript，或通过 blob 引用。blob 缺失时恢复失败，不静默降级。
+2. 取消必须及时。收到信号后停止循环、中止 HTTP 请求、终止工具与子代理的进程树。Unix 先发 `SIGTERM`，2 秒后发 `SIGKILL`。Windows 使用 Job Object。`kill -9` 与断电无法保证清理。
+3. 危险操作不能隐藏。工具调用与输出必须实时可见。`text` 格式写 stderr，`stream-json` 格式写 stdout 事件。
+4. 完整事件只追加，永不改写。恢复只读记录，不重新执行工具，也不调用模型补写历史。唯一允许的物理改动是截掉崩溃留下的不完整尾行。
+5. stdout 是机器通道。`text`、`json`、`stream-json` 只把结果或事件写到 stdout。日志、进度和工具输出写 stderr。
+
+模块级契约，例如 `context_build` 的纯函数要求和 blob 的 fsync 顺序，见 [architecture.md](architecture.md)。
 
 ## 已定决策
 
-| 决策 | 结论 | 影响 |
+| 决策 | 结论 | 详情 |
 | --- | --- | --- |
-| 运行平台 | 跨平台，shell 统一 Bash | Windows 需要 Git for Windows，见 [tools.md](tools.md) |
-| 实现语言 | Odin | 见 [architecture.md](architecture.md) 的实现约束 |
-| 产品形态 | 一次性 CLI，不内置交互 | `ap-tui` / `ap-web` 作为独立进程调用 ap，见 [tui.md](tui.md) 与 [web.md](web.md) |
-| 工具执行安全 | 全自动，无审批、无沙箱 | 靠 transcripts + blob + 可中断兜底 |
-| 工具执行方式 | 串行；工具无状态（不共享 cwd/env） | 一个 step 内多个 tool call 按序执行 |
-| 工具集 | 仅 read_file / write_file / edit_file / bash / task | 见 [tools.md](tools.md) |
-| 路径 | 无 `--add-dir`；相对路径只相对启动目录 | 跨目录操作使用绝对路径 |
-| 会话存储 | JSONL 只追加 transcripts + 内容寻址 blob | 事件 schema 见 [react-loop-and-session.md](react-loop-and-session.md) |
-| 诊断日志 | stderr + `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，默认 warning 及以上 | 一天一个文件，写入失败不影响运行 |
-| 上下文管理 | 不做压缩、不做 token 预算；超限即终止 | 记录 usage；`context_too_long` 是唯一超限出口 |
-| 会话恢复 | 以 transcripts 为准，system prompt / model / agent 全部冻结 | 只在当前项目内查找 |
-| 记忆文件 | `AGENTS.md` | 全局 `~/.agents/AGENTS.md` + 项目向上查找 |
-| 上下文注入 | 默认全量；`$AP_CONFIG/SYSTEM.md` 替换固定指令段，`--no-agents-md` / `--no-skills` 可按运行裁剪 | 工具集写入 `session_start.tools` 冻结 |
-| 技能 | 只发现并注入清单，正文按需读取 | 见 [skills.md](skills.md) |
-| 循环粒度 | user turn = 一条提示词到终止；step = 一次 LLM 调用 | 事件与日志按 step 切分 |
-| 子代理 | 独立进程 + 独立 session，深度默认 1 | 见 [subagents.md](subagents.md) |
-| MAGI 决策 | 三名角色独立投票，一票否决；成员失败按否决处理 | 独立 `magi-cli`，见 [magi.md](magi.md) |
-| 进程间协议 | `--output-format stream-json`，stdout 只放事件 | 子代理与脚本化的唯一通道 |
-| Provider | 只支持 OpenAI chat completions 兼容接口 | 见 [provider.md](provider.md) |
-| 大输出 | 超过 `blob_threshold_bytes`（默认 100KB）写 blob，transcripts 只存引用 | 模型仍看到完整内容；blob 由用户清理 |
-| 上下文版本 | 事件带 `v: 1`；未知事件类型跳过 | 前向兼容 |
+| 运行平台 | Linux、macOS、Windows，shell 统一用 Bash | [tools.md](tools.md) |
+| 编写语言 | Odin nightly | [architecture.md](architecture.md) |
+| 工具执行 | 串行，无状态，不共享 cwd 或环境变量 | [tools.md](tools.md) |
+| 工具集 | `read_file`、`write_file`、`edit_file`、`bash`、`task` 五种 | [tools.md](tools.md) |
+| 路径 | 没有 `--add-dir`，相对路径只相对启动目录 | [cli-and-config.md](cli-and-config.md) |
+| 会话存储 | 只追加 JSONL transcript 加内容寻址 blob | [cli-and-config.md](cli-and-config.md) |
+| 大输出 | 超过 `blob_threshold_bytes` 写 blob，默认 102400 字节 | [tools.md](tools.md) |
+| 诊断日志 | stderr 加 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，默认 warning 及以上 | [cli-and-config.md](cli-and-config.md) |
+| 上下文 | 不做压缩与 token 预算，上下文超限的唯一出口是 `context_too_long` | [context-management.md](context-management.md) |
+| 恢复 | 以 transcript 为准，system prompt、model、agent、cwd 与工具集冻结 | [react-loop-and-session.md](react-loop-and-session.md) |
+| 记忆与注入 | `AGENTS.md` 分层注入，`SYSTEM.md` 可替换基础段，`--no-agents-md` 与 `--no-skills` 可裁剪 | [context-management.md](context-management.md) |
+| 技能 | 只发现并注入清单，正文按需读取 | [skills.md](skills.md) |
+| 子代理 | 独立进程与独立 session，深度默认 1 | [subagents.md](subagents.md) |
+| MAGI | 三名角色独立投票，一票否决，成员失败按否决处理 | [magi.md](magi.md) |
+| Provider 与协议 | 只支持 OpenAI chat completions，前端与子代理用 `stream-json`，事件带 `v: 1` | [provider.md](provider.md) |
+
+循环粒度固定为两级。turn 从一条提示词开始，到循环终止为止。step 是一次逻辑 LLM 调用，重试不增加 step。事件与恢复规则见 [react-loop-and-session.md](react-loop-and-session.md)。
 
 ## 术语
 
-- **session**：一次逻辑对话，由 `session_id` 标识，可跨多次 ap 运行恢复。
+- **session**：一次逻辑对话，由 `session_id` 标识，可以跨多次 ap 运行恢复。
 - **transcript**：session 的事件记录集，落盘为一个 JSONL 文件，一行一个事件，只追加。
-- **blob**：内容寻址的大块数据文件，存放超过阈值的工具结果或工具参数；transcript 通过 sha256 引用它。
-- **user turn**（下文简称 turn）：从一条用户提示词开始，到循环终止为止的一段执行。
+- **blob**：内容寻址的大块数据文件，存放超过阈值的工具结果或参数，transcript 通过 sha256 引用。
+- **turn**：从一条用户提示词开始，到循环终止为止的一段执行。
 - **step**：一个 turn 内的一次逻辑 LLM 调用。重试不增加 step。
-- **message**：提交给 LLM 的一条对话记录（system / user / assistant / tool）。
-- **tool call**：LLM 响应中要求执行工具的请求，含工具名与参数。
-- **tool execution**：ap 对单个 tool call 的本地执行过程。
-- **subagent**：由 `task` 工具拉起、拥有独立 session 的 ap 进程。
-- **skill**：放在 `SKILL.md` 里的 Markdown 指令包；ap 把元数据清单注入 system prompt，模型按需读取正文。
-- **provider**：LLM 接口的适配层，v1 只有 OpenAI chat completions。
-- **ap-tui**：独立的交互式前端，每轮启动一个 ap 子进程并通过 `stream-json` 渲染事件；见 [tui.md](tui.md)。
-- **ap-web**：独立的浏览器前端，HTTP + SSE 服务器，每轮启动一个 ap 子进程并把 `stream-json` 事件转发给页面；见 [web.md](web.md)。
-- **magi-cli**：基于 `apcore` SDK 的独立决策程序，三名角色各自投票，一票否决；见 [magi.md](magi.md)。
-- **stream event**：写到 stdout、但不落盘的临时事件（增量文本、工具输出片段）。
+- **message**：提交给模型的一条对话记录，角色为 system、user、assistant 或 tool。
+- **tool call**：模型响应中要求执行工具的请求，包含工具名与参数。
+- **工具执行**：ap 对单个 tool call 的本地执行过程。
+- **子代理（subagent）**：由 `task` 工具启动、拥有独立 session 的 ap 进程。
+- **skill**：放在 `SKILL.md` 里的 Markdown 指令包。ap 把元数据清单注入 system prompt，正文由模型按需读取。
+- **provider**：模型接口的适配层。当前只有 OpenAI chat completions。
+- **stream event**：写到 stdout、但不落盘的临时事件，例如增量文本和工具输出片段。
 - **transcript event**：追加到 transcript 的持久事件。
 
 ## 模块关系
 
 ```
-CLI（cli-and-config.md）
-  │ 用户输入 / 信号；新 session 时发现技能（skills.md）
-  ▼
-ReAct Loop（react-loop-and-session.md）
-  ├── Context（context-management.md）──► system prompt / 历史消息 / blob 解析
-  ├── Provider（provider.md）─────────► OpenAI chat completions
-  ├── Tool Registry（tools.md）───────► 文件系统 / Shell
-  │      └── Subagent Runner（subagents.md）──► 子进程 ap
-  └── Transcript Store ──────────────► <session_id>.jsonl + blobs/
+cmd/ap ──► ap-cli ──► apcore ──► engine
+                                  ├──► provider
+                                  ├──► tool
+                                  └──► transcript
+
+cmd/ap-tui ──► ap-tui ──┐
+cmd/ap-web ──► ap-web ──┴──► ap-core/client ──► ap-core/platform
+
+cmd/magi-cli ──► magi ──► apcore ──► engine
 ```
 
-ap（经 `apcore` 门面）、ap-tui 与 ap-web 共用 `ap-core/platform` 的路径、project、session、blob 与平台原语；前端通过 `ap-core/client` + `ap-core/protocol` 使用，见 [architecture.md](architecture.md) 与 [dependencies.md](dependencies.md)。
-
-`magi` 是第二类进程内宿主：它只 import `apcore` 与 `ap-core/platform`，为每名成员各开一个隔离 session，不经过 `ap` 可执行文件，也不链接 `ap-cli`。见 [magi.md](magi.md)。
+`ap-cli` 是组装根，负责把外部输入变成 `apcore.Config`。`ap-tui`、`ap-web` 与 `magi` 都不链接 agent loop。模块职责与依赖方向见 [architecture.md](architecture.md)，允许的 import 边见 [dependencies.md](dependencies.md)。
 
 ## 文档地图
 
-| 文件 | 负责内容 | 状态 |
+状态只有三类。`规格` 是当前代码必须遵守的行为，`设计记录` 是历史方案，`工作清单` 是维护记录。
+
+| 文件 | 内容 | 状态 |
 | --- | --- | --- |
-| [README.md](README.md) | 总览、决策、术语、索引 | 定稿 v1 |
-| [architecture.md](architecture.md) | 模块边界、依赖方向、进程模型、Odin 约束 | 定稿 v1 |
-| [dependencies.md](dependencies.md) | 包布局、允许的 import 边、check-deps 用法 | 定稿 v2 |
-| [cli-and-config.md](cli-and-config.md) | 启动参数、输出格式、配置、工作区布局、项目识别 | 定稿 v1 |
-| [react-loop-and-session.md](react-loop-and-session.md) | 循环状态机、事件 schema、恢复与重放、fork | 定稿 v1 |
-| [context-management.md](context-management.md) | system prompt、记忆文件、消息投影 | 定稿 v1 |
-| [provider.md](provider.md) | OpenAI 适配、SSE、usage、错误、curl 传输 | 定稿 v1 |
-| [tools.md](tools.md) | 五个工具的契约、blob、进程与输出上限 | 定稿 v1 |
-| [subagents.md](subagents.md) | agent 定义、启动协议、结果契约 | 定稿 v1 |
-| [skills.md](skills.md) | 技能发现、SKILL.md 格式、提示词注入、`--list-skills` | 定稿 v1 |
-| [tui.md](tui.md) | `ap-tui` 的进程模型、session 管理、历史重放、渲染与输入层 | 已实现 phase 1 |
-| [web.md](web.md) | `ap-web`（单 exe：HTTP+SSE 服务器 + 内置 Alpine.js 前端） | 已实现 phase 1 |
-| [integration.md](integration.md) | 新前端接入 ap.exe 的集成指南：进程契约、turn 生命周期、事件解析、session/历史、取消与并发 | 定稿 v1 |
-| [magi.md](magi.md) | `magi`：三角色投票、一票否决、输入输出契约、失败与审计 | 定稿 v1 |
-| [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 | 定稿 v1 |
+| [README.md](README.md) | 总览、设计取舍、硬约束、术语、索引 | 规格 |
+| [architecture.md](architecture.md) | 模块职责、进程生命周期、契约、内存、Odin 约束 | 规格 |
+| [dependencies.md](dependencies.md) | 包布局、允许的 import 边、检查器 | 规格 |
+| [cli-and-config.md](cli-and-config.md) | 参数、输出、配置、存储布局、项目识别 | 规格 |
+| [react-loop-and-session.md](react-loop-and-session.md) | turn/step、事件 schema、恢复与 fork | 规格 |
+| [context-management.md](context-management.md) | system prompt、记忆、消息投影 | 规格 |
+| [provider.md](provider.md) | OpenAI 适配、SSE、usage、错误映射 | 规格 |
+| [tools.md](tools.md) | 五个工具的参数、结果、blob 与进程边界 | 规格 |
+| [subagents.md](subagents.md) | agent 定义、启动协议、结果契约 | 规格 |
+| [skills.md](skills.md) | 技能发现、`SKILL.md` 格式、提示词注入 | 规格 |
+| [tui.md](tui.md) | `ap-tui` 的进程模型、渲染、输入与命令 | 规格 |
+| [web.md](web.md) | `ap-web` 的 HTTP/SSE、并发与前端 | 规格 |
+| [integration.md](integration.md) | 新前端接入 ap 的进程契约与 turn 生命周期 | 规格 |
+| [magi.md](magi.md) | 三角色投票、一票否决、输入输出与失败语义 | 规格 |
+| [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、取消、超时、落盘 | 规格 |
+| [proposals/cli-explicit-prompt-source.md](proposals/cli-explicit-prompt-source.md) | 提示词三选一的设计记录 | 设计记录 |
+| [proposals/cli-prompt-context-tools.md](proposals/cli-prompt-context-tools.md) | 上下文裁剪与工具开关的设计记录 | 设计记录 |
+| [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
+| [TODO.md](TODO.md) | docs 重写计划与验收清单 | 工作清单 |
 
-## 参考 Claude Code 的取舍
+## 与 Claude Code 的关系
 
-采纳：
+ap 借鉴了 Claude Code 的循环骨架、只追加 transcript、技能清单、子代理和结构化输出。没有采纳审批与 hooks，因为它们与全自动执行冲突。没有采纳 TodoWrite 和 plan mode，因为它们需要交互界面。上下文压缩留给后续 handoff。MCP 与插件系统留到核心循环稳定之后。完整的非目标清单见仓库根目录的 [README.md](../README.md)。
 
-| 设计 | 落在哪 |
-| --- | --- |
-| turn / step 两级循环 | react-loop-and-session.md |
-| 事件流写 transcript（可重放） | react-loop-and-session.md |
-| 记忆文件分层注入（全局 + 项目，向上查找） | context-management.md |
-| 技能只注入清单、正文按需读取 | skills.md |
-| 子代理：独立上下文、agent 定义文件、工具白名单 | subagents.md |
-| 结构化输出（`--output-format`，token 高效、可脚本化） | cli-and-config.md |
-| 工具超时、退出码作为结果 | tools.md |
-| 中断语义（一次取消、二次强退） | errors-and-cancellation.md |
-| 成本与 token 统计 | cli-and-config.md、react-loop-and-session.md |
+## 相关文档
 
-不采纳（v1），理由：
-
-| 设计 | 理由 |
-| --- | --- |
-| 权限审批 / allow-deny 规则 | 已明确选全自动；安全边界应放在沙箱，而不是弹窗 |
-| Hooks | 本质是审批机制的变体，与无审批冲突 |
-| TodoWrite | 需要 UI 才有价值；CLI 下用文本计划替代 |
-| Plan mode | 与「全自动执行」目标相悖 |
-| 上下文压缩 | v1 不做；后续用 handoff 替代 |
-| 交互式 REPL / TUI | `ap-tui` phase 1 已提供滚动输出与 raw 多行编辑；ap 本体保持一次性 CLI |
-| 原生后台 bash | v1 用 wrapper 脚本兜住，不提供进程管理工具族 |
-| grep / glob / ls | v1 用 bash 覆盖，减少工具与 schema 复杂度 |
-| MCP / 插件 | 生态型功能，先把核心循环跑通 |
-
-## 后续版本
-
-1. handoff：在上下文将满时把任务移交给新 session，替代压缩
-2. 交互模式 / TUI：`ap-tui` phase 1 已提供滚动渲染与 raw 多行编辑框；phase 2 处理运行中排队、TUI 侧取消、可折叠工具展示与 session 管理
-3. 并行工具调用（transcript 已按 `tool_call_id` 关联，无需改格式）
-4. 后台子代理、一次 task 启动多个子代理
-5. blob 的 GC 与 session 清理命令
-6. 更多工具（grep / glob / webfetch 等）
+- [cli-and-config.md](cli-and-config.md)：参数、配置、输出与存储
+- [react-loop-and-session.md](react-loop-and-session.md)：循环、事件与恢复
+- [architecture.md](architecture.md)：模块、进程与契约
+- [dependencies.md](dependencies.md)：包边界与检查器
+- [integration.md](integration.md)：前端接入 ap
