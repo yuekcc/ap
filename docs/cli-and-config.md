@@ -215,7 +215,9 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
   "blob_threshold_bytes": 102400,           // 超过则写 blob
   "max_capture_bytes": 67108864,            // 单次工具输出硬上限
   "stream_include_usage": true,             // 请求 stream_options.include_usage
-  "context_window_tokens": 1048576          // 模型上下文窗口，0 表示不设预算
+  "context_window_tokens": 1048576,         // 模型上下文窗口，0 表示不设预算
+  "context_reserve_tokens": 32768,          // 预算里给输出波动与估算误差留的余量
+  "handoff_max_tokens": 16384               // 生成交接文档那次调用的 max_tokens
 }
 ```
 
@@ -226,17 +228,17 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 3. `base_url` 缺省为官方地址，末尾斜杠会被去掉，空值报错。
 4. 未知字段忽略并警告。类型错误、非法取值都按配置错误退出 2。显式 `null` 按缺失处理。
 5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、两个超时和两个尺寸上限必须为正。`max_agent_depth` 必须非负。
-6. `context_window_tokens` 必须非负；`0` 表示不设预算。非零时必须大于 `max_tokens`，否则预算公式 `target = context_window_tokens - max_tokens - reserve` 必为负。
+6. `context_window_tokens` 必须非负；`0` 表示不设预算，此时另外两个字段不参与计算。非零时必须大于 `max_tokens` 与 `handoff_max_tokens`，并且 `max_tokens + context_reserve_tokens` 必须小于窗口，否则预算公式的前两项必为负。`context_reserve_tokens` 必须非负，`handoff_max_tokens` 必须为正。这三条冲突在启动时按配置错误退出 2。
 7. `ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`。
 
-默认值按 1M 上下文、64K 单次输出的模型规格取：`max_tokens` 为 `65536`，`context_window_tokens` 为 `1048576`。它们是模型能力的上限声明，不是每轮都会用到的量：`max_tokens` 是单次响应的天花板，`context_window_tokens` 是预算计算的输入。两者都会被命令行参数覆盖。
+默认值按 1M 上下文、64K 单次输出的模型规格取：`max_tokens` 为 `65536`，`context_window_tokens` 为 `1048576`，`context_reserve_tokens` 为 `32768`（`max_tokens` 的一半），`handoff_max_tokens` 为 `16384`。`max_tokens` 与 `context_window_tokens` 是模型能力的上限声明，不是每轮都会用到的量：前者是单次响应的天花板，后者是预算计算的输入。只有 `context_window_tokens` 有命令行覆盖（`--context-window`）；`max_tokens` 用 `--max-tokens` 覆盖；余量与交接上限只能改配置。
 
 字段归属：
 
 | 字段 | 归属 |
 | --- | --- |
 | `model`、`base_url`、`api_key` | SDK provider |
-| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage`、`context_window_tokens` | SDK loop |
+| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage`、`context_window_tokens`、`context_reserve_tokens`、`handoff_max_tokens` | SDK loop |
 | `llm_timeout_ms` | SDK provider |
 | `tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
 

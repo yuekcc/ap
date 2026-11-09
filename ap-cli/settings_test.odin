@@ -139,7 +139,9 @@ test_settings_context_budget_defaults :: proc(t: ^testing.T) {
 	settings := apcore.settings_defaults()
 	testing.expect_value(t, settings.max_tokens, 65536)
 	testing.expect_value(t, settings.context_window_tokens, 1048576)
-	// 预算逻辑尚未实现，这里只钉常量；实现后它们参与 target 计算。
+	// 余量与交接输出上限是配置字段，默认值来自这两个常量。
+	testing.expect_value(t, settings.context_reserve_tokens, 32768)
+	testing.expect_value(t, settings.handoff_max_tokens, 16384)
 	testing.expect_value(t, apcore.DEFAULT_CONTEXT_RESERVE_TOKENS, 32768)
 	testing.expect_value(t, apcore.DEFAULT_HANDOFF_MAX_TOKENS, 16384)
 	testing.expect_value(t, apcore.HANDOFF_TRIGGER_PERCENT, 90)
@@ -154,4 +156,90 @@ apcli_test_tool_config :: proc(dir: string) -> aptools.Tool_Config {
 		max_capture_bytes = 4096,
 		max_agent_depth = 1,
 	}
+}
+
+// 预算余量与交接输出上限是新的配置字段：读入、默认值、校验都要钉住。
+@(test)
+test_settings_context_budget_fields :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-budget-fields")
+	defer os.remove_all(dir)
+
+	// 缺省时取默认值。
+	settings_write_file(fmt.tprintf("%s/settings.json", dir), `{"model":"m","api_key":"k"}`)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.context_reserve_tokens, 32768)
+	testing.expect_value(t, loaded.sdk.handoff_max_tokens, 16384)
+
+	// 显式写入时覆盖默认值。
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_reserve_tokens":8192,"handoff_max_tokens":4096}`,
+	)
+	overridden, err2 := load_settings(dir)
+	testing.expect_value(t, err2.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, overridden.sdk.context_reserve_tokens, 8192)
+	testing.expect_value(t, overridden.sdk.handoff_max_tokens, 4096)
+
+	// 显式 0 余量合法：关闭余量就是把 max_tokens 当作全部预留。
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_reserve_tokens":0}`,
+	)
+	_, err3 := load_settings(dir)
+	testing.expect_value(t, err3.kind, apcore.Error_Kind.None)
+
+	// 负余量与不大于 0 的交接上限是配置错误。
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_reserve_tokens":-1}`,
+	)
+	_, err4 := load_settings(dir)
+	testing.expect_value(t, err4.kind, apcore.Error_Kind.Usage)
+
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","handoff_max_tokens":0}`,
+	)
+	_, err5 := load_settings(dir)
+	testing.expect_value(t, err5.kind, apcore.Error_Kind.Usage)
+}
+
+// 窗口装不下 max_tokens + 余量时必须在启动阶段报错，而不是等 provider 拒绝。
+@(test)
+test_settings_context_budget_leaves_no_room :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-budget-room")
+	defer os.remove_all(dir)
+
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_tokens":8192}`,
+	)
+	_, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.Usage)
+	testing.expect(t, strings.contains(err.message, "leaves no budget"))
+
+	// 窗口不大于交接输出上限也不行：交接调用自己没有投影预算。
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_window_tokens":20000,"max_tokens":1024,"handoff_max_tokens":20000}`,
+	)
+	_, err2 := load_settings(dir)
+	testing.expect_value(t, err2.kind, apcore.Error_Kind.Usage)
+	testing.expect(t, strings.contains(err2.message, "handoff_max_tokens"))
+}
+
+// --context-window 覆盖后复用同一套校验：它可能与余量冲突。
+@(test)
+test_settings_context_window_override_validation :: proc(t: ^testing.T) {
+	settings := apcore.settings_defaults()
+	settings.context_window_tokens = 70000
+	testing.expect_value(t, validate_context_budget(settings).kind, apcore.Error_Kind.Usage)
+
+	// 关掉预算时其它字段不参与校验。
+	settings.context_window_tokens = 0
+	testing.expect_value(t, validate_context_budget(settings).kind, apcore.Error_Kind.None)
+
+	settings = apcore.settings_defaults()
+	testing.expect_value(t, validate_context_budget(settings).kind, apcore.Error_Kind.None)
 }

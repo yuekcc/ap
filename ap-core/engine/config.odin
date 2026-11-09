@@ -13,7 +13,13 @@ Settings :: struct {
 	stream_include_usage: bool,
 	// 模型上下文窗口的总 token 数。预算计算的输入；0 表示关闭预算与自动
 	// 交接，行为回到不计算 token 的版本（见 docs/context-management.md）。
-	context_window_tokens: int,
+	context_window_tokens:  int,
+	// 预算公式 target = context_window_tokens - max_tokens - reserve 里的余量。
+	// 为输出长度波动与估算误差留的空间；只在预算开启时生效。
+	context_reserve_tokens: int,
+	// 生成交接文档那次调用的 max_tokens。交接文本不需要 64K，所以单列一项；
+	// 与 --max-tokens 无关。
+	handoff_max_tokens:     int,
 }
 
 DEFAULT_BASE_URL :: "https://api.openai.com/v1"
@@ -23,11 +29,10 @@ DEFAULT_MAX_TOKENS :: 65536
 DEFAULT_CONTEXT_WINDOW_TOKENS :: 1048576
 
 // 预算公式 target = context_window_tokens - max_tokens - context_reserve_tokens
-// 里的两个参数。它们是常量而不是配置项：一个固定值更容易预期，等真实
-// 场景里输出经常被截断再改成比例。见 docs/proposals/context-budget-and-handoff.md。
-// 取 DEFAULT_MAX_TOKENS 的一半：估算偏差与输出长度波动共用这份余量。
+// 里两个参数的默认值。它们同时是 settings.json 字段的缺省值：
+// context_reserve_tokens 取 DEFAULT_MAX_TOKENS 的一半（估算偏差与输出长度
+// 波动共用这份余量），handoff_max_tokens 取 16384（交接文本不需要 64K）。
 DEFAULT_CONTEXT_RESERVE_TOKENS :: DEFAULT_MAX_TOKENS / 2
-// 生成交接文档那次调用的 max_tokens：交接文本不需要 64K。
 DEFAULT_HANDOFF_MAX_TOKENS :: 16384
 
 // 唯一的上下文决策阈值：估算值达到 target 的 90% 就进入上下文管理流程
@@ -37,7 +42,8 @@ HANDOFF_TRIGGER_PERCENT :: 90
 // 它不决定是否交接，决定交不交接的只有 HANDOFF_TRIGGER_PERCENT。
 CONTEXT_ELIDE_TARGET_PERCENT :: 80
 
-settings_defaults :: proc() -> Settings {	return Settings {
+settings_defaults :: proc() -> Settings {
+	return Settings {
 		base_url = DEFAULT_BASE_URL,
 		max_steps = 100,
 		max_tokens = DEFAULT_MAX_TOKENS,
@@ -45,6 +51,8 @@ settings_defaults :: proc() -> Settings {	return Settings {
 		blob_threshold_bytes = 102400,
 		stream_include_usage = true,
 		context_window_tokens = DEFAULT_CONTEXT_WINDOW_TOKENS,
+		context_reserve_tokens = DEFAULT_CONTEXT_RESERVE_TOKENS,
+		handoff_max_tokens = DEFAULT_HANDOFF_MAX_TOKENS,
 	}
 }
 
@@ -54,7 +62,16 @@ context_budget_target :: proc(settings: ^Settings, max_tokens: int) -> int {
 	if settings.context_window_tokens <= 0 {
 		return 0
 	}
-	return settings.context_window_tokens - max_tokens - DEFAULT_CONTEXT_RESERVE_TOKENS
+	return settings.context_window_tokens - max_tokens - settings.context_reserve_tokens
+}
+
+// 交接调用的投影预算：窗口扣掉交接输出上限与余量。
+// 预算关闭时返回 0，表示不省略。
+handoff_budget_target :: proc(settings: ^Settings) -> int {
+	if settings.context_window_tokens <= 0 {
+		return 0
+	}
+	return settings.context_window_tokens - settings.handoff_max_tokens - settings.context_reserve_tokens
 }
 
 // 预算开启时 target <= 0 是配置错误：预算公式失去意义，继续跑只会把请求
@@ -64,7 +81,8 @@ context_budget_invalid :: proc(settings: ^Settings, target: int) -> bool {
 	return settings.context_window_tokens > 0 && target <= 0
 }
 
-parse_positive_int :: proc(s: string) -> (int, bool) {	value := 0
+parse_positive_int :: proc(s: string) -> (int, bool) {
+	value := 0
 	if len(s) == 0 {
 		return 0, false
 	}

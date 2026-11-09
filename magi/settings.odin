@@ -114,6 +114,12 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	if err := json_get_int(obj, "context_window_tokens", &loaded.sdk.context_window_tokens); !apcore.is_ok(err) {
 		return loaded, err
 	}
+	if err := json_get_int(obj, "context_reserve_tokens", &loaded.sdk.context_reserve_tokens); !apcore.is_ok(err) {
+		return loaded, err
+	}
+	if err := json_get_int(obj, "handoff_max_tokens", &loaded.sdk.handoff_max_tokens); !apcore.is_ok(err) {
+		return loaded, err
+	}
 
 	if env_key := os.get_env("AP_API_KEY", context.allocator); len(env_key) > 0 {
 		loaded.sdk.api_key = env_key
@@ -140,13 +146,35 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	if loaded.sdk.context_window_tokens < 0 {
 		return loaded, apcore.errorf(.Usage, "settings.json: context_window_tokens must be non-negative")
 	}
-	if loaded.sdk.context_window_tokens > 0 && loaded.sdk.context_window_tokens <= loaded.sdk.max_tokens {
-		return loaded, apcore.errorf(
-			.Usage,
-			"settings.json: context_window_tokens (%d) must be greater than max_tokens (%d)",
-			loaded.sdk.context_window_tokens,
-			loaded.sdk.max_tokens,
-		)
+	if loaded.sdk.context_reserve_tokens < 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: context_reserve_tokens must be non-negative")
+	}
+	if loaded.sdk.handoff_max_tokens <= 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: handoff_max_tokens must be positive")
+	}
+	if loaded.sdk.context_window_tokens > 0 {
+		// 成员即使不交接也要过预算：target 为负会让三个角色同时失败。
+		if loaded.sdk.context_window_tokens <= loaded.sdk.max_tokens {
+			return loaded, apcore.errorf(
+				.Usage,
+				"settings.json: context_window_tokens (%d) must be greater than max_tokens (%d)",
+				loaded.sdk.context_window_tokens,
+				loaded.sdk.max_tokens,
+			)
+		}
+		room :=
+			loaded.sdk.context_window_tokens -
+			loaded.sdk.max_tokens -
+			loaded.sdk.context_reserve_tokens
+		if room <= 0 {
+			return loaded, apcore.errorf(
+				.Usage,
+				"settings.json: context_window_tokens (%d) leaves no budget: max_tokens (%d) + context_reserve_tokens (%d) must be smaller",
+				loaded.sdk.context_window_tokens,
+				loaded.sdk.max_tokens,
+				loaded.sdk.context_reserve_tokens,
+			)
+		}
 	}
 	loaded.sdk.base_url = strings.trim_right(loaded.sdk.base_url, "/")
 	if len(loaded.sdk.base_url) == 0 {

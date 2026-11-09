@@ -1,6 +1,11 @@
 package magi
 
+import apcore "../ap-core"
+
+import "core:fmt"
+import "core:os"
 import "core:testing"
+import "core:time"
 
 @(test)
 test_parse_vote_plain :: proc(t: ^testing.T) {
@@ -164,4 +169,40 @@ test_parse_request_json :: proc(t: ^testing.T) {
 
 	_, err = parse_request_json(`{"question":"q","context":1}`, "test")
 	testing.expect(t, err.kind == .Usage)
+}
+
+// magi 复用 ap 的 settings.json：新增的预算字段要能读入，并参与同一套校验。
+// 投票成员没有交接，但预算余量仍会影响 target，所以非法值必须在启动时报错。
+@(test)
+test_settings_context_budget_fields :: proc(t: ^testing.T) {
+	base := os.get_env("TEMP", context.allocator)
+	if len(base) == 0 {
+		base = os.get_env("TMPDIR", context.allocator)
+	}
+	dir := fmt.tprintf("%s/ap-magi-budget-%d", base, time.time_to_unix_nano(time.now()))
+	os.make_directory_all(dir)
+	defer os.remove_all(dir)
+	write_settings(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_reserve_tokens":4096,"handoff_max_tokens":2048}`,
+	)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.context_reserve_tokens, 4096)
+	testing.expect_value(t, loaded.sdk.handoff_max_tokens, 2048)
+
+	// 余量吃掉整个窗口是配置错误。
+	write_settings(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_tokens":8192}`,
+	)
+	_, err2 := load_settings(dir)
+	testing.expect_value(t, err2.kind, apcore.Error_Kind.Usage)
+}
+
+// 测试用的 settings.json 写入；magi 包没有共享的测试辅助。
+write_settings :: proc(path, content: string) {
+	if err := os.write_entire_file_from_bytes(path, transmute([]byte)content); err != nil {
+		panic("cannot write test settings.json")
+	}
 }

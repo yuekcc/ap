@@ -11,7 +11,7 @@ import "core:strings"
 // settings.json 属于应用层配置：一次读取，再拆成 SDK Settings 与工具配置。
 // apcore 不打开这个文件，也不认识工具超时/深度字段。
 
-known_setting_keys := [12]string {
+known_setting_keys := [14]string {
 	"model",
 	"base_url",
 	"api_key",
@@ -24,6 +24,8 @@ known_setting_keys := [12]string {
 	"max_capture_bytes",
 	"stream_include_usage",
 	"context_window_tokens",
+	"context_reserve_tokens",
+	"handoff_max_tokens",
 }
 
 Loaded_Settings :: struct {
@@ -80,6 +82,52 @@ json_get_bool :: proc(obj: json.Object, key: string, out: ^bool) -> apcore.Error
 	case json.Null:
 	case:
 		return apcore.errorf(.Usage, "settings.json: %q must be a boolean", key)
+	}
+	return apcore.ok_error()
+}
+
+// 上下文预算的取值校验。settings.json 与 --context-window 覆盖都走这里：
+// 预算开启时 target = window - max_tokens - reserve 必须为正，否则请求还没
+// 发出去就已经注定失败；交接调用的预算同理。
+validate_context_budget :: proc(settings: apcore.Settings) -> apcore.Error {
+	if settings.context_window_tokens < 0 {
+		return apcore.errorf(.Usage, "context_window_tokens must be non-negative")
+	}
+	if settings.context_reserve_tokens < 0 {
+		return apcore.errorf(.Usage, "context_reserve_tokens must be non-negative")
+	}
+	if settings.handoff_max_tokens <= 0 {
+		return apcore.errorf(.Usage, "handoff_max_tokens must be positive")
+	}
+	if settings.context_window_tokens <= 0 {
+		// 0 表示关闭预算，其余字段不参与计算。
+		return apcore.ok_error()
+	}
+	if settings.context_window_tokens <= settings.max_tokens {
+		return apcore.errorf(
+			.Usage,
+			"context_window_tokens (%d) must be greater than max_tokens (%d)",
+			settings.context_window_tokens,
+			settings.max_tokens,
+		)
+	}
+	if settings.context_window_tokens <= settings.handoff_max_tokens {
+		return apcore.errorf(
+			.Usage,
+			"context_window_tokens (%d) must be greater than handoff_max_tokens (%d)",
+			settings.context_window_tokens,
+			settings.handoff_max_tokens,
+		)
+	}
+	room := settings.context_window_tokens - settings.max_tokens - settings.context_reserve_tokens
+	if room <= 0 {
+		return apcore.errorf(
+			.Usage,
+			"context_window_tokens (%d) leaves no budget: max_tokens (%d) + context_reserve_tokens (%d) must be smaller",
+			settings.context_window_tokens,
+			settings.max_tokens,
+			settings.context_reserve_tokens,
+		)
 	}
 	return apcore.ok_error()
 }
@@ -162,6 +210,12 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if err := json_get_int(obj, "context_window_tokens", &loaded.sdk.context_window_tokens); !apcore.is_ok(err) {
 		return loaded, err
 	}
+	if err := json_get_int(obj, "context_reserve_tokens", &loaded.sdk.context_reserve_tokens); !apcore.is_ok(err) {
+		return loaded, err
+	}
+	if err := json_get_int(obj, "handoff_max_tokens", &loaded.sdk.handoff_max_tokens); !apcore.is_ok(err) {
+		return loaded, err
+	}
 
 	if env_key := os.get_env("AP_API_KEY", context.allocator); len(env_key) > 0 {
 		loaded.sdk.api_key = env_key
@@ -187,16 +241,8 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if loaded.sdk.blob_threshold_bytes <= 0 || loaded.tool.max_capture_bytes <= 0 {
 		return loaded, apcore.errorf(.Usage, "settings.json: size limits must be positive")
 	}
-	if loaded.sdk.context_window_tokens < 0 {
-		return loaded, apcore.errorf(.Usage, "settings.json: context_window_tokens must be non-negative")
-	}
-	if loaded.sdk.context_window_tokens > 0 && loaded.sdk.context_window_tokens <= loaded.sdk.max_tokens {
-		return loaded, apcore.errorf(
-			.Usage,
-			"settings.json: context_window_tokens (%d) must be greater than max_tokens (%d)",
-			loaded.sdk.context_window_tokens,
-			loaded.sdk.max_tokens,
-		)
+	if err := validate_context_budget(loaded.sdk); !apcore.is_ok(err) {
+		return loaded, err
 	}
 	loaded.sdk.base_url = strings.trim_right(loaded.sdk.base_url, "/")
 	if len(loaded.sdk.base_url) == 0 {

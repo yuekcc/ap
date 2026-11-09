@@ -164,10 +164,11 @@ target = context_window_tokens - max_tokens - context_reserve_tokens
 ```
 
 - `max_tokens` 取本次请求的值，每个 turn 可能不同。
-- `context_reserve_tokens` 固定为 `DEFAULT_CONTEXT_RESERVE_TOKENS`，即 `DEFAULT_MAX_TOKENS / 2`。它与 `handoff_max_tokens`（`16384`）都是 `ap-core/engine/config.odin` 里的常量，不是配置项。
+- `context_reserve_tokens` 为输出长度波动与估算误差留的余量，默认 `32768`（`DEFAULT_MAX_TOKENS / 2`）。它是 `settings.json` 字段，可以为 `0`（不留余量），不能为负。
+- `handoff_max_tokens` 是生成交接文档那次调用的输出上限，默认 `16384`。它也是同一份配置里的字段，必须为正，与 `--max-tokens` 无关。
 - 按默认值算：`1048576 - 65536 - 32768 = 950272`。
 - `context_window_tokens = 0` 表示关闭预算，`target` 不参与任何决策，行为回到不计算 token 的版本。
-- 预算开启而 `target <= 0` 是配置错误：写 `error(scope=session)` 并以 `.Usage` 结束，退出 2。
+- 预算开启而 `target <= 0` 是配置错误。`settings.json` 的静态冲突（窗口不大于 `max_tokens` 或 `handoff_max_tokens`、余量吃掉整个窗口）在启动时退出 2；运行期算出的 `target <= 0` 写 `error(scope=session)` 并以 `.Usage` 结束。
 
 估算对象是**整个请求**：system prompt + 全部 messages + 工具定义 JSON。三者都计入 `input_tokens`，分开算会漏。
 
@@ -265,7 +266,7 @@ transcript 只追加，所以第 N 步发出的 messages 一定是第 N+1 步 me
 - system 消息 = 本 session 冻结的 system prompt + `
 ` + `handoff.md` 全文。拼在后面而不是替换：技能清单与 `AGENTS.md` 硬约束只在冻结 prompt 里；冻结 prompt 是稳定前缀，与主请求共用同一段字节。
 - messages = 省略后的投影，加上可选的聚焦提示词（`--handoff "<prompt>"` 的那段文本）作为最后一条 `user` 消息。投影的预算是 `context_window_tokens - handoff_max_tokens - context_reserve_tokens`，system 消息本身也计入。
-- `max_tokens = DEFAULT_HANDOFF_MAX_TOKENS`（`16384`），不取 `--max-tokens`。`include_usage` 跟随 `stream_include_usage`。
+- `max_tokens = handoff_max_tokens`（默认 `16384`），不取 `--max-tokens`。`include_usage` 跟随 `stream_include_usage`。
 - 只尝试一次，不重试。失败时写 `error(scope=llm, kind=<原错误>, message="handoff failed: ...")` 并按 `--no-handoff` 的路径结束。
 - 输出正文直接作为交接文档，不改写、不重排、不加包装。输出为空视为失败。
 

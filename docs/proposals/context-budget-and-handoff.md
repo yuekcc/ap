@@ -51,7 +51,7 @@
 | `context_reserve_tokens` | `32768` | 为输出波动、估算误差留的余量，参与目标计算。按 64K 输出上限的一半取 |
 | `handoff_max_tokens` | `16384` | 生成交接文档那次调用的 `max_tokens`。交接文本不需要 64K |
 
-后两个字段在预算实现前不进 `settings.json`，也不进 `Settings`：当前在 `ap-core/engine/config.odin` 里是常量 `DEFAULT_CONTEXT_RESERVE_TOKENS` 与 `DEFAULT_HANDOFF_MAX_TOKENS`。接上预算逻辑时再决定是否升为可配置项。
+三个字段都在实现时接入了 `settings.json` 与 `Settings`。`context_reserve_tokens` 与 `handoff_max_tokens` 的缺省值来自 `ap-core/engine/config.odin` 的 `DEFAULT_CONTEXT_RESERVE_TOKENS` 与 `DEFAULT_HANDOFF_MAX_TOKENS`；采纳的方案是让它们可配置，理由见下方「待定」第 7 条。
 
 常量，不进配置：
 
@@ -465,7 +465,7 @@ CLI（`odin test ap-cli`）：
 4. **交接质量是新增的失败面。** 一次模型调用可能编造或漏项。可缓解的手段有三条：提示词要求「不确定就写不确定」；交接只靠省略后的投影，模型看不到的部分本来就不该被它写下来；`--no-handoff` 是可靠退路。另外，「建议技能」依赖 system prompt 里的技能清单（`name` 与 `location`），清单被 `--no-skills` 关掉时该小节必然为空——这是预期行为，不是缺陷。
 5. **退出码与 `stop_reason` 变化影响脚本与前端。** 只在开启预算时生效，但 `docs/cli-and-config.md` 与 `docs/integration.md` 要写清「`handoff` 不是失败」。
 6. **待定：交接后是否自动重放当前 turn 的原始提示词。** 本提案选择不自动重放，避免同一条提示词在两个 session 里各跑一遍、副作用翻倍。若实际使用中觉得麻烦，另开提案加 `--handoff --resume-prompt`。
-7. **待定：`context_reserve_tokens` 是否按 `max_tokens` 自适应。** 目前是固定值，简单可预期；若真实场景里输出经常被截断，再改成比例。
+7. **已定：`context_reserve_tokens` 不做比例自适应，但升为配置项。** 它仍是固定 token 数（默认为 `max_tokens` 的一半），改由 `settings.json` 覆盖。理由：窗口小或输出上限调小的部署需要收紧余量，否则预算公式直接失去意义；比例自适应会让 `target` 随 `--max-tokens` 漂移，可预期性反而更差。
 
 ## 相关文档
 

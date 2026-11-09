@@ -1,5 +1,8 @@
 package engine
 
+import "../platform"
+
+import "core:fmt"
 import "core:strings"
 import "core:testing"
 
@@ -175,4 +178,135 @@ test_handoff_system_prompt_uses_frozen_prefix :: proc(t: ^testing.T) {
 test_handoff_user_message_shape :: proc(t: ^testing.T) {
 	text := handoff_user_message("ses_1", "doc")
 	testing.expect_value(t, text, "## 上一会话交接\n来源 session: ses_1\n\ndoc")
+}
+
+// 预算余量与交接输出上限是可配置项：默认值与 target 计算都要按传入的
+// Settings 走，不是硬编码常量。
+@(test)
+test_context_budget_target_uses_settings :: proc(t: ^testing.T) {
+	settings := settings_defaults()
+	testing.expect_value(t, settings.context_reserve_tokens, DEFAULT_CONTEXT_RESERVE_TOKENS)
+	testing.expect_value(t, settings.handoff_max_tokens, DEFAULT_HANDOFF_MAX_TOKENS)
+
+	// 默认值下的 target：1048576 - 65536 - 32768。
+	testing.expect_value(t, context_budget_target(&settings, settings.max_tokens), 950272)
+
+	// 覆盖余量后 target 跟着变。
+	settings.context_reserve_tokens = 4096
+	testing.expect_value(t, context_budget_target(&settings, settings.max_tokens), 978944)
+
+	// 关闭预算时 target 为 0，余量也不参与。
+	settings.context_window_tokens = 0
+	testing.expect_value(t, context_budget_target(&settings, settings.max_tokens), 0)
+
+	// 交接调用的预算：窗口扣掉交接输出上限与余量。
+	settings = settings_defaults()
+	testing.expect_value(t, handoff_budget_target(&settings), 1048576 - 16384 - 32768)
+	settings.handoff_max_tokens = 4096
+	settings.context_reserve_tokens = 1024
+	testing.expect_value(t, handoff_budget_target(&settings), 1048576 - 4096 - 1024)
+	settings.context_window_tokens = 0
+	testing.expect_value(t, handoff_budget_target(&settings), 0)
+}
+
+// target 算出来不是正数时是配置错误；关闭预算不算。
+@(test)
+test_context_budget_invalid :: proc(t: ^testing.T) {
+	settings := settings_defaults()
+	testing.expect(t, !context_budget_invalid(&settings, context_budget_target(&settings, 65536)))
+
+	// 余量吃掉整个窗口。
+	settings.context_window_tokens = 1000
+	settings.max_tokens = 100
+	settings.context_reserve_tokens = 900
+	testing.expect(t, context_budget_invalid(&settings, 0))
+
+	// 关闭预算时永远不算错误。
+	settings.context_window_tokens = 0
+	testing.expect(t, !context_budget_invalid(&settings, 0))
+}
+
+// 交接请求的输出上限来自 settings.handoff_max_tokens，不是 --max-tokens，
+// 也不是常量。用记录型假 provider 直接检查发出的请求。
+// 记录型假 provider：把发出的请求留一份，sink 仍交给 handoff 自己的 capture。
+Handoff_Request_Recorder :: struct {
+	request: Chat_Message_Request,
+	seen:    bool,
+}
+
+recording_provider_target: ^Handoff_Request_Recorder
+
+recording_provider :: proc(
+	p: ^Provider,
+	req: ^Chat_Message_Request,
+	sink: Stream_Sink,
+	cancel: ^platform.Cancel_Token,
+) -> Provider_Error {
+	if recording_provider_target != nil {
+		recording_provider_target.request = req^
+		recording_provider_target.seen = true
+	}
+	emit_provider_event(sink, Provider_Message_Start{model = "fake", message_id = "m1"})
+	emit_provider_event(sink, Provider_Text_Delta{text = "doc"})
+	emit_provider_event(
+		sink,
+		Provider_Message_End{message_id = "m1", stop_reason = .Stop, text = "doc"},
+	)
+	return provider_error_none()
+}
+
+@(test)
+test_handoff_uses_configured_max_tokens :: proc(t: ^testing.T) {
+	dir := test_temp_dir("handoff-max-tokens")
+	defer test_cleanup(dir)
+	project, perr := platform.open_project(fmt.tprintf("%s/config", dir), dir)
+	testing.expect(t, platform.is_ok(perr))
+	settings := settings_defaults()
+	settings.handoff_max_tokens = 4096
+	store := new(Transcript_Store)
+	store_value, serr := new_transcript_store(project, "sess-handoff-max", &settings)
+	store^ = store_value
+	testing.expect_value(t, serr.kind, Error_Kind.None)
+	defer transcript_close(store)
+
+	start := Session_Start_Event {
+		header = make_header(store, EVENT_SESSION_START),
+		session_id = store.session_id,
+		content = "frozen",
+		role = ROLE_SYSTEM,
+		cwd = project.root,
+		model = "fake",
+		provider = PROVIDER_NAME,
+		agent_name = "general",
+	}
+	testing.expect_value(t, transcript_append(store, start).kind, Error_Kind.None)
+	user := User_Message_Event{header = make_header(store, EVENT_USER_MESSAGE), content = "go"}
+	testing.expect_value(t, transcript_append(store, user).kind, Error_Kind.None)
+	events, _ := transcript_read_all(project, store.session_id)
+
+	recorder := Handoff_Request_Recorder{}
+	recording_provider_target = &recorder
+	defer recording_provider_target = nil
+	provider := provider_init(&settings)
+	_, _, herr := handoff_run(
+		{
+			project = project,
+			store = store,
+			settings = &settings,
+			provider = &provider,
+			provider_call = recording_provider,
+			model = "fake",
+			frozen_system_prompt = "frozen",
+			events = events,
+			reason = HANDOFF_REASON_MANUAL,
+			cancel = new(platform.Cancel_Token),
+		},
+		context.allocator,
+	)
+	testing.expect_value(t, herr.kind, Provider_Error_Kind.None)
+	testing.expect(t, recorder.seen)
+	testing.expect_value(t, recorder.request.max_tokens, 4096)
+	// 交接调用不带工具。
+	testing.expect_value(t, len(recorder.request.tools), 0)
+	delete(events)
 }

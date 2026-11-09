@@ -113,13 +113,7 @@ handoff_run :: proc(
 	result := Handoff_Result{reason = req.reason}
 
 	// 交接调用自己也要装得下：system 消息、投影与输出上限共用同一个窗口。
-	limit := 0
-	if req.settings.context_window_tokens > 0 {
-		limit =
-			req.settings.context_window_tokens -
-			DEFAULT_HANDOFF_MAX_TOKENS -
-			DEFAULT_CONTEXT_RESERVE_TOKENS
-	}
+	limit := handoff_budget_target(req.settings)
 	context_in, cerr := context_build_budgeted(
 		req.project,
 		req.events,
@@ -139,9 +133,10 @@ handoff_run :: proc(
 	request := Chat_Message_Request {
 		model         = req.model,
 		messages      = all_messages[:],
-		// 交接调用不带工具：它只产文本。
+		// 交接调用不带工具：它只产文本；输出上限取 handoff_max_tokens，
+		// 与 --max-tokens 无关。
 		tools         = nil,
-		max_tokens    = DEFAULT_HANDOFF_MAX_TOKENS,
+		max_tokens    = req.settings.handoff_max_tokens,
 		include_usage = req.settings.stream_include_usage,
 	}
 

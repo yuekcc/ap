@@ -62,13 +62,9 @@ run :: proc(args: []string) -> int {
 	if value, ok := opts.context_window.?; ok {
 		loaded.sdk.context_window_tokens = value
 	}
-	if loaded.sdk.context_window_tokens > 0 &&
-	   loaded.sdk.context_window_tokens <= loaded.sdk.max_tokens {
-		apcore.log_error(
-			"context_window_tokens (%d) must be greater than max_tokens (%d)",
-			loaded.sdk.context_window_tokens,
-			loaded.sdk.max_tokens,
-		)
+	// --context-window 覆盖之后要重新校验：它可能与 max_tokens 或余量冲突。
+	if verr := validate_context_budget(loaded.sdk); !apcore.is_ok(verr) {
+		apcore.log_error("settings: %s", verr.message)
 		return int(Exit_Code.Usage)
 	}
 	cwd, cwderr := platform.canonicalize_path(".", true)
