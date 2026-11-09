@@ -184,17 +184,17 @@ test_settings_context_budget_fields :: proc(t: ^testing.T) {
 	defer os.remove_all(dir)
 	write_settings(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_reserve_tokens":4096,"handoff_max_tokens":2048}`,
+		`{"model":"m","api_key":"k","context_reserve_percent":25,"handoff_max_tokens":2048}`,
 	)
 	loaded, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
-	testing.expect_value(t, loaded.sdk.context_reserve_tokens, 4096)
+	testing.expect_value(t, loaded.sdk.context_reserve_percent, 25)
 	testing.expect_value(t, loaded.sdk.handoff_max_tokens, 2048)
 
 	// 余量吃掉整个窗口是配置错误。
 	write_settings(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_tokens":8192}`,
+		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_percent":20}`,
 	)
 	_, err2 := load_settings(dir)
 	testing.expect_value(t, err2.kind, apcore.Error_Kind.Usage)

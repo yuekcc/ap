@@ -24,7 +24,7 @@ known_setting_keys := [14]string {
 	"max_capture_bytes",
 	"stream_include_usage",
 	"context_window_tokens",
-	"context_reserve_tokens",
+	"context_reserve_percent",
 	"handoff_max_tokens",
 }
 
@@ -88,13 +88,13 @@ json_get_bool :: proc(obj: json.Object, key: string, out: ^bool) -> apcore.Error
 
 // 上下文预算的取值校验。settings.json 与 --context-window 覆盖都走这里：
 // 预算开启时 target = window - max_tokens - reserve 必须为正，否则请求还没
-// 发出去就已经注定失败；交接调用的预算同理。
+// 发出去就已经注定失败。reserve 按输出上限的百分比算出。
 validate_context_budget :: proc(settings: apcore.Settings) -> apcore.Error {
 	if settings.context_window_tokens < 0 {
 		return apcore.errorf(.Usage, "context_window_tokens must be non-negative")
 	}
-	if settings.context_reserve_tokens < 0 {
-		return apcore.errorf(.Usage, "context_reserve_tokens must be non-negative")
+	if settings.context_reserve_percent < 0 || settings.context_reserve_percent > 100 {
+		return apcore.errorf(.Usage, "context_reserve_percent must be between 0 and 100")
 	}
 	if settings.handoff_max_tokens <= 0 {
 		return apcore.errorf(.Usage, "handoff_max_tokens must be positive")
@@ -119,14 +119,18 @@ validate_context_budget :: proc(settings: apcore.Settings) -> apcore.Error {
 			settings.handoff_max_tokens,
 		)
 	}
-	room := settings.context_window_tokens - settings.max_tokens - settings.context_reserve_tokens
+	// 余量按输出上限等比算出，所以这里用实际算出的 token 数判断，
+	// 不能拿百分比直接和窗口比较。
+	reserve := settings.max_tokens * settings.context_reserve_percent / 100
+	room := settings.context_window_tokens - settings.max_tokens - reserve
 	if room <= 0 {
 		return apcore.errorf(
 			.Usage,
-			"context_window_tokens (%d) leaves no budget: max_tokens (%d) + context_reserve_tokens (%d) must be smaller",
+			"context_window_tokens (%d) leaves no budget: max_tokens (%d) + reserve (%d%% of max_tokens = %d) must be smaller",
 			settings.context_window_tokens,
 			settings.max_tokens,
-			settings.context_reserve_tokens,
+			settings.context_reserve_percent,
+			reserve,
 		)
 	}
 	return apcore.ok_error()
@@ -210,7 +214,7 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if err := json_get_int(obj, "context_window_tokens", &loaded.sdk.context_window_tokens); !apcore.is_ok(err) {
 		return loaded, err
 	}
-	if err := json_get_int(obj, "context_reserve_tokens", &loaded.sdk.context_reserve_tokens); !apcore.is_ok(err) {
+	if err := json_get_int(obj, "context_reserve_percent", &loaded.sdk.context_reserve_percent); !apcore.is_ok(err) {
 		return loaded, err
 	}
 	if err := json_get_int(obj, "handoff_max_tokens", &loaded.sdk.handoff_max_tokens); !apcore.is_ok(err) {

@@ -114,7 +114,7 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	if err := json_get_int(obj, "context_window_tokens", &loaded.sdk.context_window_tokens); !apcore.is_ok(err) {
 		return loaded, err
 	}
-	if err := json_get_int(obj, "context_reserve_tokens", &loaded.sdk.context_reserve_tokens); !apcore.is_ok(err) {
+	if err := json_get_int(obj, "context_reserve_percent", &loaded.sdk.context_reserve_percent); !apcore.is_ok(err) {
 		return loaded, err
 	}
 	if err := json_get_int(obj, "handoff_max_tokens", &loaded.sdk.handoff_max_tokens); !apcore.is_ok(err) {
@@ -146,8 +146,8 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	if loaded.sdk.context_window_tokens < 0 {
 		return loaded, apcore.errorf(.Usage, "settings.json: context_window_tokens must be non-negative")
 	}
-	if loaded.sdk.context_reserve_tokens < 0 {
-		return loaded, apcore.errorf(.Usage, "settings.json: context_reserve_tokens must be non-negative")
+	if loaded.sdk.context_reserve_percent < 0 || loaded.sdk.context_reserve_percent > 100 {
+		return loaded, apcore.errorf(.Usage, "settings.json: context_reserve_percent must be between 0 and 100")
 	}
 	if loaded.sdk.handoff_max_tokens <= 0 {
 		return loaded, apcore.errorf(.Usage, "settings.json: handoff_max_tokens must be positive")
@@ -162,17 +162,16 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 				loaded.sdk.max_tokens,
 			)
 		}
-		room :=
-			loaded.sdk.context_window_tokens -
-			loaded.sdk.max_tokens -
-			loaded.sdk.context_reserve_tokens
+		reserve := loaded.sdk.max_tokens * loaded.sdk.context_reserve_percent / 100
+		room := loaded.sdk.context_window_tokens - loaded.sdk.max_tokens - reserve
 		if room <= 0 {
 			return loaded, apcore.errorf(
 				.Usage,
-				"settings.json: context_window_tokens (%d) leaves no budget: max_tokens (%d) + context_reserve_tokens (%d) must be smaller",
+				"settings.json: context_window_tokens (%d) leaves no budget: max_tokens (%d) + reserve (%d%% of max_tokens = %d) must be smaller",
 				loaded.sdk.context_window_tokens,
 				loaded.sdk.max_tokens,
-				loaded.sdk.context_reserve_tokens,
+				loaded.sdk.context_reserve_percent,
+				reserve,
 			)
 		}
 	}

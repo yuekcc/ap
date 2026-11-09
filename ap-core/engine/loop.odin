@@ -703,10 +703,10 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		target := context_budget_target(l.settings, l.max_tokens)
 		if context_budget_invalid(l.settings, target) {
 			message := fmt.tprintf(
-				"context budget is invalid: context_window_tokens (%d) - max_tokens (%d) - context_reserve_tokens (%d) <= 0",
+				"context budget is invalid: context_window_tokens (%d) - max_tokens (%d) - context_reserve_percent (%d%%) of max_tokens <= 0",
 				l.settings.context_window_tokens,
 				l.max_tokens,
-				l.settings.context_reserve_tokens,
+				l.settings.context_reserve_percent,
 			)
 			_ = loop_write_error(l, SCOPE_SESSION, .None, message, false, 1)
 			result.error_kind = .Usage

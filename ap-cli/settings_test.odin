@@ -139,10 +139,10 @@ test_settings_context_budget_defaults :: proc(t: ^testing.T) {
 	settings := apcore.settings_defaults()
 	testing.expect_value(t, settings.max_tokens, 65536)
 	testing.expect_value(t, settings.context_window_tokens, 1048576)
-	// 余量与交接输出上限是配置字段，默认值来自这两个常量。
-	testing.expect_value(t, settings.context_reserve_tokens, 32768)
+	// 余量是比例（默认 50%），交接输出上限是绝对 token 数。
+	testing.expect_value(t, settings.context_reserve_percent, 50)
 	testing.expect_value(t, settings.handoff_max_tokens, 16384)
-	testing.expect_value(t, apcore.DEFAULT_CONTEXT_RESERVE_TOKENS, 32768)
+	testing.expect_value(t, apcore.DEFAULT_CONTEXT_RESERVE_PERCENT, 50)
 	testing.expect_value(t, apcore.DEFAULT_HANDOFF_MAX_TOKENS, 16384)
 	testing.expect_value(t, apcore.HANDOFF_TRIGGER_PERCENT, 90)
 	testing.expect_value(t, apcore.CONTEXT_ELIDE_TARGET_PERCENT, 80)
@@ -168,34 +168,41 @@ test_settings_context_budget_fields :: proc(t: ^testing.T) {
 	settings_write_file(fmt.tprintf("%s/settings.json", dir), `{"model":"m","api_key":"k"}`)
 	loaded, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
-	testing.expect_value(t, loaded.sdk.context_reserve_tokens, 32768)
+	testing.expect_value(t, loaded.sdk.context_reserve_percent, 50)
 	testing.expect_value(t, loaded.sdk.handoff_max_tokens, 16384)
 
 	// 显式写入时覆盖默认值。
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_reserve_tokens":8192,"handoff_max_tokens":4096}`,
+		`{"model":"m","api_key":"k","context_reserve_percent":25,"handoff_max_tokens":4096}`,
 	)
 	overridden, err2 := load_settings(dir)
 	testing.expect_value(t, err2.kind, apcore.Error_Kind.None)
-	testing.expect_value(t, overridden.sdk.context_reserve_tokens, 8192)
+	testing.expect_value(t, overridden.sdk.context_reserve_percent, 25)
 	testing.expect_value(t, overridden.sdk.handoff_max_tokens, 4096)
 
-	// 显式 0 余量合法：关闭余量就是把 max_tokens 当作全部预留。
+	// 显式 0 余量合法：关闭余量就是把输出上限当作全部预留。
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_reserve_tokens":0}`,
+		`{"model":"m","api_key":"k","context_reserve_percent":0}`,
 	)
 	_, err3 := load_settings(dir)
 	testing.expect_value(t, err3.kind, apcore.Error_Kind.None)
 
-	// 负余量与不大于 0 的交接上限是配置错误。
+	// 负比例、超过 100% 的比例，以及不大于 0 的交接上限都是配置错误。
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_reserve_tokens":-1}`,
+		`{"model":"m","api_key":"k","context_reserve_percent":-1}`,
 	)
 	_, err4 := load_settings(dir)
 	testing.expect_value(t, err4.kind, apcore.Error_Kind.Usage)
+
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","context_reserve_percent":101}`,
+	)
+	_, err6 := load_settings(dir)
+	testing.expect_value(t, err6.kind, apcore.Error_Kind.Usage)
 
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
@@ -213,7 +220,7 @@ test_settings_context_budget_leaves_no_room :: proc(t: ^testing.T) {
 
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_tokens":8192}`,
+		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_percent":20}`,
 	)
 	_, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.Usage)
