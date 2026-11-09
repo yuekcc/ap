@@ -184,8 +184,12 @@ Unix 上的实现如下。
 
 - 先引入 `github-markdown-css`，再用 Josh's Custom CSS Reset，应用样式接在后面。
 - 只提供浅色主题。`color-scheme: light`，不写暗色分支。
+- 视觉风格是 iOS 18 的扁平分组列表：`body` 用系统分组背景 `--bg-grouped`，卡片、标题栏和输入区是纯白 `--bg`，用 hairline `--separator` 分隔，不用背景模糊、投影和渐变。
+- 系统色与形状收敛成 `--bg-grouped`、`--fill`、`--separator`、`--accent`、`--radius-*` 等自定义属性。改主题只改这些变量，不在选择器里散写颜色。
+- 强调色用 systemBlue `#007aff`；用户消息是纯色填充的 iMessage 气泡（18px 圆角，右下角 4px），助手文本保持正文色。
+- 交互只保留 120ms 的背景色淡入和聚焦色淡入；运行中脉冲与减少动态偏好下的禁用沿用原语义。
 - 页面骨架用 grid。工作区是 `grid-template-rows: auto minmax(0, 1fr) auto`，消息区自己滚动。
-- 块级组件用 flex。窄屏（`max-width: 820px`）把侧栏折成顶部会话条。
+- 块级组件用 flex。窄屏（`max-width: 820px`）把侧栏折成顶部列表条，会话项改成胶囊；窄屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
 
 前端行为与 `ap-tui` 对齐。
 

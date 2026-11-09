@@ -89,4 +89,41 @@ test("只提供浅色主题", async () => {
 	assert.ok(css.includes("github-markdown-light.css"), "markdown css must not flip with the OS");
 });
 
+test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐变", async () => {
+	const css = await readFile(stylesPath, "utf8");
+
+	// 系统色与形状收敛到 :root 变量，改主题只改一处。
+	for (const token of ["--bg-grouped:", "--fill:", "--separator:", "--accent:", "--radius-card:", "--radius-field:"]) {
+		assert.ok(css.includes(token), `root must define ${token}`);
+	}
+
+	// 扁平化：不允许玻璃材质、背景模糊、渐变画布或投影。
+	assert.ok(!css.includes("backdrop-filter"), "flat design must not blur the backdrop");
+	assert.ok(!css.includes("radial-gradient"), "canvas must be a flat system background");
+	assert.ok(!css.includes("linear-gradient"), "flat design must not use gradients");
+	assert.ok(!css.includes("--glass"), "glass tokens belong to the previous theme");
+
+	// 页面底色是 iOS 的分组背景，卡片是白色。
+	assert.match(
+		css,
+		/body\s*\{[^}]*background:\s*var\(--bg-grouped\)/,
+		"body must use the grouped system background",
+	);
+	assert.match(
+		css,
+		/\.tool\s*\{[^}]*background:\s*var\(--bg\)/,
+		"cards must sit on white",
+	);
+
+	// 控件保持胶囊/圆形，与 iOS 的默认形状一致。
+	assert.match(
+		css,
+		/\.composer__send\s*\{[^}]*border-radius:\s*50%/,
+		"send button stays circular",
+	);
+
+	// 动效必须能被减少动态偏好关掉。
+	assert.ok(css.includes("prefers-reduced-motion: reduce"), "motion must respect reduced-motion");
+});
+
 

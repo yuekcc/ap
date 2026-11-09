@@ -62,6 +62,9 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ------------------------------------------------------------------------- */
 /* ap-web 应用样式                                                            */
+/*                                                                            */
+/* 视觉基线：iOS 18。系统分组底色 + 白色卡片 + hairline 分隔线，无模糊、无投影、 */
+/* 无渐变；强调色用 systemBlue，控件用 8–12px 圆角，动效只保留必要的淡入。      */
 /* ------------------------------------------------------------------------- */
 
 [x-cloak] {
@@ -71,50 +74,61 @@ h1, h2, h3, h4, h5, h6 {
 :root {
   color-scheme: light;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
-    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Noto Sans SC",
+    "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Cascadia Mono",
     Consolas, "Liberation Mono", monospace;
 
   --maxw: 46rem;
-  --sidebar-w: 16.5rem;
+  --sidebar-w: 17rem;
 
+  /* iOS 系统色：分组背景、卡片、填充层与标签层级。 */
+  --bg-grouped: #f2f2f7;
   --bg: #ffffff;
-  --sidebar-bg: #f9f9f9;
-  --surface: #ffffff;
-  --surface-2: #f4f4f4;
-  --surface-3: #ececec;
+  --fill: rgba(118, 118, 128, 0.12);
+  --fill-2: rgba(118, 118, 128, 0.08);
+  --separator: rgba(60, 60, 67, 0.29);
 
-  --fg: #111111;
-  --fg-2: #5f5f5f;
-  --fg-3: #919191;
-  --line: #e7e7e7;
-  --line-2: #d9d9d9;
+  --fg: #000000;
+  --fg-2: rgba(60, 60, 67, 0.6);
+  --fg-3: rgba(60, 60, 67, 0.35);
 
-  --accent: #111111;
+  --accent: #007aff;
+  --accent-pressed: #0062cc;
   --accent-fg: #ffffff;
-  --ok: #1a7f37;
-  --bad: #cf222e;
-  --warn: #9a6700;
+  --accent-tint: rgba(0, 122, 255, 0.12);
+  --ok: #34c759;
+  --bad: #ff3b30;
+  --warn: #ff9500;
 
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --radius-card: 12px;
+  --radius-field: 10px;
+  --radius-sm: 8px;
+  --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--fg);
 }
 
 html {
   height: 100%;
 }
 
-/* 页面骨架：左侧会话栏 + 右侧工作区；工作区再分 标题栏 / 消息区 / 输入区。 */
+/* 页面骨架：左侧分组列表 + 右侧工作区，两边都是系统分组底色，靠 hairline 分隔。 */
 body {
   height: 100dvh;
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   overflow: hidden;
-  background: var(--bg);
+  background: var(--bg-grouped);
   color: var(--fg);
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+  letter-spacing: -0.01em;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -126,16 +140,17 @@ body {
   flex-direction: column;
   min-height: 0;
   gap: 6px;
-  padding: 10px 8px 8px;
-  border-right: 1px solid var(--line);
-  background: var(--sidebar-bg);
+  padding: 12px 10px;
+  border-right: 1px solid var(--separator);
+  background: var(--bg-grouped);
+  overflow: hidden;
 }
 
 .sidebar__head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px 8px;
+  padding: 2px 6px 8px;
 }
 
 .brand {
@@ -145,56 +160,65 @@ body {
   min-width: 0;
 }
 
+/* 方形图标，纯色填充，靠 8px 圆角贴近 iOS 应用图标。 */
 .brand__mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-fg);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
 }
 
 .brand__name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .sidebar__env {
   margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--fill);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 
+/* 列表行样式：白卡片 + hairline 描边，无投影。 */
 .new-session {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--fg);
+  padding: 8px 11px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-field);
+  background: var(--bg);
+  color: var(--accent);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   text-align: left;
-  box-shadow: var(--shadow);
   cursor: pointer;
+  transition: background-color 0.12s var(--ease-out);
 }
 
 .new-session:hover:not(:disabled) {
-  background: var(--surface-2);
+  background: #fafafa;
+}
+
+.new-session:active:not(:disabled) {
+  background: var(--fill-2);
 }
 
 .new-session:focus-visible {
@@ -211,31 +235,34 @@ body {
   flex: none;
   width: 14px;
   height: 14px;
-  color: var(--fg-2);
+  color: var(--accent);
 }
 
 .sidebar__label {
-  padding: 12px 10px 2px;
+  padding: 14px 8px 4px;
   font-size: 11px;
   font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--fg-3);
 }
 
 .projects {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--line-2) transparent;
+  scrollbar-color: var(--separator) transparent;
 }
 
 .project {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .project__head {
@@ -271,16 +298,17 @@ body {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   margin-left: auto;
   padding: 0;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--fg-3);
+  color: var(--accent);
   cursor: pointer;
   opacity: 0;
+  transition: opacity 0.12s var(--ease-out), background-color 0.12s var(--ease-out);
 }
 
 .project:hover .project__new,
@@ -290,8 +318,7 @@ body {
 }
 
 .project__new:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--fg);
+  background: var(--fill);
 }
 
 .project__new:disabled {
@@ -310,28 +337,31 @@ body {
   gap: 1px;
 }
 
+/* 选中行是白色卡片贴在灰色分组底上，与 iOS 的分组列表选中态一致。 */
 .session {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 1px;
   width: 100%;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 8px;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-field);
   background: transparent;
   color: var(--fg);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), border-color 0.12s var(--ease-out);
 }
 
 .session:hover:not(:disabled):not(.is-active) {
-  background: var(--surface-2);
+  background: var(--fill-2);
 }
 
 .session.is-active {
-  background: var(--surface-3);
+  border-color: var(--separator);
+  background: var(--bg);
 }
 
 .session:focus-visible {
@@ -349,6 +379,11 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 400;
+}
+
+.session.is-active .session__title {
+  font-weight: 600;
 }
 
 .session__meta {
@@ -358,6 +393,7 @@ body {
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 10.5px;
+  letter-spacing: 0;
   color: var(--fg-3);
 }
 
@@ -377,7 +413,7 @@ body {
   gap: 4px;
   margin-top: auto;
   padding-top: 8px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--separator);
 }
 
 .sidebar__cwd {
@@ -385,15 +421,17 @@ body {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  padding: 2px 8px;
+  padding: 4px 8px;
   font-family: var(--font-mono);
   font-size: 10.5px;
+  letter-spacing: 0;
   color: var(--fg-3);
 }
 
 .sidebar__cwd-label {
   flex: none;
   letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .sidebar__cwd-path {
@@ -414,7 +452,7 @@ body {
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-  background: var(--bg);
+  background: var(--bg-grouped);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -425,9 +463,9 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 48px;
+  height: 52px;
   padding: 0 20px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--separator);
   background: var(--bg);
 }
 
@@ -436,14 +474,15 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .topbar__right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -452,11 +491,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--fill);
   font-family: var(--font-mono);
   font-size: 10.5px;
+  letter-spacing: 0;
   color: var(--fg-2);
 }
 
@@ -464,7 +504,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--fg-2);
   white-space: nowrap;
 }
@@ -472,10 +512,10 @@ body {
 .status::before {
   content: "";
   flex: none;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #bfbfbf;
+  background: #c7c7cc;
 }
 
 .status[data-state="idle"]::before {
@@ -483,13 +523,13 @@ body {
 }
 
 .status[data-state="running"]::before {
-  background: var(--fg);
-  animation: pulse 1.2s ease-in-out infinite;
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .status[data-state="cancelling"]::before {
   background: var(--warn);
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .status[data-state="reconnecting"]::before,
@@ -508,18 +548,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding: 28px 24px 40px;
+  padding: 24px 24px 32px;
   scrollbar-width: thin;
-  scrollbar-color: var(--line-2) transparent;
+  scrollbar-color: var(--separator) transparent;
 }
 
 .messages__empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin: auto;
-  padding: 40px 0;
+  padding: 40px 16px;
   text-align: center;
 }
 
@@ -527,24 +567,27 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-card);
   background: var(--accent);
   color: var(--accent-fg);
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1;
 }
 
 .messages__empty-title {
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 600;
+  letter-spacing: -0.03em;
   color: var(--fg);
 }
 
 .messages__empty-hint {
+  max-width: 26rem;
   font-size: 13px;
   color: var(--fg-2);
 }
@@ -576,18 +619,22 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* iMessage 式气泡：纯色填充，圆角 18px，右下角收小。 */
 .msg--user .msg__text {
-  max-width: 85%;
-  padding: 8px 13px;
-  border-radius: 14px;
-  background: var(--surface-2);
+  max-width: 82%;
+  padding: 8px 14px;
+  border-radius: 18px 18px 4px 18px;
+  background: var(--accent);
+  color: var(--accent-fg);
   white-space: pre-wrap;
+  letter-spacing: 0;
 }
 
 .msg--assistant .msg__text {
   width: 100%;
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.7;
+  letter-spacing: -0.005em;
 }
 
 .msg__text.is-streaming::after {
@@ -595,9 +642,9 @@ body {
   display: inline-block;
   width: 0.42em;
   height: 2px;
-  margin-left: 2px;
+  margin-left: 3px;
   border-radius: 1px;
-  background: var(--fg);
+  background: var(--accent);
   vertical-align: baseline;
   animation: blink 1s steps(2, start) infinite;
 }
@@ -630,13 +677,15 @@ body {
 }
 
 .msg__text--markdown h1 {
-  font-size: 1.3em;
-  font-weight: 600;
+  font-size: 1.35em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .msg__text--markdown h2 {
-  font-size: 1.15em;
+  font-size: 1.18em;
   font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .msg__text--markdown h3 {
@@ -645,14 +694,22 @@ body {
 }
 
 .msg__text--markdown a {
-  color: var(--fg);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.msg__text--markdown a:hover {
   text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .msg__text--markdown hr {
   height: 1px;
-  background: var(--line);
+  background: var(--separator);
+}
+
+.msg__text--markdown code {
+  border-radius: 5px;
+  background: var(--fill);
 }
 
 .msg__text--markdown table,
@@ -662,7 +719,9 @@ body {
 }
 
 .msg__text--markdown pre {
-  border-radius: 8px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-card);
+  background: var(--bg);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -672,9 +731,9 @@ body {
 .tool {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-card);
+  background: var(--bg);
   overflow: hidden;
 }
 
@@ -683,23 +742,24 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 8px 11px;
+  padding: 10px 13px;
   font-family: var(--font-mono);
   font-size: 11.5px;
+  letter-spacing: 0;
   color: var(--fg-2);
 }
 
 .tool__dot {
   flex: none;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--fg-3);
+  background: #c7c7cc;
 }
 
 .tool[data-status="running"] .tool__dot {
   background: var(--warn);
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .tool[data-status="ok"] .tool__dot {
@@ -713,7 +773,7 @@ body {
 .tool__name {
   flex: none;
   color: var(--fg);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .tool__args {
@@ -734,21 +794,23 @@ body {
 .tool__output {
   max-height: 20rem;
   overflow: auto;
-  margin: 0 8px 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #f7f7f7;
-  color: #3d3d3d;
+  margin: 0 10px 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--fill-2);
+  color: #1c1c1e;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  line-height: 1.55;
+  line-height: 1.6;
+  letter-spacing: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   scrollbar-width: thin;
+  scrollbar-color: var(--separator) transparent;
 }
 
 .tool__error {
-  margin: 0 11px 8px;
+  margin: 0 13px 10px;
   color: var(--bad);
   font-size: 11.5px;
   white-space: pre-wrap;
@@ -756,7 +818,7 @@ body {
 }
 
 .tool__note {
-  margin: 0 11px 8px;
+  margin: 0 13px 10px;
   color: var(--fg-3);
   font-size: 10.5px;
 }
@@ -766,23 +828,26 @@ body {
 /* ------------------------------------------------------------------------- */
 
 .notice {
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--surface-2);
+  padding: 9px 12px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-field);
+  background: var(--bg);
   color: var(--fg-2);
-  font-size: 12px;
+  font-size: 12.5px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .notice[data-tone="error"] {
-  background: #fdf0ef;
-  color: var(--bad);
+  border-color: rgba(255, 59, 48, 0.28);
+  background: rgba(255, 59, 48, 0.08);
+  color: #d70015;
 }
 
 .notice[data-tone="warning"] {
-  background: #fbf6e8;
-  color: #7a5a00;
+  border-color: rgba(255, 149, 0, 0.32);
+  background: rgba(255, 149, 0, 0.1);
+  color: #a05a00;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -790,7 +855,8 @@ body {
 /* ------------------------------------------------------------------------- */
 
 .composer {
-  padding: 12px 24px 14px;
+  padding: 12px 24px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--separator);
   background: var(--bg);
 }
 
@@ -800,21 +866,19 @@ body {
   width: 100%;
   max-width: var(--maxw);
   margin-inline: auto;
-  border: 1px solid var(--line-2);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+  transition: border-color 0.12s var(--ease-out);
 }
 
 .composer__box:focus-within {
-  border-color: #b9b9b9;
-  box-shadow: 0 0 0 3px rgba(17, 17, 17, 0.06), var(--shadow);
+  border-color: var(--accent);
 }
 
 .composer__input {
   width: 100%;
-  min-height: 3.1rem;
+  min-height: 3.2rem;
   max-height: 14rem;
   field-sizing: content;
   resize: none;
@@ -822,8 +886,9 @@ body {
   border: 0;
   background: transparent;
   color: var(--fg);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
+  letter-spacing: -0.005em;
 }
 
 .composer__input:focus-visible {
@@ -866,7 +931,8 @@ body {
   direction: rtl;
   text-align: left;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
+  letter-spacing: 0;
   color: var(--fg-3);
 }
 
@@ -879,21 +945,25 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 5px 9px;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-2);
-  font-size: 12px;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
   line-height: 1.3;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.12s var(--ease-out);
 }
 
 .control:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--fg);
+  background: var(--fill-2);
+}
+
+.control:active:not(:disabled) {
+  background: var(--fill);
 }
 
 .control:focus-visible {
@@ -909,6 +979,7 @@ body {
 .control__icon {
   width: 14px;
   height: 14px;
+  color: var(--accent);
 }
 
 .composer__stop-mark {
@@ -918,27 +989,28 @@ body {
   background: currentColor;
 }
 
+/* 圆形填充按钮，尺寸与 iOS 的发送键一致。 */
 .composer__send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border: 0;
   border-radius: 50%;
   background: var(--accent);
   color: var(--accent-fg);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.12s var(--ease-out);
 }
 
 .composer__send svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 .composer__send:hover:not(:disabled) {
-  background: #333333;
+  background: var(--accent-pressed);
 }
 
 .composer__send:focus-visible {
@@ -947,7 +1019,7 @@ body {
 }
 
 .composer__send:disabled {
-  background: var(--surface-3);
+  background: var(--fill);
   color: var(--fg-3);
   cursor: not-allowed;
 }
@@ -958,6 +1030,7 @@ body {
   margin: 8px auto 0;
   font-size: 11px;
   color: var(--fg-3);
+  text-align: center;
 }
 
 .visually-hidden {
@@ -972,6 +1045,28 @@ body {
   border: 0;
 }
 
+.messages::-webkit-scrollbar,
+.projects::-webkit-scrollbar,
+.tool__output::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.messages::-webkit-scrollbar-thumb,
+.projects::-webkit-scrollbar-thumb,
+.tool__output::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: rgba(60, 60, 67, 0.28);
+}
+
+.messages::-webkit-scrollbar-track,
+.projects::-webkit-scrollbar-track,
+.tool__output::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 @keyframes blink {
   50% {
     opacity: 0;
@@ -980,7 +1075,7 @@ body {
 
 @keyframes pulse {
   50% {
-    opacity: 0.3;
+    opacity: 0.35;
   }
 }
 
@@ -994,7 +1089,7 @@ body {
   }
 }
 
-/* 窄屏：侧栏折成顶部会话条，工作区占满。 */
+/* 窄屏：侧栏折成顶部列表条，工作区占满。 */
 @media (max-width: 820px) {
   body {
     grid-template-columns: minmax(0, 1fr);
@@ -1005,10 +1100,12 @@ body {
     flex-direction: row;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px;
+    padding: 8px;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--separator);
+    background: var(--bg-grouped);
     overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .sidebar__head {
@@ -1018,6 +1115,8 @@ body {
   .new-session {
     width: auto;
     flex: none;
+    padding: 6px 10px;
+    border-radius: 999px;
   }
 
   .sidebar__label,
@@ -1053,7 +1152,8 @@ body {
   .session {
     width: auto;
     flex: none;
-    padding: 5px 9px;
+    padding: 6px 10px;
+    border-radius: 999px;
   }
 
   .session__meta {
@@ -1064,12 +1164,24 @@ body {
     min-height: 0;
   }
 
+  .topbar {
+    height: 46px;
+    padding: 0 16px;
+  }
+
   .messages {
-    padding: 20px 16px 28px;
+    padding: 16px 16px 24px;
+    gap: 16px;
   }
 
   .composer {
-    padding: 10px 16px 12px;
+    padding: 10px 16px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .composer__input {
+    /* 16px 以上 iOS 才不会在聚焦时自动放大。 */
+    font-size: 16px;
+    padding: 12px 14px 2px;
   }
 
   .composer__cwd {
@@ -1077,6 +1189,16 @@ body {
   }
 
   .composer__hint {
+    display: none;
+  }
+
+  .msg--user .msg__text {
+    max-width: 88%;
+  }
+}
+
+@media (max-width: 520px) {
+  .chip {
     display: none;
   }
 }
