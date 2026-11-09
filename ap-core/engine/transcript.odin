@@ -24,6 +24,7 @@ Session_End_Event :: protocol.Session_End_Event
 User_Message_Event :: protocol.User_Message_Event
 Turn_Start_Event :: protocol.Turn_Start_Event
 Turn_End_Event :: protocol.Turn_End_Event
+Turn_Context :: protocol.Turn_Context
 Step_Start_Event :: protocol.Step_Start_Event
 Message_Start_Event :: protocol.Message_Start_Event
 Content_Block :: protocol.Content_Block
@@ -32,6 +33,7 @@ Tool_Execution_Start_Event :: protocol.Tool_Execution_Start_Event
 Tool_Execution_End_Event :: protocol.Tool_Execution_End_Event
 Error_Event :: protocol.Error_Event
 Cancel_Event :: protocol.Cancel_Event
+Handoff_Event :: protocol.Handoff_Event
 
 // wire 取值别名；唯一权威在 ap-core/protocol/names.odin。
 event_type_known :: protocol.event_type_known
@@ -49,6 +51,7 @@ EVENT_TOOL_EXECUTION_START :: protocol.EVENT_TOOL_EXECUTION_START
 EVENT_TOOL_EXECUTION_END :: protocol.EVENT_TOOL_EXECUTION_END
 EVENT_ERROR :: protocol.EVENT_ERROR
 EVENT_CANCEL :: protocol.EVENT_CANCEL
+EVENT_HANDOFF :: protocol.EVENT_HANDOFF
 
 STOP_REASON_STOP :: protocol.STOP_REASON_STOP
 STOP_REASON_TOOL_USE :: protocol.STOP_REASON_TOOL_USE
@@ -56,6 +59,11 @@ STOP_REASON_MAX_TOKENS :: protocol.STOP_REASON_MAX_TOKENS
 STOP_REASON_MAX_STEPS :: protocol.STOP_REASON_MAX_STEPS
 STOP_REASON_CANCELLED :: protocol.STOP_REASON_CANCELLED
 STOP_REASON_CONTEXT_TOO_LONG :: protocol.STOP_REASON_CONTEXT_TOO_LONG
+STOP_REASON_HANDOFF :: protocol.STOP_REASON_HANDOFF
+
+HANDOFF_REASON_BUDGET_EXHAUSTED :: protocol.HANDOFF_REASON_BUDGET_EXHAUSTED
+HANDOFF_REASON_CONTEXT_TOO_LONG :: protocol.HANDOFF_REASON_CONTEXT_TOO_LONG
+HANDOFF_REASON_MANUAL :: protocol.HANDOFF_REASON_MANUAL
 
 SESSION_END_EXIT :: protocol.SESSION_END_EXIT
 SESSION_END_SIGNAL :: protocol.SESSION_END_SIGNAL

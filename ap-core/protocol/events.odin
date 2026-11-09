@@ -53,6 +53,17 @@ Turn_End_Event :: struct {
 	turn:        int,
 	stop_reason: string,
 	usage:       Usage,
+	// 本 turn 最后一次 step 的上下文预算快照；预算关闭时为 null。
+	context_info: Maybe(Turn_Context) `json:"context"`,
+}
+
+// turn_end.context：只用于观测，不进入 messages。
+Turn_Context :: struct {
+	estimated_tokens:    int `json:"estimated_tokens"`,
+	limit_tokens:        int `json:"limit_tokens"`,
+	elided_results:      int `json:"elided_results"`,
+	elided_bytes:        int `json:"elided_bytes"`,
+	calibration_percent: int `json:"calibration_percent"`,
 }
 
 Step_Start_Event :: struct {
@@ -128,6 +139,19 @@ Cancel_Event :: struct {
 	using header: Event_Header,
 	scope:     string,
 	target_id: Maybe(string) `json:"target_id"`,
+}
+
+// handoff：把当前 context 压缩成交接文档的一次模型调用的产物。
+// 它只追加，不改写任何历史事件；投影时被忽略（它不是 message）。
+Handoff_Event :: struct {
+	using header: Event_Header,
+	reason:          string,
+	content:         string        `json:"content"`,
+	content_ref:     Maybe(string) `json:"content_ref,omitempty"`,
+	content_bytes:   Maybe(int)    `json:"content_bytes,omitempty"`,
+	content_preview: Maybe(string) `json:"content_preview,omitempty"`,
+	usage:           Maybe(Usage)  `json:"usage"`,
+	source_events:   int           `json:"source_events"`,
 }
 
 // ---- 前端宽松事件 ----

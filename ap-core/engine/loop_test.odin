@@ -381,9 +381,12 @@ test_loop_retry_then_success :: proc(t: ^testing.T) {
 	loop_test_finish(&loop, dir)
 }
 
+// 不允许交接时（--no-handoff，或子代理的 agent_depth > 0）维持现状：
+// 写 error、写 turn_end(context_too_long)、按 provider 错误结束。
 @(test)
-test_loop_context_too_long :: proc(t: ^testing.T) {
+test_loop_context_too_long_without_handoff :: proc(t: ^testing.T) {
 	loop, _, dir := loop_test_setup(t, "loop-ctx")
+	loop.handoff_enabled = false
 	state := Fake_Provider {
 		responses = []Fake_Response {
 			{error = Provider_Error{kind = .Context_Too_Long, message = "too long", retryable = false}},
@@ -398,6 +401,107 @@ test_loop_context_too_long :: proc(t: ^testing.T) {
 	end: Turn_End_Event
 	json.unmarshal_string(last.line, &end)
 	testing.expect_value(t, end.stop_reason, "context_too_long")
+	loop_test_finish(&loop, dir)
+}
+
+// 估算失误不该直接放弃：第一次超限时收紧预算重发同一 step，
+// 不写 error、不增加 step、不写 turn_end。
+@(test)
+test_loop_context_too_long_corrects_then_succeeds :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-ctx-fix")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{error = Provider_Error{kind = .Context_Too_Long, message = "too long", retryable = false}},
+			{text = "recovered", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "big")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+	testing.expect_value(t, result.stop_reason, "stop")
+	testing.expect_value(t, result.result_text, "recovered")
+	testing.expect_value(t, result.num_steps, 1)
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	error_count := 0
+	step_count := 0
+	for ev in events {
+		if ev.type == "error" do error_count += 1
+		if ev.type == "step_start" do step_count += 1
+	}
+	testing.expect_value(t, error_count, 0)
+	testing.expect_value(t, step_count, 1)
+	loop_test_finish(&loop, dir)
+}
+
+// 第二次仍超限就生成交接文档：写 handoff 事件，stop_reason 变 handoff。
+@(test)
+test_loop_context_too_long_twice_triggers_handoff :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-ctx-handoff")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{error = Provider_Error{kind = .Context_Too_Long, message = "too long", retryable = false}},
+			{error = Provider_Error{kind = .Context_Too_Long, message = "still too long", retryable = false}},
+			{text = "handoff doc body", stop = .Stop, usage = Usage{input_tokens = 11, output_tokens = 7}},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "big")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+	testing.expect_value(t, result.stop_reason, "handoff")
+	testing.expect_value(t, result.handoff_content, "handoff doc body")
+	testing.expect_value(t, result.handoff_reason, "context_too_long")
+
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	handoffs := make([dynamic]Handoff_Event, 0, 1)
+	for ev in events {
+		if ev.type != "handoff" {
+			continue
+		}
+		handoff: Handoff_Event
+		json.unmarshal_string(ev.line, &handoff)
+		append(&handoffs, handoff)
+	}
+	testing.expect_value(t, len(handoffs), 1)
+	testing.expect_value(t, handoffs[0].reason, "context_too_long")
+	testing.expect_value(t, handoffs[0].content, "handoff doc body")
+	testing.expect(t, handoffs[0].source_events > 0)
+	testing.expect_value(t, handoffs[0].usage.?.input_tokens.?, 11)
+
+	last := events[len(events) - 1]
+	testing.expect_value(t, last.type, "turn_end")
+	end: Turn_End_Event
+	json.unmarshal_string(last.line, &end)
+	testing.expect_value(t, end.stop_reason, "handoff")
+	loop_test_finish(&loop, dir)
+}
+
+// 交接调用的失败退回现状：error + turn_end(context_too_long)。
+@(test)
+test_loop_handoff_failure_falls_back :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-ctx-handoff-fail")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{error = Provider_Error{kind = .Context_Too_Long, message = "too long", retryable = false}},
+			{error = Provider_Error{kind = .Context_Too_Long, message = "still too long", retryable = false}},
+			// 交接调用返回空文本，视为失败。
+			{text = "", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "big")
+	testing.expect_value(t, result.error_kind, Error_Kind.Provider)
+	testing.expect_value(t, result.stop_reason, "context_too_long")
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	has_error := false
+	has_handoff := false
+	for ev in events {
+		if ev.type == "error" do has_error = true
+		if ev.type == "handoff" do has_handoff = true
+	}
+	testing.expect(t, has_error)
+	testing.expect(t, !has_handoff)
+	last := events[len(events) - 1]
+	testing.expect_value(t, last.type, "turn_end")
 	loop_test_finish(&loop, dir)
 }
 
@@ -457,4 +561,84 @@ test_loop_progress_uses_markdown_headings :: proc(t: ^testing.T) {
 	delete(capture.styles)
 	delete(capture.lines)
 	loop_test_finish(&loop, dir)
+}
+
+// turn_end.context 只在开启预算时出现；关闭预算时整个字段是 null。
+@(test)
+test_loop_turn_end_context_observation :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-ctx-observe")
+	state := Fake_Provider {
+		responses = []Fake_Response{{text = "hi", stop = .Stop, usage = Usage{input_tokens = 12}}},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "hi")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	end: Turn_End_Event
+	json.unmarshal_string(events[len(events) - 1].line, &end)
+	observation, has_observation := end.context_info.?
+	testing.expect(t, has_observation)
+	testing.expect(t, observation.estimated_tokens > 0)
+	testing.expect_value(t, observation.limit_tokens, context_budget_target(loop.settings, loop.max_tokens))
+	testing.expect_value(t, observation.elided_results, 0)
+	loop_test_finish(&loop, dir)
+}
+
+@(test)
+test_loop_turn_end_context_null_when_budget_disabled :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-ctx-off")
+	loop.settings.context_window_tokens = 0
+	state := Fake_Provider{responses = []Fake_Response{{text = "hi", stop = .Stop}}}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "hi")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	end: Turn_End_Event
+	json.unmarshal_string(events[len(events) - 1].line, &end)
+	_, has_observation := end.context_info.?
+	testing.expect(t, !has_observation)
+	loop_test_finish(&loop, dir)
+}
+
+// 每一次成功响应都用真实的 input_tokens 校准下一次估算，比例钳制在
+// [50, 200]。estimate 与 observed 的比值由 provider 决定，这里让 provider
+// 报一个远大于本地估算的 input_tokens，确认比例被压到上限。
+@(test)
+test_loop_calibration_from_usage :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-calibration")
+	args := make(json.Object)
+	args["command"] = json.String("echo hi")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{
+				tool_name = "bash",
+				tool_id = "c1",
+				tool_input = args,
+				stop = .Tool_Use,
+				usage = Usage{input_tokens = 900000},
+			},
+			{text = "done", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "hi")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+	// 第二步才会用到第一步的观测值。
+	testing.expect_value(t, loop.calibration_percent, CALIBRATION_MAX_PERCENT)
+	loop_test_finish(&loop, dir)
+}
+
+// 交接调用的用量计入 session 汇总：manual handoff 没有 turn，只能靠 handoff 事件。
+@(test)
+test_historical_usage_counts_handoff :: proc(t: ^testing.T) {
+	events := []Event {
+		test_event("turn_end", `{"type":"turn_end","turn":1,"stop_reason":"stop","usage":{"input_tokens":3}}`),
+		test_event(
+			"handoff",
+			`{"type":"handoff","reason":"manual","content":"doc","usage":{"input_tokens":11,"output_tokens":7},"source_events":2}`,
+		),
+	}
+	total := historical_usage_from_events(events)
+	testing.expect_value(t, total.input_tokens.?, 14)
+	testing.expect_value(t, total.output_tokens.?, 7)
 }

@@ -239,3 +239,79 @@ test_cli_help_requires_explicit_prompt_source :: proc(t: ^testing.T) {
 	testing.expect(t, !strings.contains(USAGE_TEXT, "stdin 不是 TTY"))
 	testing.expect(t, !strings.contains(USAGE_TEXT, "ap [选项]"))
 }
+
+// ---- 上下文预算与 handoff 参数 ----
+
+@(test)
+test_cli_context_window_parsing :: proc(t: ^testing.T) {
+	opts, err := parse_args([]string{"ap", "--print", "x", "--context-window", "200000"})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, opts.context_window.?, 200000)
+
+	// 0 表示关闭预算，合法；与不传不等价。
+	disabled, derr := parse_args([]string{"ap", "--print", "x", "--context-window", "0"})
+	testing.expect_value(t, derr.code, Exit_Code.OK)
+	testing.expect_value(t, disabled.context_window.?, 0)
+
+	defaults, _ := parse_args([]string{"ap", "--print", "x"})
+	testing.expect_value(t, defaults.context_window, Maybe(int)(nil))
+
+	// 负数与非数字是用法错误。
+	_, bad := parse_args([]string{"ap", "--print", "x", "--context-window", "-1"})
+	testing.expect_value(t, bad.code, Exit_Code.Usage)
+	_, worse := parse_args([]string{"ap", "--print", "x", "--context-window", "many"})
+	testing.expect_value(t, worse.code, Exit_Code.Usage)
+}
+
+@(test)
+test_cli_handoff_requires_restore :: proc(t: ^testing.T) {
+	_, err := parse_args([]string{"ap", "--handoff"})
+	testing.expect_value(t, err.code, Exit_Code.Usage)
+
+	_, err2 := parse_args([]string{"ap", "--print", "x", "--handoff"})
+	testing.expect_value(t, err2.code, Exit_Code.Usage)
+
+	// 与 -s / -c / --fork-session 连用才合法。
+	fused, ok := parse_args([]string{"ap", "-s", "ses_1", "--handoff"})
+	testing.expect_value(t, ok.code, Exit_Code.OK)
+	testing.expect_value(t, fused.handoff.?, "")
+
+	continued, cok := parse_args([]string{"ap", "-c", "--handoff", "继续做 X"})
+	testing.expect_value(t, cok.code, Exit_Code.OK)
+	testing.expect_value(t, continued.handoff.?, "继续做 X")
+
+	forked, fok := parse_args([]string{"ap", "-c", "--fork-session", "--handoff"})
+	testing.expect_value(t, fok.code, Exit_Code.OK)
+	testing.expect_value(t, forked.fork_session, true)
+}
+
+@(test)
+test_cli_handoff_conflicts :: proc(t: ^testing.T) {
+	_, err := parse_args([]string{"ap", "-s", "ses_1", "--handoff", "--print-system-prompt"})
+	testing.expect_value(t, err.code, Exit_Code.Usage)
+
+	_, err2 := parse_args([]string{"ap", "-s", "ses_1", "--handoff", "--no-handoff"})
+	testing.expect_value(t, err2.code, Exit_Code.Usage)
+
+	no_handoff, ok := parse_args([]string{"ap", "--print", "x", "--no-handoff"})
+	testing.expect_value(t, ok.code, Exit_Code.OK)
+	testing.expect(t, no_handoff.no_handoff)
+}
+
+// --handoff 后跟旗标时不能把它当成提示词吃掉。
+@(test)
+test_cli_handoff_does_not_swallow_flags :: proc(t: ^testing.T) {
+	opts, err := parse_args([]string{"ap", "-s", "ses_1", "--handoff", "--output-format", "json"})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect_value(t, opts.handoff.?, "")
+	testing.expect_value(t, opts.output_format, Output_Format.Json)
+
+	// 以 - 开头的提示词走内联写法。
+	inline, ok := parse_args([]string{"ap", "-s", "ses_1", "--handoff=-x 的修复"})
+	testing.expect_value(t, ok.code, Exit_Code.OK)
+	testing.expect_value(t, inline.handoff.?, "-x 的修复")
+
+	// 与其它提示词来源连用是用法错误，不能静默忽略。
+	_, conflict := parse_args([]string{"ap", "-s", "ses_1", "--handoff", "--print", "x"})
+	testing.expect_value(t, conflict.code, Exit_Code.Usage)
+}

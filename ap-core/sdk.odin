@@ -2,6 +2,7 @@ package apcore
 
 import "engine"
 import "platform"
+import "protocol"
 import "tool"
 
 // SDK 门面。
@@ -14,8 +15,22 @@ import "tool"
 
 VERSION :: engine.VERSION
 
+// 模型规格与上下文预算常量。宿主需要它们做配置校验与展示，但不能直接
+// import engine，所以在这里转出。
+DEFAULT_MAX_TOKENS :: engine.DEFAULT_MAX_TOKENS
+DEFAULT_CONTEXT_WINDOW_TOKENS :: engine.DEFAULT_CONTEXT_WINDOW_TOKENS
+DEFAULT_CONTEXT_RESERVE_TOKENS :: engine.DEFAULT_CONTEXT_RESERVE_TOKENS
+DEFAULT_HANDOFF_MAX_TOKENS :: engine.DEFAULT_HANDOFF_MAX_TOKENS
+HANDOFF_TRIGGER_PERCENT :: engine.HANDOFF_TRIGGER_PERCENT
+CONTEXT_ELIDE_TARGET_PERCENT :: engine.CONTEXT_ELIDE_TARGET_PERCENT
+
 // wire 取值：宿主拼 session_end 或比较 stop_reason 时使用，避免自己抄字面量。
 STOP_REASON_CANCELLED :: engine.STOP_REASON_CANCELLED
+STOP_REASON_HANDOFF :: engine.STOP_REASON_HANDOFF
+
+HANDOFF_REASON_BUDGET_EXHAUSTED :: engine.HANDOFF_REASON_BUDGET_EXHAUSTED
+HANDOFF_REASON_CONTEXT_TOO_LONG :: engine.HANDOFF_REASON_CONTEXT_TOO_LONG
+HANDOFF_REASON_MANUAL :: engine.HANDOFF_REASON_MANUAL
 SESSION_END_EXIT :: engine.SESSION_END_EXIT
 SESSION_END_SIGNAL :: engine.SESSION_END_SIGNAL
 SESSION_END_ERROR :: engine.SESSION_END_ERROR
@@ -31,6 +46,8 @@ Session_Request :: engine.Session_Request
 Session_Info :: engine.Session_Info
 Close_Options :: engine.Close_Options
 Turn_Result :: engine.Turn_Result
+Session_Handoff_Result :: engine.Session_Handoff_Result
+Turn_Context :: engine.Turn_Context
 Emitter :: engine.Emitter
 Progress_Style :: engine.Progress_Style
 Progress_Kind :: tool.Progress_Kind
@@ -100,6 +117,8 @@ Session_Options :: struct {
 	max_steps:           int,    // 0 = 用 Settings.max_steps
 	max_tokens:          int,    // 0 = 用 Settings.max_tokens
 	agent_depth:         int,
+	// false 关闭自动交接（--no-handoff）；manual handoff 不受影响。
+	auto_handoff:        bool,
 	parent_session_id:   Maybe(string),
 	parent_tool_call_id: Maybe(string),
 
@@ -178,6 +197,7 @@ session_request :: proc(env: ^Env, opts: Session_Options) -> Session_Request {
 		max_steps = opts.max_steps,
 		max_tokens = opts.max_tokens,
 		agent_depth = opts.agent_depth,
+		auto_handoff = opts.auto_handoff,
 		parent_session_id = opts.parent_session_id,
 		parent_tool_call_id = opts.parent_tool_call_id,
 		base_system_prompt = opts.base_system_prompt,
@@ -205,6 +225,36 @@ turn_run :: proc(
 
 session_close :: proc(s: ^Session, opts: Close_Options) -> (string, Error) {
 	return engine.session_close(s, opts)
+}
+
+// manual handoff：为 --handoff 生成交接文本并写 handoff 事件。
+// 创建新 session 是宿主的职责；引擎只产文本。
+session_handoff :: proc(
+	s: ^Session,
+	reason: string,
+	focus_prompt: string,
+	cancel: ^Cancel_Token,
+	sink: Emitter,
+) -> (Session_Handoff_Result, Error) {
+	return engine.session_handoff(s, reason, focus_prompt, cancel, sink)
+}
+
+// 读回某个 session 的完整事件列表。宿主用它检查新 session 的首条
+// user_message、恢复历史，不直接碰 transcript 格式。
+session_events :: proc(s: ^Session) -> ([]protocol.Transcript_Event, Error) {
+	return engine.transcript_read_all(s.project, s.session_id)
+}
+
+session_seed_user_message :: proc(s: ^Session, content: string) -> (string, Error) {
+	return engine.session_seed_user_message(s, content)
+}
+
+handoff_user_message :: proc(source_session_id, content: string) -> string {
+	return engine.handoff_user_message(source_session_id, content)
+}
+
+session_handoff_destroy :: proc(result: ^Session_Handoff_Result) {
+	engine.session_handoff_destroy(result)
 }
 
 // ---- 日志 ----

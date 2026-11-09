@@ -204,9 +204,11 @@ render_error :: proc(r: ^Renderer, scope, message: string, retryable: bool) {
 }
 
 render_turn_end :: proc(r: ^Renderer, stop_reason: string) {
+	// handoff 不是失败：本轮正常结束，新 session 由 CLI 创建并把 id 写到 stderr。
 	if len(stop_reason) == 0 ||
 	   stop_reason == protocol.STOP_REASON_STOP ||
-	   stop_reason == protocol.STOP_REASON_TOOL_USE {
+	   stop_reason == protocol.STOP_REASON_TOOL_USE ||
+	   stop_reason == protocol.STOP_REASON_HANDOFF {
 		return
 	}
 	finish_assistant(r)

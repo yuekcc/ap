@@ -103,6 +103,8 @@ agent 文件的正文以 `## Agent 定义 (<name>)` 追加。正文只补充指�
 
 `context_build` 是纯函数。同一 transcript 与同一 project 必须得到逐字节相同的 messages。它不调用 LLM，不压缩，不写 transcript，不重新扫描记忆或技能。
 
+带预算的投影是 `(transcript, budget)` 的纯函数：`context_build_budgeted` 额外接收工具定义估算值与两个显式参数，不读环境、不读时钟、不做 IO 决策。详见下文「token 预算」与「工具结果省略」。
+
 Provider 请求中的 messages 由一条 `role=system` 消息加投影结果组成。system 消息的内容来自最后一个 `session_start`。
 
 | 事件 | 投影 |
@@ -111,6 +113,7 @@ Provider 请求中的 messages 由一条 `role=system` 消息加投影结果组�
 | `message_end`，`stop_reason` 不是 `cancelled` | 一条 `role=assistant` 消息 |
 | `tool_execution_end` | 一条 `role=tool` 消息，跟在要求它的 assistant 消息后 |
 | `session_start` | 不进入 messages，只提供 system prompt |
+| `handoff` | 不进入 messages，只提供交接文档 |
 | `message_start`、`step_start`、`turn_start`、`turn_end`、`error`、`cancel`、`session_end` | 忽略 |
 
 assistant 消息的构造规则：
@@ -150,22 +153,157 @@ blob 缺失、sha256 不匹配或读取失败时，组装返回 `.Usage` 错误�
 - `ok: false`：使用 `error`。`error` 缺失时写 `tool failed`。存在部分输出时，在错误文本后用 `\n` 拼接内容。
 - `metadata`、`duration_ms`、`exit_code` 不进入 messages。
 
+## token 预算
+
+ap 面向 1M 上下文、64K 单次输出的模型。预算默认开启，`context_window_tokens` 默认 `1048576`。
+
+### 目标计算
+
+```
+target = context_window_tokens - max_tokens - context_reserve_tokens
+```
+
+- `max_tokens` 取本次请求的值，每个 turn 可能不同。
+- `context_reserve_tokens` 固定为 `DEFAULT_CONTEXT_RESERVE_TOKENS`，即 `DEFAULT_MAX_TOKENS / 2`。它与 `handoff_max_tokens`（`16384`）都是 `ap-core/engine/config.odin` 里的常量，不是配置项。
+- 按默认值算：`1048576 - 65536 - 32768 = 950272`。
+- `context_window_tokens = 0` 表示关闭预算，`target` 不参与任何决策，行为回到不计算 token 的版本。
+- 预算开启而 `target <= 0` 是配置错误：写 `error(scope=session)` 并以 `.Usage` 结束，退出 2。
+
+估算对象是**整个请求**：system prompt + 全部 messages + 工具定义 JSON。三者都计入 `input_tokens`，分开算会漏。
+
+### 本地估算
+
+```
+estimate_tokens(s) = ceil(ascii_bytes(s) / 4) + ceil(non_ascii_bytes(s) / 3)
+```
+
+逐字节统计类别，再对每条消息加固定结构开销（每条消息 4 token，每个 tool call 8 token）。工具定义按名字、描述与参数 JSON 估算。函数是纯的、无状态的，可单测。估算只用于「接近预算时怎么决策」，不追求绝对值准确。
+
+### usage 校准
+
+transcript 只追加，所以第 N 步发出的 messages 一定是第 N+1 步 messages 的前缀。上一次调用的 `input_tokens` 因此是一段真实测量的前缀长度。
+
+1. Loop 记录 `last_request_estimate`（上次发请求前的本地估算）与 `last_observed_input`（上次 `message_end.usage.input_tokens`）。
+2. `ratio_percent = last_observed_input * 100 / last_request_estimate`，钳制到 `[CALIBRATION_MIN_PERCENT, CALIBRATION_MAX_PERCENT]`，即 `[50, 200]`。
+3. `estimated = estimate_tokens(当前请求) * ratio_percent / 100`。
+4. 没有任何观测值时 `ratio_percent = 100`。两个观测值每个 turn 开始时清零，因为新 turn 的第一份 messages 与上一 turn 的请求已经不再是前缀关系。
+
+校准值属于 Loop 运行态，不进 transcript。它只影响传入的估算结果，不影响投影规则本身，因此 `context_build_budgeted` 仍然可复现。校准结果写入 `turn_end.context.calibration_percent`。
+
+### 触发决策
+
+每个 step 计算一次，顺序固定：
+
+1. 用不省略的投影估算 `estimated`。
+2. `estimated * 100 < target * HANDOFF_TRIGGER_PERCENT`（90%）→ 直接发请求。
+3. 否则先省略工具结果（见下节），把 `estimated'` 压向 `target * CONTEXT_ELIDE_TARGET_PERCENT`（80%）。省略是廉价尝试：不调模型、不新建 session。
+4. `estimated' * 100 < target * 90%` → 用省略后的投影发请求，stderr 写一行 `[context] elided N tool results, ~M tokens saved`。
+5. 仍 `>= target * 90%` → 进入交接流程。
+
+90% 是唯一的决策阈值。80% 只是省略的收敛目标，决定一次省略把水位压到多低。
+
+### 观测
+
+`turn_end` 的可选字段 `context` 记录本 turn 最后一次 step 决策后的值。`context_window_tokens = 0` 时整个字段为 `null`。字段定义见 [react-loop-and-session.md](react-loop-and-session.md)。
+
+## 工具结果省略
+
+在没有对话压缩的前提下，最早占满窗口的一定是工具输出。省略把较早的工具输出在**投影层**替换成固定桩文本，对话文本不动。
+
+### 候选与排除
+
+省略在 `tool_result_content_in` 之后、写入 message 之前生效。候选是 `role=tool` 消息，按消息列表顺序遍历，依次应用：
+
+1. `tool_execution_end.ok == false` 的结果不省略。错误文本是模型纠错的主要依据，且通常很短。
+2. 解析后内容字节数 `< ELIDE_MIN_BYTES`（`2048`）的结果不省略。
+3. 从末尾倒数的 `ELIDE_KEEP_RECENT_RESULTS`（`6`）个候选不省略。
+4. 其余按**从旧到新**顺序逐个省略，直到估算落到目标以内或候选耗尽。
+
+字节数按解析后的内容长度计算，与 `content` / `content_ref` 无关：两种存储形式必须得到同样的判定，否则阈值边界上会出现不确定行为。
+
+### 桩文本
+
+```
+[tool output elided: <tool_name>, <bytes> bytes. Re-run the tool or re-read the file if you need it again.]
+```
+
+`tool_name` 来自配对成功的 assistant `tool_calls`，`bytes` 是解析后的内容字节数。不含时间、不含 `seq`、不含「第几步」，因此同一 transcript 在任何精度下都算出同一段文本。
+
+### 不变式
+
+- **确定性**：同一 `(events, tools_tokens, limit_tokens, calibration_percent)` 必须产出逐字节相同的 messages。候选遍历用消息列表顺序，不用 map 迭代顺序。
+- **单调**：省略集合只随 events 增长而变大。最旧优先、target 固定的算法天然满足。
+- **成对结构不变**：只改 tool 消息的 `content`，不动 assistant 的 `tool_calls`、消息条数与顺序。
+- **校验不变**：省略前仍按现有规则解析 blob、校验 sha256，失败照样返回 `.Usage`。省略不跳过任何校验。
+- **不省略时等价**：`limit_tokens <= 0` 时 `context_build_budgeted` 的 messages 与 `context_build` 逐字节相同。
+
+### prompt cache 代价
+
+省略会让被省略位置之后的整个前缀失效，provider 的 `cached_tokens` 会明显下降。缓解方式是阈值设计本身：90% 触发、一次性压到 80%，把「每增长 1% 就重排」摊成大约每消耗 10% 窗口才动一次；省略从最旧开始，让尾部连续区域一次性重新预热。成本可观测：`turn_end.context.elided_bytes` 配合 `usage.cached_tokens` 直接看。
+
+不采用「优先省略最新结果」的变体：最新结果恰好是模型最可能在用的，语义损失大于成本收益。
+
+## handoff
+
+上下文真的不够用时，用一次不带工具的模型调用生成交接文档，再由 CLI 起一个新 session 承载它。
+
+### 触发条件
+
+| 场景 | `reason` | 行为 |
+| --- | --- | --- |
+| 省略后仍超 `target` | `budget_exhausted` | 不调 provider 主请求，直接生成交接 |
+| provider 第二次返回 `context_too_long` | `context_too_long` | 先收紧预算重算重发一次，仍超限才生成交接 |
+| 用户传 `--handoff` | `manual` | 直接生成交接，不跑 turn |
+
+`context_window_tokens = 0`、`--no-handoff` 或 `agent_depth > 0` 时只有 `--handoff` 一条路径生效。子代理的职责是回一个结论，不是开新 session。
+
+### 生成交接文档
+
+一次独立的 provider 调用，不带工具，不进入 ReAct 循环。
+
+- 提示词：`ap-core/engine/prompts/handoff.md`，编译期 `#load` 内嵌，与 `system.md` 同机制。
+- system 消息 = 本 session 冻结的 system prompt + `
+` + `handoff.md` 全文。拼在后面而不是替换：技能清单与 `AGENTS.md` 硬约束只在冻结 prompt 里；冻结 prompt 是稳定前缀，与主请求共用同一段字节。
+- messages = 省略后的投影，加上可选的聚焦提示词（`--handoff "<prompt>"` 的那段文本）作为最后一条 `user` 消息。投影的预算是 `context_window_tokens - handoff_max_tokens - context_reserve_tokens`，system 消息本身也计入。
+- `max_tokens = DEFAULT_HANDOFF_MAX_TOKENS`（`16384`），不取 `--max-tokens`。`include_usage` 跟随 `stream_include_usage`。
+- 只尝试一次，不重试。失败时写 `error(scope=llm, kind=<原错误>, message="handoff failed: ...")` 并按 `--no-handoff` 的路径结束。
+- 输出正文直接作为交接文档，不改写、不重排、不加包装。输出为空视为失败。
+
+提示词的四条硬要求：不重复其他产物（只给路径或 URL）、必须脱敏、列出建议技能（带 `location`）、按聚焦提示词调整侧重。小节结构写进提示词，代码不校验：交接是尽力而为的产物，强制结构只会让它编造内容填坑。
+
+### 事件
+
+新增持久事件 `handoff`，字段见 [react-loop-and-session.md](react-loop-and-session.md)。它同时登记进 `event_type_known` 与 `event_type_canonical`，恢复时保留，投影时忽略。`handoff.usage` 计入 `session_end.usage`。
+
+### 新 session
+
+CLI adapter 在拿到交接文本后创建新 session。引擎不参与。
+
+- 新 session 走正常 new session 路径：重新组装 system prompt，用当前工具集、当前模型、当前 `AGENTS.md` 与技能。**不是 fork**，不复制 transcript，不冻结源 session 的任何值。
+- 第一条事件是 `user_message`，内容为 `## 上一会话交接
+来源 session: <id>
+
+<交接文档正文>`。
+- `ap -s <id> --handoff "<prompt>"` 会在新 session 里继续跑这个 turn；`ap -s <id> --handoff` 只创建新 session 并打印它的 id。传了 prompt 时它同时是交接的聚焦提示与第一个 turn，用同一条文本。
+- 判定「这条 user_message 是交接」靠文本首行，不加新字段。
+
 ## context_too_long
 
-当前不计算 token 预算，不做历史压缩，也不按 usage 截断。provider 返回 `context_too_long` 是唯一的上下文超限出口。识别规则见 [provider.md](provider.md)。
+关闭自动交接时行为不变：provider 返回 `context_too_long` 是上下文超限的唯一出口。识别规则见 [provider.md](provider.md)。
 
 1. 不重试。
 2. 写 `error(scope=llm, kind=context_too_long, retryable=false)`。消息固定为 `context too long; start a new session or reduce input`。
 3. 写 `turn_end(stop_reason=context_too_long)`。
 4. 本次 turn 的 `result_text` 保留最后一个 assistant 文本。
 5. `ap-cli` 写 `session_end(reason=error)`，退出 3。
-6. 错误信息进入 `error` 事件。`json` 输出的 `stop_reason` 为 `context_too_long`。输出格式见 [cli-and-config.md](cli-and-config.md)。
 
-当前没有 handoff。用户需要新建 session 或减少输入。
+开启自动交接时，这条路径只在交接自身失败后退回使用。纠正顺序见 [errors-and-cancellation.md](errors-and-cancellation.md)。
 
 ## 相关文档
 
-- [react-loop-and-session.md](react-loop-and-session.md)：事件 schema、恢复与 fork
+- [react-loop-and-session.md](react-loop-and-session.md)：事件 schema、`handoff` 事件、恢复与 fork
+- [errors-and-cancellation.md](errors-and-cancellation.md)：`context_too_long` 的纠正路径与交接失败
+- [cli-and-config.md](cli-and-config.md)：`--context-window`、`--handoff`、`--no-handoff`
 - [provider.md](provider.md)：请求格式与 `context_too_long` 识别
 - [skills.md](skills.md)：技能发现与 `SKILL.md` 格式
 - [subagents.md](subagents.md)：agent 定义与工具白名单

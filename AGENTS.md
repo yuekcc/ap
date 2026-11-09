@@ -63,7 +63,7 @@ odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 
 1. **transcript 只追加。** 完整事件永不改写。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行。不要写“修复事件”。
 2. **transcript 是唯一事实来源。** 不允许出现只在内存里的对话内容。流式增量只用于实时展示，不参与恢复。
-3. **`context_build` 必须是纯函数。** 同一 transcript 和 project 必须得到逐字节相同的 messages。不调用 LLM、不压缩、不写 transcript、不重新扫描记忆或技能。
+3. **`context_build` 必须是纯函数。** 同一 transcript 和 project 必须得到逐字节相同的 messages。不调用 LLM、不压缩、不写 transcript、不重新扫描记忆或技能。带预算的 `context_build_budgeted` 扩展成「(transcript, budget) 的纯函数」：水位与校准值显式传入，不读环境或时钟。
 4. **恢复以冻结值为准。** `session_start` 中的 system prompt、model、provider、agent、cwd、工具集在恢复和 fork 时不再重算。冲突参数只 warning 并忽略。
 5. **stdout 是机器通道。** `text`、`json`、`stream-json` 的 stdout 只放结果或事件；日志、进度、工具输出走 stderr。子代理的 stdout 是 `stream-json`，stderr 是人类日志。
 6. **取消必须及时。** 设置取消标志、中止 HTTP 请求、终止工具和子代理的进程树。工具要尊重取消并返回 `ok:false`。
@@ -80,6 +80,9 @@ odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 | `settings.json` | `ap-cli/settings.odin`、`magi/settings.odin` | `settings.example.json`、`docs/cli-and-config.md` |
 | 输出格式或 stderr 排版 | `ap-cli/output.odin` | `docs/cli-and-config.md`、输出测试 |
 | 基础 system prompt | `ap-core/engine/prompts/system.md` | `docs/context-management.md`、`--print-system-prompt` 行为 |
+| 交接提示词 | `ap-core/engine/prompts/handoff.md` | `docs/context-management.md` 的 handoff 章 |
+| 上下文预算、省略与 handoff | `ap-core/engine/budget.odin`、`handoff.odin`、`config.odin` | `budget_test.odin`、`docs/context-management.md`、`docs/proposals/context-budget-and-handoff.md` |
+| handoff 的参数与新 session | `ap-cli/run.odin`、`options.odin`、`output.odin` | `options_test.odin`、`handoff_test.odin`、`docs/cli-and-config.md` |
 | 应用层 prompt sections | `ap-cli/prompt.odin` | `prompt_test.odin`、`docs/context-management.md` |
 | agent 定义解析 | `ap-cli/agent.odin` | `docs/subagents.md` |
 | 技能发现 | `ap-cli/skills/skills.odin` | `docs/skills.md` |

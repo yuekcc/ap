@@ -16,7 +16,7 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 | `ap-cli/tools/` | `aptools` | 五个内置工具、`Tool_Config`、进程树清理、子代理启动 |
 | `ap-cli/skills/` | `apskills` | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 |
 | `ap-core/` | `apcore` | SDK 门面：`Config`、`Env`、会话生命周期、日志入口 |
-| `ap-core/engine/` | `engine` | session、loop、provider、sse、context、transcript、errors、prompts |
+| `ap-core/engine/` | `engine` | session、loop、provider、sse、context、budget、handoff、transcript、errors、prompts |
 | `ap-core/tool/` | `tool` | 工具契约、参数助手、注册表、执行管线、blob 文本读取 |
 | `ap-core/platform/` | `platform` | 路径、project/session、blob、JSON 与文本、平台原语、进程树、取消 token、文件日志 |
 | `ap-core/protocol/` | `protocol` | 事件 schema 与 wire 常量、宽松解析、`Line_Reader`、usage |

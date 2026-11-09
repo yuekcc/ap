@@ -111,6 +111,9 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	if err := json_get_bool(obj, "stream_include_usage", &loaded.sdk.stream_include_usage); !apcore.is_ok(err) {
 		return loaded, err
 	}
+	if err := json_get_int(obj, "context_window_tokens", &loaded.sdk.context_window_tokens); !apcore.is_ok(err) {
+		return loaded, err
+	}
 
 	if env_key := os.get_env("AP_API_KEY", context.allocator); len(env_key) > 0 {
 		loaded.sdk.api_key = env_key
@@ -133,6 +136,17 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	}
 	if loaded.sdk.blob_threshold_bytes <= 0 {
 		return loaded, apcore.errorf(.Usage, "settings.json: blob_threshold_bytes must be positive")
+	}
+	if loaded.sdk.context_window_tokens < 0 {
+		return loaded, apcore.errorf(.Usage, "settings.json: context_window_tokens must be non-negative")
+	}
+	if loaded.sdk.context_window_tokens > 0 && loaded.sdk.context_window_tokens <= loaded.sdk.max_tokens {
+		return loaded, apcore.errorf(
+			.Usage,
+			"settings.json: context_window_tokens (%d) must be greater than max_tokens (%d)",
+			loaded.sdk.context_window_tokens,
+			loaded.sdk.max_tokens,
+		)
 	}
 	loaded.sdk.base_url = strings.trim_right(loaded.sdk.base_url, "/")
 	if len(loaded.sdk.base_url) == 0 {

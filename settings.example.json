@@ -4,10 +4,11 @@
   "api_key": "sk-your-key",
   "max_steps": 100,
   "max_agent_depth": 1,
-  "max_tokens": 8192,
+  "max_tokens": 65536,
   "tool_timeout_ms": 120000,
   "llm_timeout_ms": 600000,
   "blob_threshold_bytes": 102400,
   "max_capture_bytes": 67108864,
-  "stream_include_usage": true
+  "stream_include_usage": true,
+  "context_window_tokens": 1048576
 }

@@ -87,11 +87,81 @@ context_build_in :: proc(
 	if !is_ok(serr) {
 		return "", nil, serr
 	}
-	messages, merr := project_messages_in(project, events, allocator)
+	messages, _, merr := project_messages_with_slots_in(project, events, allocator)
 	if !is_ok(merr) {
 		return "", nil, merr
 	}
 	return system_prompt, messages, ok_error()
+}
+
+// Budgeted_Context 是 context_build_budgeted 的结果：投影加预算观测值。
+Budgeted_Context :: struct {
+	system_prompt:       string,
+	messages:            []Chat_Message,
+	// 本 step 请求的估算 token 数，已乘校准系数。
+	estimated_tokens:    int,
+	// 未乘校准系数的原始估算；作为下一次 usage 校准的分母。
+	raw_estimate:        int,
+	limit_tokens:        int,
+	elided_results:      int,
+	elided_bytes:        int,
+	// 省略前后估算之差，用于 stderr 的进度行。
+	tokens_saved:        int,
+	calibration_percent: int,
+	tools_tokens:        int,
+}
+
+// context_build_budgeted 在 context_build 的投影上应用工具结果省略。
+//
+// 它是「(transcript, budget) 的纯函数」：limit_tokens 与 calibration_percent
+// 都由调用方显式传入，不读环境、不读时钟、不做 IO 决策。limit_tokens 不是
+// 模型窗口，而是本 step 的预算水位（target），省略会把估算压到它的
+// CONTEXT_ELIDE_TARGET_PERCENT。limit_tokens <= 0 表示不省略，此时结果与
+// context_build 逐字节相同。
+context_build_budgeted :: proc(
+	project: Project,
+	events: []Event,
+	tools_tokens, limit_tokens, calibration_percent: int,
+	allocator: runtime.Allocator,
+) -> (Budgeted_Context, Error) {
+	out := Budgeted_Context{}
+	_, system_prompt, serr := session_system_prompt_in(project, events, allocator)
+	if !is_ok(serr) {
+		return out, serr
+	}
+	messages, slots, merr := project_messages_with_slots_in(project, events, allocator)
+	if !is_ok(merr) {
+		return out, merr
+	}
+	out.system_prompt = system_prompt
+	out.messages = messages
+	out.limit_tokens = limit_tokens
+	out.calibration_percent = calibration_percent
+	out.tools_tokens = tools_tokens
+
+	base_raw := estimate_request_tokens(system_prompt, messages, tools_tokens)
+	// 唯一的决策阈值：估算达到 target 的 90% 才开始省略。省略自身把水位
+	// 压到 80%，避免每增长 1% 就重排一次 prompt。
+	raw := base_raw
+	if limit_tokens > 0 &&
+	   calibrate_tokens(base_raw, calibration_percent) * 100 >=
+		   limit_tokens * HANDOFF_TRIGGER_PERCENT {
+		elided := elide_tool_results(
+			messages,
+			slots,
+			limit_tokens,
+			calibration_percent,
+			base_raw,
+			allocator,
+		)
+		out.elided_results = elided.elided_results
+		out.elided_bytes = elided.elided_bytes
+		raw = elided.raw_estimate
+	}
+	out.raw_estimate = raw
+	out.estimated_tokens = calibrate_tokens(raw, calibration_percent)
+	out.tokens_saved = calibrate_tokens(base_raw, calibration_percent) - out.estimated_tokens
+	return out, ok_error()
 }
 
 content_block_text :: proc(project: Project, block: Content_Block) -> (string, Error) {
@@ -163,7 +233,8 @@ tool_result_content_in :: proc(
 }
 
 project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, Error) {
-	return project_messages_in(project, events, context.allocator)
+	messages, _, err := project_messages_with_slots_in(project, events, context.allocator)
+	return messages, err
 }
 
 project_messages_in :: proc(
@@ -171,6 +242,17 @@ project_messages_in :: proc(
 	events: []Event,
 	allocator: runtime.Allocator,
 ) -> ([]Chat_Message, Error) {
+	messages, _, err := project_messages_with_slots_in(project, events, allocator)
+	return messages, err
+}
+
+// 投影的同时记下每条 tool 消息的来源信息，供省略决策使用。
+// 候选遍历走 messages 顺序，不用 map 迭代顺序，结果因此可复现。
+project_messages_with_slots_in :: proc(
+	project: Project,
+	events: []Event,
+	allocator: runtime.Allocator,
+) -> ([]Chat_Message, []Tool_Result_Slot, Error) {
 	// 先收集 tool result，之后按 assistant 的 tool_use 顺序配对。
 	results := make(map[string]Tool_Execution_End_Event, 8, allocator)
 	for ev in events {
@@ -179,24 +261,25 @@ project_messages_in :: proc(
 		}
 		end: Tool_Execution_End_Event
 		if uerr := json.unmarshal_string(ev.line, &end, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
-			return nil, make_error(.Usage, "cannot parse tool_execution_end event: %v", uerr)
+			return nil, nil, make_error(.Usage, "cannot parse tool_execution_end event: %v", uerr)
 		}
 		results[end.tool_call_id] = end
 	}
 
 	messages := make([dynamic]Chat_Message, 0, len(events), allocator)
+	slots := make([dynamic]Tool_Result_Slot, 0, 8, allocator)
 	for ev in events {
 		switch ev.type {
 		case EVENT_USER_MESSAGE:
 			user: User_Message_Event
 			if uerr := json.unmarshal_string(ev.line, &user, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
-				return nil, make_error(.Usage, "cannot parse user_message event: %v", uerr)
+				return nil, nil, make_error(.Usage, "cannot parse user_message event: %v", uerr)
 			}
 			append_chat_message(&messages, Chat_Message{role = ROLE_USER, content = user.content})
 		case EVENT_MESSAGE_END:
 			end: Message_End_Event
 			if uerr := json.unmarshal_string(ev.line, &end, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
-				return nil, make_error(.Usage, "cannot parse message_end event: %v", uerr)
+				return nil, nil, make_error(.Usage, "cannot parse message_end event: %v", uerr)
 			}
 			if end.stop_reason == STOP_REASON_CANCELLED {
 				continue
@@ -210,7 +293,7 @@ project_messages_in :: proc(
 				case BLOCK_TEXT:
 					text, terr := content_block_text_in(project, block, allocator)
 					if !is_ok(terr) {
-						return nil, terr
+						return nil, nil, terr
 					}
 					if len(text) > 0 {
 						append(&text_parts, text)
@@ -228,7 +311,7 @@ project_messages_in :: proc(
 					}
 					input, ierr := content_block_input_in(project, block, allocator)
 					if !is_ok(ierr) {
-						return nil, ierr
+						return nil, nil, ierr
 					}
 					append(
 						&tool_calls,
@@ -263,8 +346,19 @@ project_messages_in :: proc(
 				end := results[call.id]
 				content, rerr := tool_result_content_in(project, end, allocator)
 				if !is_ok(rerr) {
-					return nil, rerr
+					return nil, nil, rerr
 				}
+				// 字节数按解析后的内容长度算，与 content / content_ref 无关；
+				// 两种存储形式必须在阈值边界上得到同样的判定。
+				append(
+					&slots,
+					Tool_Result_Slot {
+						message_index = len(messages),
+						name = call.function.name,
+						ok = end.ok,
+						bytes = len(content),
+					},
+				)
 				append(
 					&messages,
 					Chat_Message {
@@ -276,7 +370,7 @@ project_messages_in :: proc(
 			}
 		}
 	}
-	return messages[:], ok_error()
+	return messages[:], slots[:], ok_error()
 }
 
 append_chat_message :: proc(messages: ^[dynamic]Chat_Message, msg: Chat_Message) {

@@ -357,3 +357,101 @@ test_new_session_id_outlives_thread_temp_allocator :: proc(t: ^testing.T) {
 	testing.expect(t, strings.has_prefix(result.id, "ses_"))
 	testing.expect(t, len(result.id) > 8)
 }
+
+// ---- handoff ----
+
+// 打开一个已写入 session_start 的 session，供 handoff 测试使用。
+handoff_test_session :: proc(t: ^testing.T, name: string) -> (Session, Project, string) {
+	context.random_generator = crypto.random_generator()
+	dir := test_temp_dir(name)
+	project, perr := platform.open_project(fmt.tprintf("%s/config", dir), dir)
+	testing.expect(t, platform.is_ok(perr))
+	settings := new(Settings)
+	settings^ = settings_defaults()
+	session, _, oerr := session_open(
+		{
+			kind = .New,
+			project = project,
+			settings = settings,
+			registry = test_registry("bash"),
+			agent_name = "general",
+			base_system_prompt = "frozen base\n",
+			tools = []string{"bash"},
+		},
+	)
+	testing.expect_value(t, oerr.kind, Error_Kind.None)
+	session.provider_call = fake_provider_call
+	return session, project, dir
+}
+
+// 直接往 transcript 追加一条 user_message，并同步 session.events。
+handoff_test_append_user :: proc(s: ^Session, content: string) {
+	h := make_header(&s.store, EVENT_USER_MESSAGE)
+	line, err := transcript_append_line(&s.store, User_Message_Event{header = h, content = content})
+	if !is_ok(err) {
+		panic("failed to append user_message in test")
+	}
+	// Session.events 是定长切片：追加要换一份新切片（测试里不追所有权）。
+	events := make([]Event, len(s.events) + 1)
+	copy(events, s.events)
+	events[len(s.events)] = Event{v = h.v, seq = h.seq, ts = h.ts, type = h.type, line = line}
+	s.events = events
+}
+
+// manual handoff（--handoff）：没有 turn，只产交接文本并写 handoff 事件。
+@(test)
+test_session_handoff_manual_writes_event :: proc(t: ^testing.T) {
+	session, project, dir := handoff_test_session(t, "session-handoff")
+	defer test_cleanup(dir)
+	handoff_test_append_user(&session, "do the thing")
+
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{text = "handoff doc", stop = .Stop, usage = Usage{input_tokens = 21}},
+		},
+	}
+	fake_provider_state = &state
+	result, err := session_handoff(
+		&session,
+		HANDOFF_REASON_MANUAL,
+		"next: finish",
+		new(platform.Cancel_Token),
+		{},
+	)
+	testing.expect_value(t, err.kind, Error_Kind.None)
+	defer session_handoff_destroy(&result)
+	testing.expect_value(t, result.reason, "manual")
+	testing.expect_value(t, result.content, "handoff doc")
+	testing.expect_value(t, result.usage.input_tokens.?, 21)
+
+	events, _ := transcript_read_all(project, session.session_id)
+	handoffs := make([dynamic]Handoff_Event, 0, 1)
+	for ev in events {
+		if ev.type != EVENT_HANDOFF {
+			continue
+		}
+		handoff: Handoff_Event
+		json.unmarshal_string(ev.line, &handoff)
+		append(&handoffs, handoff)
+	}
+	testing.expect_value(t, len(handoffs), 1)
+	testing.expect_value(t, handoffs[0].reason, "manual")
+	testing.expect_value(t, handoffs[0].content, "handoff doc")
+	// source_events 只做诊断：至少包含 session_start 与 user_message。
+	testing.expect(t, handoffs[0].source_events >= 2)
+	delete(handoffs)
+	transcript_close(&session.store)
+	delete(session.events)
+}
+
+// 源 session 没有任何 user_message 时 manual handoff 是用法错误。
+@(test)
+test_session_handoff_manual_requires_user_message :: proc(t: ^testing.T) {
+	session, _, dir := handoff_test_session(t, "session-handoff-empty")
+	defer test_cleanup(dir)
+	_, err := session_handoff(&session, HANDOFF_REASON_MANUAL, "", new(platform.Cancel_Token), {})
+	testing.expect_value(t, err.kind, Error_Kind.Usage)
+	transcript_close(&session.store)
+	delete(session.events)
+}
+

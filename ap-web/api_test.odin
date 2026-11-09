@@ -48,6 +48,22 @@ api_json_field :: proc(t: ^testing.T, body: string, key: string) -> (json.Value,
 	return field, has
 }
 
+// 轮询 /api/session/current，直到 turn 落到期望值。
+test_wait_current_turn :: proc(app: ^App, expected: int, timeout: time.Duration) -> bool {
+	needle := fmt.aprintf(`"turn":%d`, expected, allocator = context.temp_allocator)
+	start := time.tick_now()
+	for {
+		current := api_call(app, .Get, "/api/session/current")
+		if strings.contains(api_response_text(&current), needle) {
+			return true
+		}
+		if time.tick_since(start) > timeout {
+			return false
+		}
+		time.sleep(5 * time.Millisecond)
+	}
+}
+
 // 只读 fixture：project 目录直接指到临时目录，方便塞 fake transcript/blob。
 api_fixture_setup :: proc(t: ^testing.T, app: ^App, dir: string) {
 	app.project = client.Project {
@@ -564,7 +580,9 @@ test_api_turn_validation_and_single_flight :: proc(t: ^testing.T) {
 	current := api_call(&app, .Get, "/api/session/current")
 	testing.expect(t, strings.contains(api_response_text(&current), `"running":true`))
 	testing.expect(t, strings.contains(api_response_text(&current), `"session_id":"ses_cancel"`))
-	testing.expect(t, strings.contains(api_response_text(&current), `"turn":1`))
+	// session_id 在 session_start 就出现，turn 要等 turn_start 被泵出来；
+	// 直接断言会和 agent 的输出赛跑。
+	testing.expect(t, test_wait_current_turn(&app, 1, 10 * time.Second), "turn did not start")
 
 	// 同一 session 仍然单飞。
 	busy_body := strings.concatenate(

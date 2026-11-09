@@ -43,7 +43,7 @@ Odin 没有异步运行时。流式读取用阻塞 IO 加回调。
 | `tools` | 生效工具定义。没有工具时省略 |
 | `tool_choice` | 有工具时为 `auto`，否则省略 |
 | `parallel_tool_calls` | 固定 `false` |
-| `max_tokens` | 单次响应上限，使用旧字段名 |
+| `max_tokens` | 单次响应上限，使用旧字段名。默认 `65536`（面向 64K 输出能力的模型） |
 | `stream` | 固定 `true` |
 | `stream_options` | `{"include_usage": true}`，仅当 `stream_include_usage` 为 true |
 
@@ -67,7 +67,7 @@ Odin 没有异步运行时。流式读取用阻塞 IO 加回调。
   ],
   "tool_choice": "auto",
   "parallel_tool_calls": false,
-  "max_tokens": 8192,
+  "max_tokens": 65536,
   "stream": true,
   "stream_options": {"include_usage": true}
 }
@@ -184,6 +184,12 @@ HTTP 错误正文按 `{"error":{"message","type","code"}}` 解析。`message` �
 | 流在 `[DONE]` 前结束 | `network` | true |
 
 上下文超限的匹配不区分大小写，检查 `context_length_exceeded`、`context_too_long`、`maximum context length`、`context length exceeded`、`too many tokens`。
+
+`context_too_long` 不重试。Loop 第一次收到它时收紧预算重算并重发同一个 step；第二次仍收到就交由上下文管理流程处理（交接或现行退出路径）。引擎不在 provider 层做这些决策，这里只负责如实分类。纠正顺序见 [errors-and-cancellation.md](errors-and-cancellation.md)。
+
+### usage 的用途
+
+`usage.input_tokens` 除了展示与累加，还用于校准本地估算：transcript 只追加，所以上一次请求的 messages 是下一次请求 messages 的严格前缀，`input_tokens` 因此是一段真实测量的前缀长度。校准规则见 [context-management.md](context-management.md)。`cached_tokens` 按「已含在 `input_tokens` 内」处理，校准只取 `input_tokens`。
 
 流内 `error` 对象不重试。先检查 `code` 或 `message` 是否匹配上下文超限，再检查限流 `code`，都不匹配时落到 `invalid_request`。流内错误没有 `Retry-After`。
 

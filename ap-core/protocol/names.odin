@@ -20,6 +20,7 @@ EVENT_TOOL_EXECUTION_UPDATE :: "tool_execution_update"
 EVENT_TOOL_EXECUTION_END :: "tool_execution_end"
 EVENT_ERROR :: "error"
 EVENT_CANCEL :: "cancel"
+EVENT_HANDOFF :: "handoff"
 
 // ---- turn_end / message_end 的 stop_reason ----
 
@@ -29,6 +30,13 @@ STOP_REASON_MAX_TOKENS :: "max_tokens"
 STOP_REASON_MAX_STEPS :: "max_steps"
 STOP_REASON_CANCELLED :: "cancelled"
 STOP_REASON_CONTEXT_TOO_LONG :: "context_too_long"
+STOP_REASON_HANDOFF :: "handoff"
+
+// ---- handoff.reason ----
+
+HANDOFF_REASON_BUDGET_EXHAUSTED :: "budget_exhausted"
+HANDOFF_REASON_CONTEXT_TOO_LONG :: "context_too_long"
+HANDOFF_REASON_MANUAL :: "manual"
 
 // ---- session_end.reason ----
 
@@ -75,7 +83,8 @@ event_type_known :: proc(typ: string) -> bool {
 	     EVENT_TOOL_EXECUTION_START,
 	     EVENT_TOOL_EXECUTION_END,
 	     EVENT_ERROR,
-	     EVENT_CANCEL:
+	     EVENT_CANCEL,
+	     EVENT_HANDOFF:
 		return true
 	}
 	return false
@@ -109,6 +118,8 @@ event_type_canonical :: proc(typ: string) -> string {
 		return EVENT_ERROR
 	case EVENT_CANCEL:
 		return EVENT_CANCEL
+	case EVENT_HANDOFF:
+		return EVENT_HANDOFF
 	}
 	return typ
 }

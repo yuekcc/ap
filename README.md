@@ -20,6 +20,8 @@ ap 本体没有交互界面。`ap-tui`（终端）和 `ap-web`（浏览器）是
 - 五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`
 - 独立进程子代理、agent 定义文件、工具白名单和深度限制
 - 技能发现与清单注入；全局和项目 `AGENTS.md`；`$AP_CONFIG/SYSTEM.md` 覆盖基础提示词
+- token 预算与工具结果省略：本地估算加 usage 校准，接近窗口时把较早的大工具输出替换成固定桩
+- 自动 handoff：上下文真的不够用时生成交接文档，由 CLI 起一个承载它的新 session
 - 独立的 `ap-tui` 与 `ap-web`
 - `magi-cli`：三名角色各自投票、一票否决的决策程序，基于 `apcore` SDK
 - Windows、Linux、macOS；shell 统一使用 Bash
@@ -115,6 +117,15 @@ cat prompt.txt | ./build/ap --print0
 ./build/ap -c --print "继续"
 ./build/ap -s ses_20261022_120000_abcdef123456 --print "继续"
 ./build/ap -c --fork-session --print "从历史分叉"
+```
+
+上下文快满时 ap 会自己处理：接近窗口先省略较早的大工具输出，仍不够就生成交接文档并起一个新 session。默认开启，`--no-handoff` 只关自动交接，`--context-window 0` 关掉整套上下文管理。
+
+手动交接，把一个 session 的上下文交给新 session：
+
+```sh
+./build/ap -s ses_20261022_120000_abcdef123456 --handoff
+./build/ap -s ses_20261022_120000_abcdef123456 --handoff "继续做 X"
 ```
 
 指定 agent、模型和上限：
@@ -248,7 +259,9 @@ npm --prefix ap-web run build
 当前版本不做：
 
 - 审批、权限规则、沙箱
-- 上下文压缩、token 预算（后续由 handoff 替代）
+- 对话压缩与消息级淘汰：只做工具结果省略与 handoff，不改写 assistant 文本与 user 提示词
+- 向量检索、外部记忆库
+- 自动删减 system prompt 或工具 schema：它们超预算时只能 handoff
 - hooks、plan mode、MCP、插件系统
 - grep、glob、ls、webfetch 等额外工具
 - `--add-dir`：相对路径只相对启动目录

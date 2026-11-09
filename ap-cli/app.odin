@@ -56,8 +56,9 @@ USAGE_TEXT :: `ap - 一次性命令行 coding agent
   ap --print <提示词> [选项]   # -p 为 --print 的别名
   ap --input-file <文件> [选项]
   ap --print0 [选项]          # 0 = stdin，读取到 EOF
+  ap -s <id> --handoff [提示词] # 生成交接文档并创建新 session
 
-必须从以上三种方式中选择一种提供提示词；ap 不会隐式读取 stdin。
+必须从以上三种方式之一提供提示词（--handoff 除外）；ap 不会隐式读取 stdin。
 
 会话:
   -s, --session <id>          恢复当前项目内的指定 session
@@ -69,6 +70,7 @@ agent 与模型:
       --model <id>            覆盖配置中的 model（恢复 session 时只警告）
       --max-steps <n>         单个 turn 的最大 step 数
       --max-tokens <n>        单次响应的 max_tokens
+      --context-window <n>    覆盖上下文窗口；0 关闭预算与自动交接
       --config-dir <path>     设置 $AP_CONFIG，默认 ~/.ap
 
 提示词与上下文:
@@ -78,6 +80,8 @@ agent 与模型:
       --no-agents-md          不注入 AGENTS.md
       --no-skills             不注入技能清单
       --print-system-prompt   打印本次使用的 system prompt 后退出
+      --handoff [提示词]      立即生成交接并创建新 session；需与 -s/-c 连用
+      --no-handoff            关闭自动交接，context_too_long 仍退出 3
 
   约定: $AP_CONFIG/SYSTEM.md 存在时替换内置固定指令段；
         追加提示词写入 ~/.agents/AGENTS.md 或项目 AGENTS.md。

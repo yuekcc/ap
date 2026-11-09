@@ -308,3 +308,17 @@ test_turn_gap_before_prompt :: proc(t: ^testing.T) {
 	out := string(data)
 	testing.expect_value(t, out, "agent done\n\n")
 }
+
+// handoff 是正常结束，不是失败：turn_end 不写好也不会画成告警行。
+@(test)
+test_render_handoff_turn_end_is_silent :: proc(t: ^testing.T) {
+	out := test_render_to_file(
+		t,
+		{
+			`{"type":"message_end","message_id":"m1","content":[{"type":"text","text":"done\n"}]}`,
+			`{"type":"turn_end","turn":1,"stop_reason":"handoff"}`,
+		},
+		.History,
+	)
+	testing.expect(t, !strings.contains(out, "turn ended: handoff"))
+}

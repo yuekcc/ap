@@ -1,6 +1,10 @@
 package engine
 
+import "../platform"
+
+import "core:encoding/json"
 import "core:fmt"
+import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -319,4 +323,206 @@ test_context_build_missing_system_blob_fails :: proc(t: ^testing.T) {
 	}
 	_, _, err := context_build(project, events)
 	testing.expect_value(t, err.kind, Error_Kind.Usage)
+}
+
+// ---- 预算投影 ----
+
+budget_test_project :: proc(t: ^testing.T, name: string) -> (Project, string) {
+	project, _, dir := test_project_and_settings(t, name)
+	os.make_directory_all(project.root)
+	return project, dir
+}
+
+// 一条 user_message + 8 个大工具结果。ELIDE_KEEP_RECENT_RESULTS 是 6，
+// 所以前两个可以被省略。
+budget_test_events :: proc(project: Project, content: string) -> []Event {
+	events := make([dynamic]Event, 0, 16)
+	append(&events, budget_test_system_start(project))
+	append(
+		&events,
+		test_event("user_message", `{"v":1,"seq":0,"ts":0,"type":"user_message","content":"go"}`),
+	)
+	for i in 0 ..< 8 {
+		call_id := fmt.tprintf("call_%d", i)
+		append(
+			&events,
+			test_event(
+				"message_end",
+				json_concat(
+					`{"v":1,"seq":1,"ts":0,"type":"message_end","message_id":"m`,
+					fmt.tprintf("%d", i),
+					`","role":"assistant","content":[{"type":"tool_use","id":"`,
+					call_id,
+					`","name":"read_file","input":{"file_path":"a.txt"}}],"stop_reason":"tool_use"}`,
+				),
+			),
+		)
+		append(
+			&events,
+			test_event(
+				"tool_execution_end",
+				json_concat(
+					`{"v":1,"seq":2,"ts":0,"type":"tool_execution_end","tool_call_id":"`,
+					call_id,
+					`","ok":true,"content":`,
+					string(platform.json_canonical_string(json.Value(json.String(content)))),
+					`}`,
+				),
+			),
+		)
+	}
+	return events[:]
+}
+
+budget_test_system_start :: proc(project: Project) -> Event {
+	return test_event(
+		"session_start",
+		json_concat(
+			`{"v":1,"seq":0,"ts":0,"type":"session_start","session_id":"s","content":"system prompt","role":"system","cwd":"`,
+			project.root,
+			`","model":"m","provider":"`,
+			PROVIDER_NAME,
+			`","agent_name":"general","agent_depth":0}`,
+		),
+	)
+}
+
+// limit_tokens <= 0 时 context_build_budgeted 与 context_build 逐字节相同。
+@(test)
+test_budgeted_matches_unbudgeted_when_disabled :: proc(t: ^testing.T) {
+	project, dir := budget_test_project(t, "budget-disabled")
+	defer test_cleanup(dir)
+	content := strings.repeat("x", 4096)
+	events := budget_test_events(project, content)
+
+	want_system, want_messages, cerr := context_build(project, events)
+	testing.expect_value(t, cerr.kind, Error_Kind.None)
+	got, berr := context_build_budgeted(project, events, 0, 0, 100, context.allocator)
+	testing.expect_value(t, berr.kind, Error_Kind.None)
+	defer delete(got.messages)
+	defer delete(got.system_prompt)
+	testing.expect_value(t, got.system_prompt, want_system)
+	testing.expect_value(t, string(messages_bytes(got.messages)), string(messages_bytes(want_messages)))
+	testing.expect_value(t, got.elided_results, 0)
+}
+
+// 同一 transcript + 同一预算连算两次必须逐字节相同。
+@(test)
+test_budgeted_same_transcript_byte_identical :: proc(t: ^testing.T) {
+	project, dir := budget_test_project(t, "budget-deterministic")
+	defer test_cleanup(dir)
+	events := budget_test_events(project, strings.repeat("y", 4096))
+	limit := 3000
+
+	first, ferr := context_build_budgeted(project, events, 0, limit, 100, context.allocator)
+	testing.expect_value(t, ferr.kind, Error_Kind.None)
+	defer delete(first.messages)
+	defer delete(first.system_prompt)
+	second, serr := context_build_budgeted(project, events, 0, limit, 100, context.allocator)
+	testing.expect_value(t, serr.kind, Error_Kind.None)
+	defer delete(second.messages)
+	defer delete(second.system_prompt)
+
+	testing.expect_value(t, first.elided_results, second.elided_results)
+	testing.expect_value(t, first.estimated_tokens, second.estimated_tokens)
+	testing.expect_value(t, string(messages_bytes(first.messages)), string(messages_bytes(second.messages)))
+	testing.expect(t, first.elided_results > 0)
+}
+
+// content 与 content_ref 两种存储形式必须在阈值边界上得到同样的判定。
+@(test)
+test_budgeted_elides_blob_and_inline_alike :: proc(t: ^testing.T) {
+	project, dir := budget_test_project(t, "budget-blob-parity")
+	defer test_cleanup(dir)
+	content := strings.repeat("z", 4096)
+	sha, _ := blob_write(project, transmute([]byte)content)
+
+	events := []Event {
+		budget_test_system_start(project),
+		test_event("user_message", `{"type":"user_message","content":"go"}`),
+		test_event(
+			"message_end",
+			`{"type":"message_end","message_id":"m1","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"x"}}],"stop_reason":"tool_use"}`,
+		),
+		test_event(
+			"tool_execution_end",
+			json_concat(
+				`{"type":"tool_execution_end","tool_call_id":"call_1","ok":true,"content_ref":"`,
+				sha,
+				`","content_bytes":4096}`,
+			),
+		),
+	}
+	// 补足最近 N 个结果：只有这样这条结果才进入可省略集合。
+	inline := make([dynamic]Event, 0, 32)
+	append(&inline, ..events)
+	tail_content := strings.repeat("z", 4096)
+	for i in 0 ..< ELIDE_KEEP_RECENT_RESULTS {
+		call_id := fmt.tprintf("tail_%d", i)
+		append(
+			&inline,
+			test_event(
+				"message_end",
+				json_concat(
+					`{"type":"message_end","message_id":"t`,
+					fmt.tprintf("%d", i),
+					`","role":"assistant","content":[{"type":"tool_use","id":"`,
+					call_id,
+					`","name":"bash","input":{"command":"y"}}],"stop_reason":"tool_use"}`,
+				),
+			),
+		)
+		append(
+			&inline,
+			test_event(
+				"tool_execution_end",
+				json_concat(
+					`{"type":"tool_execution_end","tool_call_id":"`,
+					call_id,
+					`","ok":true,"content":`,
+					string(platform.json_canonical_string(json.Value(json.String(tail_content)))),
+					`}`,
+				),
+			),
+		)
+	}
+	blob_based, berr := context_build_budgeted(project, inline[:], 0, 1000, 100, context.allocator)
+	testing.expect_value(t, berr.kind, Error_Kind.None)
+	defer delete(blob_based.messages)
+	defer delete(blob_based.system_prompt)
+	testing.expect_value(t, blob_based.elided_results, 1)
+	// 字节数按解析后的内容长度算，与存储形式无关。
+	testing.expect_value(t, blob_based.messages[2].content.?, elided_stub("bash", 4096))
+}
+
+// 被省略的结果仍然校验 blob：缺失时组装失败，不静默降级。
+@(test)
+test_budgeted_elision_still_validates_blob :: proc(t: ^testing.T) {
+	project, dir := budget_test_project(t, "budget-blob-missing")
+	defer test_cleanup(dir)
+	missing := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	events := []Event {
+		budget_test_system_start(project),
+		test_event(
+			"message_end",
+			`{"type":"message_end","message_id":"m1","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"x"}}],"stop_reason":"tool_use"}`,
+		),
+		test_event(
+			"tool_execution_end",
+			json_concat(`{"type":"tool_execution_end","tool_call_id":"call_1","ok":true,"content_ref":"`, missing, `"}`),
+		),
+	}
+	_, err := context_build_budgeted(project, events, 0, 1, 100, context.allocator)
+	testing.expect_value(t, err.kind, Error_Kind.Usage)
+}
+
+// 工具定义与 system prompt 都计入估算：只算 messages 会漏。
+@(test)
+test_estimate_request_includes_system_and_tools :: proc(t: ^testing.T) {
+	messages := []Chat_Message{{role = ROLE_USER, content = "abcd"}}
+	without := estimate_request_tokens("", messages, 0)
+	with_system := estimate_request_tokens("abcd", messages, 0)
+	with_tools := estimate_request_tokens("", messages, 100)
+	testing.expect(t, with_system > without)
+	testing.expect_value(t, with_tools, without + 100)
 }

@@ -260,6 +260,9 @@ run_member :: proc(
 			max_tokens = env.settings.max_tokens,
 			base_system_prompt = base_prompt,
 			tools = make([]string, 0),
+			// magi 启用预算但不开自动交接：任一角色上下文超限按该角色失败处理，
+			// 沿用「成员失败按否决」语义。交接要开新 session，不是投票成员的事。
+			auto_handoff = false,
 		},
 	)
 	if !apcore.is_ok(oerr) {

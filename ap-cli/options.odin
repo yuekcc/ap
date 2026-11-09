@@ -24,6 +24,9 @@ Options :: struct {
 	model:                Maybe(string),
 	max_steps:            Maybe(int),
 	max_tokens:           Maybe(int),
+	context_window:       Maybe(int),
+	handoff:              Maybe(string),
+	no_handoff:           bool,
 	output_format:        Output_Format,
 	parent_session_id:    Maybe(string),
 	parent_tool_call_id:  Maybe(string),
@@ -161,6 +164,36 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			}
 			opts.max_tokens = parsed
 			i = n
+		case "--context-window":
+			value, n, err := option_value(args, i, inline, has_inline, name)
+			if !is_ok(err) {
+				return opts, err
+			}
+			parsed, ok := strconv.parse_int(value, 10)
+			if !ok || parsed < 0 {
+				return opts, make_error(.Usage, "--context-window must be a non-negative integer (0 disables the budget)")
+			}
+			opts.context_window = parsed
+			i = n
+		case "--handoff":
+			// 无值形式是「只交接」；带值时那一段文本既是交接的聚焦提示，
+			// 也是新 session 的第一个 turn。下一个参数以 - 开头时视为旗标，
+			// 需要以 - 开头的提示词请用 --handoff=<文本>。
+			if has_inline {
+				opts.handoff = inline
+			} else if i + 1 < len(args) && !strings.has_prefix(args[i + 1], "-") {
+				opts.handoff = args[i + 1]
+				i += 1
+			} else {
+				opts.handoff = ""
+			}
+			i += 1
+		case "--no-handoff":
+			if has_inline {
+				return opts, make_error(.Usage, "%s does not take a value", name)
+			}
+			opts.no_handoff = true
+			i += 1
 		case "--output-format":
 			value, n, err := option_value(args, i, inline, has_inline, name)
 			if !is_ok(err) {
@@ -241,6 +274,26 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 	}
 	if opts.fork_session && opts.session_id == nil && !opts.continue_session {
 		return opts, make_error(.Usage, "--fork-session requires --session or --continue")
+	}
+	if opts.handoff != nil {
+		if opts.session_id == nil && !opts.continue_session && !opts.fork_session {
+			return opts, make_error(.Usage, "--handoff requires --session, --continue or --fork-session")
+		}
+		if opts.print_system_prompt {
+			return opts, make_error(.Usage, "--handoff and --print-system-prompt are mutually exclusive")
+		}
+	}
+	if opts.handoff != nil && opts.no_handoff {
+		return opts, make_error(.Usage, "--handoff and --no-handoff are mutually exclusive")
+	}
+	if opts.handoff != nil {
+		// 交接的聚焦提示词就是 --handoff 的值；再传一个提示词来源会静默失效。
+		if opts.print_prompt != nil || opts.input_file != nil || opts.print0 {
+			return opts, make_error(
+				.Usage,
+				"--handoff does not take a prompt from --print, --input-file or --print0",
+			)
+		}
 	}
 	if opts.parent_tool_call_id != nil && opts.parent_session_id == nil {
 		return opts, make_error(.Usage, "--parent-tool-call-id requires --parent-session-id")

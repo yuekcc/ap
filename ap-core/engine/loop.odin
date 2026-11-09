@@ -68,6 +68,13 @@ Loop_Result :: struct {
 	cancelled:    bool,
 	error_kind:   Error_Kind,
 	fatal_error:  string,
+	// 交接成功时的正文与原因，归调用方所有（需要释放 content）。
+	// 创建新 session 由 CLI adapter 负责，引擎只产文本。
+	handoff_content: string,
+	handoff_reason:  string,
+	// 交接那次调用本身的用量。在没有主请求的预算耗尽路径上，它是本 turn
+	// 唯一的真实用量。
+	handoff_usage:   Usage,
 }
 
 Provider_Call :: #type proc(
@@ -112,6 +119,16 @@ Loop :: struct {
 	pending_end_seen: bool,
 	last_text:      string,
 	callback_error: Error,
+	// ---- 上下文预算运行态 ----
+	// 校准值只影响传入 context_build_budgeted 的 limit 与观测值，不进
+	// transcript，因此不破坏投影的纯函数性。
+	calibration_percent: int,
+	last_request_estimate: int,
+	last_observed_input: int,
+	// 自动交接开关：--no-handoff 或 agent_depth > 0 时为 false。
+	handoff_enabled: bool,
+	// 本 turn 最后一次 step 的预算快照；预算关闭时保持 nil。
+	turn_context: Maybe(Turn_Context),
 	// provider 会把 message_id / tool call id/name 借给 loop 使用；assembler
 	// 的临时缓冲在 provider_stream 返回时释放，所以 loop 需要自己持有副本。
 	owned_message_id: string,
@@ -122,15 +139,24 @@ loop_default_sleep :: proc(ms: int) {
 	time.sleep(time.Duration(ms) * time.Millisecond)
 }
 
+// turn_end 覆盖一轮的量；handoff 是独立的一次模型调用（manual handoff 没有
+// turn），所以两者都要累加，否则 session_end.usage 会漏掉交接那一次。
 historical_usage_from_events :: proc(events: []Event) -> Usage {
 	total := Usage{}
 	for ev in events {
-		if ev.type != EVENT_TURN_END {
-			continue
-		}
-		end: Turn_End_Event
-		if json.unmarshal_string(ev.line, &end) == nil {
-			total = usage_add(total, end.usage)
+		switch ev.type {
+		case EVENT_TURN_END:
+			end: Turn_End_Event
+			if json.unmarshal_string(ev.line, &end) == nil {
+				total = usage_add(total, end.usage)
+			}
+		case EVENT_HANDOFF:
+			handoff: Handoff_Event
+			if json.unmarshal_string(ev.line, &handoff) == nil {
+				if usage, has_usage := handoff.usage.?; has_usage {
+					total = usage_add(total, usage)
+				}
+			}
 		}
 	}
 	return total
@@ -181,6 +207,9 @@ loop_init :: proc(
 		emitter = emitter,
 		historical_usage = historical_usage_from_events(events),
 		turn = next_turn_from_events(events),
+		calibration_percent = 100,
+		// 子代理的职责是回一个结论，不是开新 session。
+		handoff_enabled = agent_depth == 0,
 	}
 	loop.events = make([dynamic]Event, len(events), len(events) + 16)
 	copy(loop.events[:], events)
@@ -316,6 +345,11 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 	if usage_has_any(end.usage) {
 		var_usage = end.usage
 		l.turn_usage = usage_add(l.turn_usage, end.usage)
+		// 这一次请求的真实输入长度。transcript 只追加，所以它就是下一步
+		// messages 的前缀长度，可以直接拿来校准下一次估算。
+		if observed, has_observed := end.usage.input_tokens.?; has_observed {
+			l.last_observed_input = observed
+		}
 	}
 	var_reasoning: Maybe(string)
 	if len(end.reasoning) > 0 {
@@ -437,6 +471,7 @@ loop_write_turn_end :: proc(l: ^Loop, stop_reason: string) -> Error {
 		turn = l.turn - 1,
 		stop_reason = stop_reason,
 		usage = l.turn_usage,
+		context_info = l.turn_context,
 	}
 	return loop_append(l, ev, h)
 }
@@ -601,6 +636,10 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		result.fatal_error = err.message
 		return result
 	}
+	// 校准值属于本次 turn 的运行态：新 turn 的第一份 messages 与上一 turn 的
+	// 请求前缀关系已经变（多了一条 user_message），沿用旧观测会偏。
+	l.last_request_estimate = 0
+	l.last_observed_input = 0
 	turn := l.turn
 	l.turn += 1
 	h_turn := make_header(l.store, EVENT_TURN_START)
@@ -650,10 +689,40 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			step_arena_destroy(&step_arena)
 		}
 
-		system_prompt, messages, cerr := context_build_in(
+		alloc := step_arena_allocator(&step_arena, arena_ok)
+		tools, terr := tool.registry_definitions_in(&l.registry, l.active_tools, alloc)
+		if !platform.is_ok(terr) {
+			_ = loop_write_error(l, SCOPE_SESSION, .None, terr.message, false, 1)
+			result.error_kind = .Internal
+			result.fatal_error = terr.message
+			result.num_steps = step
+			return result
+		}
+		// 每个 step 计算一次预算决策：先看不省略的投影，超阈值才省略，
+		// 省略后仍超阈值就交接。context_window_tokens = 0 时整段退化。
+		target := context_budget_target(l.settings, l.max_tokens)
+		if context_budget_invalid(l.settings, target) {
+			message := fmt.tprintf(
+				"context budget is invalid: context_window_tokens (%d) - max_tokens (%d) - reserve (%d) <= 0",
+				l.settings.context_window_tokens,
+				l.max_tokens,
+				DEFAULT_CONTEXT_RESERVE_TOKENS,
+			)
+			_ = loop_write_error(l, SCOPE_SESSION, .None, message, false, 1)
+			result.error_kind = .Usage
+			result.fatal_error = message
+			result.num_steps = step
+			return result
+		}
+		calibration := calibration_percent_from(l.last_request_estimate, l.last_observed_input)
+		l.calibration_percent = calibration
+		context_in, cerr := context_build_budgeted(
 			l.project,
 			l.events[:],
-			step_arena_allocator(&step_arena, arena_ok),
+			estimate_tool_defs_tokens(tools),
+			target,
+			calibration,
+			alloc,
 		)
 		if !is_ok(cerr) {
 			_ = loop_write_error(l, SCOPE_SESSION, .None, cerr.message, false, 1)
@@ -662,21 +731,26 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			result.num_steps = step
 			return result
 		}
-		tools, terr := tool.registry_definitions_in(
-			&l.registry,
-			l.active_tools,
-			step_arena_allocator(&step_arena, arena_ok),
-		)
-		if !platform.is_ok(terr) {
-			_ = loop_write_error(l, SCOPE_SESSION, .None, terr.message, false, 1)
-			result.error_kind = .Internal
-			result.fatal_error = terr.message
-			result.num_steps = step
-			return result
+		loop_record_context(l, context_in, target)
+		if context_in.elided_results > 0 {
+			progress(
+				l,
+				.Line,
+				"[context] elided %d tool results, ~%d tokens saved",
+				context_in.elided_results,
+				context_in.tokens_saved,
+			)
 		}
-		all_messages := make([dynamic]Chat_Message, 0, len(messages) + 1, step_arena_allocator(&step_arena, arena_ok))
-		append(&all_messages, Chat_Message{role = ROLE_SYSTEM, content = system_prompt})
-		append(&all_messages, ..messages)
+		if target > 0 &&
+		   context_in.estimated_tokens * 100 >= target * HANDOFF_TRIGGER_PERCENT {
+			if !l.handoff_enabled {
+				return loop_context_exhausted(l, result, step)
+			}
+			return loop_handoff_turn(l, result, step, HANDOFF_REASON_BUDGET_EXHAUSTED)
+		}
+		all_messages := make([dynamic]Chat_Message, 0, len(context_in.messages) + 1, alloc)
+		append(&all_messages, Chat_Message{role = ROLE_SYSTEM, content = context_in.system_prompt})
+		append(&all_messages, ..context_in.messages)
 		req := Chat_Message_Request {
 			model = l.model,
 			messages = all_messages[:],
@@ -685,11 +759,13 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			include_usage = l.settings.stream_include_usage,
 		}
 		sink := Stream_Sink{user = l, on_event = loop_provider_event}
+		l.last_request_estimate = request_raw_estimate(context_in)
 
 		attempt := 1
 		success := false
 		cancelled := false
 		context_too_long := false
+		tightened := false
 		var_final_error: Provider_Error
 		for {
 			loop_reset_attempt(l)
@@ -715,6 +791,19 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				break
 			}
 			if perr.kind == .Context_Too_Long {
+				// 估算失误不该直接放弃：第一次收到超限时收紧预算重发同一 step，
+				// 不写 error、不增加 step、不写 turn_end。第二次才进入交接。
+				if target > 0 && l.handoff_enabled && !tightened {
+					tightened = true
+					if tightened_request(l, context_in, alloc, target, &req) {
+						progress(
+							l,
+							.Line,
+							"[context] provider rejected request as too long; recomputing with tighter budget",
+						)
+						continue
+					}
+				}
 				context_too_long = true
 				break
 			}
@@ -754,15 +843,11 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			return result
 		}
 		if context_too_long {
-			_ = loop_write_error(l, SCOPE_LLM, .Context_Too_Long, "context too long; start a new session or reduce input", false, attempt)
-			_ = loop_write_turn_end(l, STOP_REASON_CONTEXT_TOO_LONG)
-			result.error_kind = .Provider
-			result.fatal_error = "context_too_long"
-			result.stop_reason = STOP_REASON_CONTEXT_TOO_LONG
-			result.result_text = strings.clone(l.last_text)
-			result.num_steps = step
-			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
-			return result
+			// 允许交接时，先强制重算一次并换一份更紧的投影，仍不够就交接。
+			if target > 0 && l.handoff_enabled {
+				return loop_handoff_turn(l, result, step, HANDOFF_REASON_CONTEXT_TOO_LONG)
+			}
+			return loop_context_exhausted(l, result, step)
 		}
 		if !success {
 			result.error_kind = .Provider
@@ -821,4 +906,139 @@ loop_own_calls :: proc(l: ^Loop, calls: []Assembled_Tool_Call) {
 		}
 	}
 	l.owned_calls = owned
+}
+
+// ---- 上下文预算的 step 辅助 ----
+
+// 记录本 turn 最后一次 step 的预算快照；预算关闭时保持 null。
+loop_record_context :: proc(l: ^Loop, context_in: Budgeted_Context, target: int) {
+	if target <= 0 {
+		l.turn_context = nil
+		return
+	}
+	l.turn_context = Turn_Context {
+		estimated_tokens    = context_in.estimated_tokens,
+		limit_tokens        = target,
+		elided_results      = context_in.elided_results,
+		elided_bytes        = context_in.elided_bytes,
+		calibration_percent = context_in.calibration_percent,
+	}
+}
+
+// 实际发出的这一份请求的原始估算，作为下一次 usage 校准的分母。
+request_raw_estimate :: proc(context_in: Budgeted_Context) -> int {
+	return estimate_request_tokens(
+		context_in.system_prompt,
+		context_in.messages,
+		context_in.tools_tokens,
+	)
+}
+
+// 收紧预算重发同一 step：把水位压到目标的 80% 再减半，并重新省略。
+// 只有投影层会变，transcript 不动，也没有新增事件。
+tightened_request :: proc(
+	l: ^Loop,
+	context_in: Budgeted_Context,
+	allocator: runtime.Allocator,
+	target: int,
+	req: ^Chat_Message_Request,
+) -> bool {
+	tighter := target * CONTEXT_ELIDE_TARGET_PERCENT / 100 / 2
+	if tighter <= 0 {
+		return false
+	}
+	rebuilt, cerr := context_build_budgeted(
+		l.project,
+		l.events[:],
+		context_in.tools_tokens,
+		tighter,
+		context_in.calibration_percent,
+		allocator,
+	)
+	if !is_ok(cerr) {
+		return false
+	}
+	merged := make([dynamic]Chat_Message, 0, len(rebuilt.messages) + 1, allocator)
+	append(&merged, Chat_Message{role = ROLE_SYSTEM, content = rebuilt.system_prompt})
+	append(&merged, ..rebuilt.messages)
+	req.messages = merged[:]
+	l.last_request_estimate = request_raw_estimate(rebuilt)
+	loop_record_context(l, rebuilt, target)
+	return true
+}
+
+// 不允许交接时的现状出口：写 error、写 turn_end、按 provider 错误返回。
+loop_context_exhausted :: proc(l: ^Loop, result: Loop_Result, step: int) -> Loop_Result {
+	out := result
+	_ = loop_write_error(
+		l,
+		SCOPE_LLM,
+		.Context_Too_Long,
+		"context too long; start a new session or reduce input",
+		false,
+		1,
+	)
+	_ = loop_write_turn_end(l, STOP_REASON_CONTEXT_TOO_LONG)
+	out.error_kind = .Provider
+	out.fatal_error = "context_too_long"
+	out.stop_reason = STOP_REASON_CONTEXT_TOO_LONG
+	out.result_text = strings.clone(l.last_text)
+	out.num_steps = step
+	out.session_usage = usage_add(l.historical_usage, l.turn_usage)
+	return out
+}
+
+// 交接请求的 system 前缀是本次 session 冻结的 prompt 的独立副本，
+// 由 loop_handoff_turn 释放。
+handoff_frozen_prompt :: proc(project: Project, events: []Event) -> (string, Error) {
+	_, prompt, err := session_system_prompt(project, events)
+	if !is_ok(err) {
+		return "", err
+	}
+	return strings.clone(prompt), ok_error()
+}
+
+// 生成交接文档并结束本次 turn。失败时退回 loop_context_exhausted 的路径。
+loop_handoff_turn :: proc(l: ^Loop, result: Loop_Result, step: int, reason: string) -> Loop_Result {
+	out := result
+	frozen_prompt, serr := handoff_frozen_prompt(l.project, l.events[:])
+	if !is_ok(serr) {
+		return loop_context_exhausted(l, result, step)
+	}
+	defer delete(frozen_prompt)
+	handoff, written, herr := handoff_run(
+		{
+			project = l.project,
+			store = l.store,
+			settings = l.settings,
+			provider = &l.provider,
+			provider_call = l.provider_call,
+			model = l.model,
+			frozen_system_prompt = frozen_prompt,
+			events = l.events[:],
+			// 自动交接没有聚焦提示词：那个入口只有 --handoff，走的是 session_handoff。
+			focus_prompt = "",
+			reason = reason,
+			cancel = l.cancel,
+			on_transcript = l.emitter.on_transcript,
+			user = l.emitter.user,
+		},
+		context.allocator,
+	)
+	if herr.kind != .None {
+		_ = loop_write_error(l, SCOPE_LLM, herr.kind, fmt.tprintf("handoff failed: %s", herr.message), false, 1)
+		return loop_context_exhausted(l, result, step)
+	}
+	// 事件行归 loop.events 所有，随 loop_destroy 释放。
+	append(&l.events, written)
+	_ = loop_write_turn_end(l, STOP_REASON_HANDOFF)
+	out.stop_reason = STOP_REASON_HANDOFF
+	out.handoff_content = handoff.content
+	out.handoff_reason = reason
+	out.handoff_usage = handoff.usage
+	out.result_text = strings.clone(l.last_text)
+	out.num_steps = step
+	out.usage = l.turn_usage
+	out.session_usage = usage_add(l.historical_usage, l.turn_usage)
+	return out
 }

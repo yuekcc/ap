@@ -29,6 +29,9 @@
 | `--model <id>` | model_id | 覆盖 model |
 | `--max-steps <n>` | 正整数 | 单个 turn 的最大 step 数 |
 | `--max-tokens <n>` | 正整数 | 单次响应的 `max_tokens` |
+| `--context-window <n>` | 非负整数 | 覆盖 `context_window_tokens`；`0` 关闭预算与自动交接 |
+| `--handoff [提示词]` | 可选文本 | 立即生成交接文档并创建新 session；需与 `-s`、`-c` 或 `--fork-session` 连用 |
+| `--no-handoff` | — | 关闭自动交接，`context_too_long` 恢复为退出 3 |
 | `--output-format <fmt>` | `text`、`json`、`stream-json` | 输出格式，默认 `text` |
 | `--parent-session-id <id>` | session_id | 标记当前进程是某个 session 的子代理 |
 | `--parent-tool-call-id <id>` | tool_call_id | 父进程中对应的 `task` 调用 |
@@ -43,10 +46,12 @@
 约束：
 
 - `-s` 与 `-c` 互斥。`--fork-session` 必须与其中之一连用。
+- `--handoff` 必须与 `-s`、`-c` 或 `--fork-session` 之一连用，与 `--print-system-prompt` 互斥，与 `--no-handoff` 互斥。源 session 没有任何 `user_message` 时退出 2。
+- `--context-window` 必须是非负整数。`0` 表示显式关闭预算，与不传不等价：不传时取配置值，默认为 `1048576`。
 - `--parent-tool-call-id` 必须与 `--parent-session-id` 同时使用。新 session 的父 transcript 必须存在。
 - `--session` 与 `--parent-session-id` 的取值不能是 `.`、`..`，也不能包含 `/`、`\` 或 NUL。
 - `--max-steps` 与 `--max-tokens` 必须是正整数。`--agent-depth` 必须是非负整数。
-- 新 session 的 `model` 与 `max_steps` 优先级是命令行 > agent 定义 > `settings.json`。`max_tokens` 只有命令行与 `settings.json` 两级，agent 定义没有该字段。
+- 新 session 的 `model` 与 `max_steps` 优先级是命令行 > agent 定义 > `settings.json`。`max_tokens` 只有命令行与 `settings.json` 两级，agent 定义没有该字段。不传 `--max-tokens` 时取 `settings.json`，两者都没有时为默认值 `65536`。
 - 不提供 `--add-dir`。相对路径只相对启动目录，绝对路径不受限制。
 - 参数非法、缺值或冲突时退出 2。
 
@@ -58,6 +63,19 @@
 - `--input-file`：路径按启动目录解析，支持 `~`。文件必须存在、可读、非空且是合法 UTF-8。
 - `--print0`：从 fd 0 读到 EOF。帮助文本写明 `0 = stdin`，不要把它理解成 NUL 分隔。空输入和非法 UTF-8 都退出 2。
 - ap 不再根据 stdin 是否为 TTY 隐式读取。集成方需要从 stdin 取提示词时，必须显式传 `--print0`，写完提示词后关闭写端。
+
+## handoff
+
+`--handoff` 走一条独立路径：先让源 session 生成交接文档，再由 CLI 创建承载它的新 session。
+
+- `ap -s <id> --handoff "<prompt>"`：`<prompt>` 同时是交接的聚焦提示与**新 session** 的第一个 turn，用同一条文本。新 session 跑完这个 turn 后正常输出结果。
+- `ap -s <id> --handoff`：只创建新 session 并打印它的 id，不跑 turn。
+- 源 session 先写 `handoff` 事件与 `session_end`，再创建新 session。两者的 `session_end.usage` 都包含交接那次调用。
+- 新 session 走正常 new session 路径：重新组装 system prompt，用当前工具集、当前模型、当前 `AGENTS.md` 与技能。**不是 fork**。第一条事件是承载交接文档的 `user_message`，首行为 `## 上一会话交接`。
+- `text` 格式下交接文档不进 stdout，stderr 写一行 `handoff created session <id>`；`json` 格式新增顶层 `handoff` 对象（见下）；`stream-json` 照常转发 `handoff` 事件。
+- 交接成功退出 0，`stop_reason` 为 `handoff`。交接失败按 `--no-handoff` 的行为结束，退出 3。
+
+自动交接（`budget_exhausted`、`context_too_long`）不需要 `--handoff`：预算默认开启，上下文真的不够用时自动发生。`--no-handoff` 关闭它，`context_window_tokens = 0` 把整套上下文管理关掉。
 
 ## 上下文开关
 
@@ -105,6 +123,7 @@ stdout 是机器通道，只放结果或事件。日志、进度和工具输出�
 - 一次工具调用是 `### <工具名>`，随后是工具输出。
 - 工具结束是斜体状态行 `_<工具名> ok (<N>ms)_` 或 `_<工具名> failed (<N>ms)_`。
 - 重试提示是 `[retry] ...`。`text` 模式不重复打印重试提示，因为 `error` 事件已经显示过。
+- 上下文管理提示是 `[context] ...`：省略时写 `elided N tool results, ~M tokens saved`，provider 拒绝后可重算时写 `provider rejected request as too long; recomputing with tighter budget`。
 
 turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示：
 
@@ -113,6 +132,8 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 
 继续对话，执行：<argv[0]> -s <session_id>
 ```
+
+创建了交接 session 时，这一行换成 `handoff created session <id>`，指向新 session。
 
 ### json 结果
 
@@ -132,9 +153,22 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 }
 ```
 
-`stop_reason` 的取值是 `stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`。字段没有值时写 `null`，不要用 0 冒充真实值。`tool_use` 只出现在 provider 结束原因里，不是最终 turn 的 `stop_reason`。
+`stop_reason` 的取值是 `stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`、`handoff`。字段没有值时写 `null`，不要用 0 冒充真实值。`tool_use` 只出现在 provider 结束原因里，不是最终 turn 的 `stop_reason`。
 
-`usage` 只在 `stop`、`max_tokens`、`max_steps` 三条正常结束路径填入本 turn 的累加。取消、`context_too_long`、provider 最终失败和工具基础设施故障的 usage 各字段为 `null`。取消的 `stop_reason` 是 `cancelled`。provider 最终失败和工具基础设施故障可能让 `stop_reason` 为 `null`。整个 session 的累计看 `session_end.usage`。
+有交接时新增顶层字段，没有时为 `null`：
+
+```json
+"handoff": {
+  "reason": "budget_exhausted",
+  "session_id": "ses_...",
+  "content": "...",
+  "usage": { "...": "..." }
+}
+```
+
+`session_id` 是承载交接文档的新 session，`content` 是交接文档正文，`usage` 是生成它那次调用的用量。`reason` 取 `budget_exhausted`、`context_too_long` 或 `manual`。
+
+`usage` 只在 `stop`、`max_tokens`、`max_steps` 三条正常结束路径填入本 turn 的累加。交接成功时本 turn 的 `usage` 仍可能是 `null`（预算耗尽路径没有发出主请求），交接那次调用的用量看 `handoff.usage` 与 `session_end.usage`。取消、`context_too_long`、provider 最终失败和工具基础设施故障的 usage 各字段为 `null`。取消的 `stop_reason` 是 `cancelled`。provider 最终失败和工具基础设施故障可能让 `stop_reason` 为 `null`。整个 session 的累计看 `session_end.usage`。
 
 没有任何 assistant 文本时，`result` 是空字符串。`text` 格式下 stdout 不写任何字节。
 
@@ -153,10 +187,10 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 正常结束，包括 `stop_reason` 为 `max_steps` 或 `max_tokens` |
+| 0 | 正常结束，包括 `stop_reason` 为 `max_steps`、`max_tokens` 或 `handoff` |
 | 1 | 内部错误，例如 transcript 写入或 flush 失败、事件序列化失败 |
 | 2 | 用法或配置错误，例如参数非法、模型未配置、`$AP_CONFIG` 不可写、找不到 bash、session 不存在 |
-| 3 | provider 错误，例如鉴权失败、模型不存在、重试耗尽、`context_too_long` |
+| 3 | provider 错误，例如鉴权失败、模型不存在、重试耗尽，以及关闭或退出的 `context_too_long` |
 | 4 | 工具基础设施故障，例如无法 spawn shell、工具参数或 system prompt 的 blob 写入失败 |
 | 130 | 收到 SIGINT 或 Windows Ctrl+C |
 | 143 | 收到 SIGTERM |
@@ -175,12 +209,13 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 
   "max_steps": 100,                         // 单个 turn 的最大 step 数
   "max_agent_depth": 1,                     // 子代理最大嵌套深度
-  "max_tokens": 8192,                       // 单次响应上限
+  "max_tokens": 65536,                     // 单次响应上限
   "tool_timeout_ms": 120000,                // bash 默认超时
   "llm_timeout_ms": 600000,                 // 单次 LLM 请求总超时
   "blob_threshold_bytes": 102400,           // 超过则写 blob
   "max_capture_bytes": 67108864,            // 单次工具输出硬上限
-  "stream_include_usage": true              // 请求 stream_options.include_usage
+  "stream_include_usage": true,             // 请求 stream_options.include_usage
+  "context_window_tokens": 1048576          // 模型上下文窗口，0 表示不设预算
 }
 ```
 
@@ -191,14 +226,17 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 3. `base_url` 缺省为官方地址，末尾斜杠会被去掉，空值报错。
 4. 未知字段忽略并警告。类型错误、非法取值都按配置错误退出 2。显式 `null` 按缺失处理。
 5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、两个超时和两个尺寸上限必须为正。`max_agent_depth` 必须非负。
-6. `ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`。
+6. `context_window_tokens` 必须非负；`0` 表示不设预算。非零时必须大于 `max_tokens`，否则预算公式 `target = context_window_tokens - max_tokens - reserve` 必为负。
+7. `ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`。
+
+默认值按 1M 上下文、64K 单次输出的模型规格取：`max_tokens` 为 `65536`，`context_window_tokens` 为 `1048576`。它们是模型能力的上限声明，不是每轮都会用到的量：`max_tokens` 是单次响应的天花板，`context_window_tokens` 是预算计算的输入。两者都会被命令行参数覆盖。
 
 字段归属：
 
 | 字段 | 归属 |
 | --- | --- |
 | `model`、`base_url`、`api_key` | SDK provider |
-| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage` | SDK loop |
+| `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage`、`context_window_tokens` | SDK loop |
 | `llm_timeout_ms` | SDK provider |
 | `tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
 

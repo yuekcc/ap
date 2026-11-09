@@ -171,15 +171,31 @@ make_loop_emitter :: proc(out: ^Output_State) -> apcore.Emitter {
 	}
 }
 
+// handoff 的对外载荷：新 session id 用来接着聊，content 是交接文档正文。
+Final_Handoff :: struct {
+	reason:     string,
+	session_id: string,
+	content:    string,
+	usage:      protocol.Usage,
+}
+
 Final_Json :: struct {
 	session_id:  string,
 	result:      string,
 	stop_reason: Maybe(string),
 	num_steps:   int,
 	usage:       protocol.Usage,
+	// 没有交接时为 null，前端不用区分「字段不存在」与「没交接」。
+	handoff:     Maybe(Final_Handoff),
 }
 
-output_final :: proc(out: ^Output_State, session_id: string, result: apcore.Turn_Result) {
+// handoff 由调用方提供：新 session id 只有在 CLI 创建完新 session 之后才知道。
+output_final :: proc(
+	out: ^Output_State,
+	session_id: string,
+	result: apcore.Turn_Result,
+	handoff: Maybe(Final_Handoff) = nil,
+) {
 	switch out.format {
 	case .Text:
 		if len(result.result_text) == 0 {
@@ -201,6 +217,7 @@ output_final :: proc(out: ^Output_State, session_id: string, result: apcore.Turn
 			num_steps = result.num_steps,
 			usage = result.usage,
 		}
+		payload.handoff = handoff
 		data, err := platform.json_marshal_utf8(payload)
 		if err != nil {
 			return

@@ -38,7 +38,16 @@ Loop 只看 `Provider_Error.retryable`，不重新按 kind 分类。Provider 把
 
 ## 上下文超限
 
-`context_too_long` 不重试，也不进入上述重试循环。Loop 写专用 `error` 与 `turn_end(context_too_long)`，退出 3。完整事件顺序与固定错误文本见 [context-management.md](context-management.md)。
+`context_too_long` 不进入上述重试循环。预算关闭（`context_window_tokens = 0`）、`--no-handoff` 或 `agent_depth > 0` 时行为不变：Loop 写专用 `error` 与 `turn_end(context_too_long)`，退出 3。
+
+开启自动交接时有两级纠正：
+
+1. 第一次收到 `context_too_long`：把预算水位收紧到目标的一半，重新省略投影并重发同一个 step。不写 `error`、不增加 step、不写 `turn_end`，只在 stderr 写一行 `[context] provider rejected request as too long; recomputing with tighter budget`。
+2. 第二次仍超限：生成交接文档，`turn_end.stop_reason` 为 `handoff`，退出 0。
+
+交接调用本身失败（provider 错误、没有 `message_end`、正文为空）时退回第一段的行为：写 `error(scope=llm, kind=<原错误>, message="handoff failed: ...")`、`turn_end(context_too_long)`、退出 3。交接只尝试一次，不重试。
+
+完整决策顺序、阈值与事件顺序见 [context-management.md](context-management.md)。
 
 ## 工具失败
 

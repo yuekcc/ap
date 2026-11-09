@@ -33,6 +33,8 @@ Session_Request :: struct {
 	max_steps:           int,    // 0 = 用 Settings.max_steps
 	max_tokens:          int,    // 0 = 用 Settings.max_tokens
 	agent_depth:         int,
+	// false 关闭自动交接（--no-handoff）。agent_depth > 0 时引擎自己也会关掉。
+	auto_handoff:        bool,
 	parent_session_id:   Maybe(string),
 	parent_tool_call_id: Maybe(string),
 
@@ -63,7 +65,10 @@ Session :: struct {
 	agent_depth:  int,
 	max_steps:    int,
 	max_tokens:   int,
+	auto_handoff: bool,
 	events:       []Event,
+	// nil 表示走 provider_stream。测试用它换成假 provider，避免真实 HTTP。
+	provider_call: Provider_Call,
 }
 
 Close_Options :: struct {
@@ -284,6 +289,7 @@ make_session :: proc(
 		agent_depth  = agent_depth,
 		max_steps    = resolved.max_steps,
 		max_tokens   = resolved.max_tokens,
+		auto_handoff = req.auto_handoff,
 		events       = events,
 	}
 }
@@ -428,6 +434,7 @@ turn_run :: proc(
 		s.events,
 		emitter,
 	)
+	loop.handoff_enabled = loop.handoff_enabled && s.auto_handoff
 	defer loop_destroy(&loop)
 	return loop_run_turn(&loop, prompt), ok_error()
 }
@@ -526,4 +533,97 @@ new_session_id :: proc() -> string {
 		second,
 		string(hex[:n]),
 	)
+}
+
+// 往 session 里写一条 user_message，不开始 turn。
+// 只用于交接：新 session 的第一条事件是承载交接文档的 user_message，
+// manual handoff 不带 prompt 时没有 turn 可跑。
+session_seed_user_message :: proc(s: ^Session, content: string) -> (string, Error) {
+	h := make_header(&s.store, EVENT_USER_MESSAGE)
+	line, err := transcript_append_line(&s.store, User_Message_Event{header = h, content = content})
+	if !is_ok(err) {
+		return "", err
+	}
+	events := make([]Event, len(s.events) + 1)
+	copy(events, s.events)
+	events[len(s.events)] = Event{v = h.v, seq = h.seq, ts = h.ts, type = h.type, line = line}
+	s.events = events
+	return line, ok_error()
+}
+
+// ---- handoff（会话级） ----
+//
+// 引擎只产交接文本并写 handoff 事件；创建新 session、打印 id、决定退出码
+// 都属于 CLI adapter。session_handoff 同时服务自动交接（turn 内已经跑过一次
+// 投影）与 manual handoff（--handoff，没有 turn）。
+
+Session_Handoff_Result :: struct {
+	content: string,
+	reason:  string,
+	usage:   Usage,
+}
+
+session_handoff_destroy :: proc(result: ^Session_Handoff_Result) {
+	delete(result.content)
+	result.content = ""
+}
+
+session_handoff :: proc(
+	s: ^Session,
+	reason: string,
+	focus_prompt: string,
+	cancel: ^platform.Cancel_Token,
+	emitter: Emitter,
+) -> (Session_Handoff_Result, Error) {
+	out := Session_Handoff_Result{reason = reason}
+	if reason == HANDOFF_REASON_MANUAL && !session_has_user_message(s.events) {
+		return out, make_error(.Usage, "--handoff requires a session with at least one user_message")
+	}
+	frozen_prompt, perr := handoff_frozen_prompt(s.project, s.events)
+	if !is_ok(perr) {
+		return out, perr
+	}
+	defer delete(frozen_prompt)
+
+	provider := provider_init(s.settings)
+	call := s.provider_call
+	if call == nil {
+		call = provider_stream
+	}
+	// 事件行由 handoff_run 通过 emitter 转发；这里只需要正文与用量。
+	handoff, written, herr := handoff_run(
+		{
+			project = s.project,
+			store = &s.store,
+			settings = s.settings,
+			provider = &provider,
+			provider_call = call,
+			model = s.model,
+			frozen_system_prompt = frozen_prompt,
+			events = s.events,
+			focus_prompt = focus_prompt,
+			reason = reason,
+			cancel = cancel,
+			on_transcript = emitter.on_transcript,
+			user = emitter.user,
+		},
+		context.allocator,
+	)
+	if herr.kind != .None {
+		return out, make_error(.Provider, "handoff failed: %s", herr.message)
+	}
+	// 这条 line 是 transcript_append_line 的独立副本，session 层没有持有者。
+	delete(written.line)
+	out.content = handoff.content
+	out.usage = handoff.usage
+	return out, ok_error()
+}
+
+session_has_user_message :: proc(events: []Event) -> bool {
+	for ev in events {
+		if ev.type == EVENT_USER_MESSAGE {
+			return true
+		}
+	}
+	return false
 }

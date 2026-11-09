@@ -379,3 +379,21 @@ test("session_start 更新当前 session", () => {
 	assert.equal(state.sessionId, "ses_1");
 	assert.equal(state.lastSeq, 1);
 });
+
+// handoff 不是失败：turn_end 落成 handoff 不应产生告警，turn_done 也不应报错。
+test("handoff 结束不当作失败", () => {
+	let state = createState();
+	state = applyEvent(state, ev("turn_end", { seq: 1, stop_reason: "handoff" }));
+	assert.equal(state.items.length, 0);
+	assert.equal(state.turnEndedNotice, false);
+
+	state = { ...state, running: true };
+	state = applyTurnDone(state, {
+		exit_code: 0,
+		stop_reason: "handoff",
+		usage: {},
+		stderr_preview: null,
+	});
+	assert.equal(state.running, false);
+	assert.equal(state.items.length, 0);
+});

@@ -24,7 +24,7 @@ user_message
 - 重试不写新的 `step_start`，只写 `error.attempt` 增加的 `error` 事件。
 - 取消在每个 step 顶部、每个工具执行前检查。取消路径见 [errors-and-cancellation.md](errors-and-cancellation.md)。
 
-`turn_end.stop_reason` 只有五个取值：`stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`。assistant 的 `message_end.stop_reason` 取 `stop`、`tool_use`、`max_tokens`、`cancelled`。
+`turn_end.stop_reason` 只有六个取值：`stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`、`handoff`。`handoff` 不是失败：本轮正常结束，交接文档已写入 `handoff` 事件，由 CLI 创建承载它的新 session。assistant 的 `message_end.stop_reason` 取 `stop`、`tool_use`、`max_tokens`、`cancelled`。
 
 以下路径不写 `turn_end`：provider 最终失败、上下文组装失败、工具 schema 解析失败、工具 fatal 故障、transcript 写入失败。它们以 `session_end(reason=error)` 结束。transcript 写入失败时可能连 `session_end` 也无法落盘。
 
@@ -70,7 +70,7 @@ user_message
 
 - `message_end.usage`：本次响应的 usage，可能为 `null`。
 - `turn_end.usage`：本 turn 内各 step 的累加。
-- `session_end.usage`：整个 session 的累加，按所有 `turn_end.usage` 求和，包含此前多次恢复运行。
+- `session_end.usage`：整个 session 的累加，按所有 `turn_end.usage` 与 `handoff.usage` 求和，包含此前多次恢复运行。
 
 ## session_start
 
@@ -123,9 +123,40 @@ user_message
 | 事件 | 字段 | 说明 |
 | --- | --- | --- |
 | `turn_start` | `turn` | 从 1 开始，session 内继续递增 |
-| `turn_end` | `turn`、`stop_reason`、`usage` | 结束本 turn |
+| `turn_end` | `turn`、`stop_reason`、`usage`、`context` | 结束本 turn |
 
-`turn_end.turn` 与对应的 `turn_start.turn` 相同。`stop_reason` 取五个终止值之一。
+`turn_end.turn` 与对应的 `turn_start.turn` 相同。`stop_reason` 取六个终止值之一。
+
+`context` 是可选字段：开启预算时记录本 turn 最后一次 step 决策后的快照，`context_window_tokens` 为 0 时为 `null`。
+
+```json
+"context": {
+  "estimated_tokens": 121340,
+  "limit_tokens": 950272,
+  "elided_results": 4,
+  "elided_bytes": 183422,
+  "calibration_percent": 103
+}
+```
+
+这些字段只用于观测，不进 transcript 以外的任何地方，也不进入 messages。旧版本读新 transcript 时忽略整个字段。计算规则见 [context-management.md](context-management.md)。
+
+## handoff
+
+把即将结束的对话压缩成交接文档的那一次模型调用的产物。它只追加，不改写任何历史事件。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `reason` | string | `budget_exhausted`、`context_too_long` 或 `manual` |
+| `content` | string | 交接文档正文；写入 blob 时为空串 |
+| `content_ref`、`content_bytes`、`content_preview` | 可选 | blob 引用、字节数与预览，规则与其它内容字段一致 |
+| `usage` | usage | 这次交接调用本身的用量；未调用时为全 `null` |
+| `source_events` | int | 参与投影的 transcript 事件数，仅诊断用 |
+
+- 写入顺序遵循 blob 先写后引用：先写 blob 并 fsync，再追加事件。
+- `handoff` 同时登记进 `event_type_known` 与 `event_type_canonical`，恢复时不会当未知事件丢掉。
+- 同一 session 可以有多条 `handoff`，恢复时全部保留。投影忽略它：它不是 message。
+- `handoff.usage` 计入 `session_end.usage`。manual handoff 没有 turn，用量只能挂在事件上。
 
 ## step_start
 

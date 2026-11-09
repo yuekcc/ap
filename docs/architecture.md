@@ -131,6 +131,7 @@ preview_prompt :: proc(req: Session_Request) -> (Session_Info, Error)
 
 context_build :: proc(project: Project, events: []Event) -> (string, []Chat_Message, Error)
 context_build_in :: proc(project: Project, events: []Event, allocator: runtime.Allocator) -> (string, []Chat_Message, Error)
+context_build_budgeted :: proc(project: Project, events: []Event, tools_tokens, limit_tokens, calibration_percent: int, allocator: runtime.Allocator) -> (Budgeted_Context, Error)
 build_system_prompt :: proc(opts: System_Prompt_Options) -> string
 ```
 
@@ -225,6 +226,8 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error)
 ## 契约
 
 1. `context_build` 必须是纯函数。同一 transcript 和同一 project 得到逐字节相同的 messages。它不调用 LLM，不压缩，不写 transcript，不重新扫描记忆或技能。
+
+   `context_build_budgeted` 把契约扩展成「(transcript, budget) 的纯函数」：`limit_tokens` 与 `calibration_percent` 由调用方显式传入，不读环境、不读时钟、不做 IO 决策。它唯一新增的行为是把较早的大工具输出在投影层替换成固定桩文本。`limit_tokens <= 0` 时与 `context_build` 逐字节相同。
 2. transcript 只追加。`transcript_append_line` 成功返回时，该行已写入并 flush。恢复时唯一允许的物理改动是截掉崩溃留下的不完整尾行，不写修复事件。
 3. blob 先写后引用。`blob_write` 先写临时文件，执行 `os.sync`，再改名到 `<sha256>`。引用 blob 的事件必须在这之后追加。blob 缺失或校验失败时恢复失败，不静默降级。
 4. provider 的返回值是本次请求的权威结果。sink 里的 `Provider_Error_Event` 只是通知。`provider_stream` 返回后不得再回调。

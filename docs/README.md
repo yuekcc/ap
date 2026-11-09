@@ -50,7 +50,7 @@ ap 是用 Odin 写的 coding agent。输入一条提示词，它进入 ReAct 循
 | 会话存储 | 只追加 JSONL transcript 加内容寻址 blob | [cli-and-config.md](cli-and-config.md) |
 | 大输出 | 超过 `blob_threshold_bytes` 写 blob，默认 102400 字节 | [tools.md](tools.md) |
 | 诊断日志 | stderr 加 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，默认 warning 及以上 | [cli-and-config.md](cli-and-config.md) |
-| 上下文 | 不做压缩与 token 预算，上下文超限的唯一出口是 `context_too_long` | [context-management.md](context-management.md) |
+| 上下文 | 面向 1M 窗口做 token 预算：本地估算加 usage 校准，接近窗口先省略较早的大工具输出，仍不够就 handoff 到新 session。不做对话压缩与消息级淘汰 | [context-management.md](context-management.md) |
 | 恢复 | 以 transcript 为准，system prompt、model、agent、cwd 与工具集冻结 | [react-loop-and-session.md](react-loop-and-session.md) |
 | 记忆与注入 | `AGENTS.md` 分层注入，`SYSTEM.md` 可替换基础段，`--no-agents-md` 与 `--no-skills` 可裁剪 | [context-management.md](context-management.md) |
 | 技能 | 只发现并注入清单，正文按需读取 | [skills.md](skills.md) |
@@ -114,13 +114,14 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [magi.md](magi.md) | 三角色投票、一票否决、输入输出与失败语义 | 规格 |
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、取消、超时、落盘 | 规格 |
 | [proposals/cli-explicit-prompt-source.md](proposals/cli-explicit-prompt-source.md) | 提示词三选一的设计记录 | 设计记录 |
+| [proposals/context-budget-and-handoff.md](proposals/context-budget-and-handoff.md) | token 预算、工具结果省略与 handoff 的设计记录（已实现，决策理由保留） | 设计记录 |
 | [proposals/cli-prompt-context-tools.md](proposals/cli-prompt-context-tools.md) | 上下文裁剪与工具开关的设计记录 | 设计记录 |
 | [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
 | [TODO.md](TODO.md) | docs 重写计划与验收清单 | 工作清单 |
 
 ## 与 Claude Code 的关系
 
-ap 借鉴了 Claude Code 的循环骨架、只追加 transcript、技能清单、子代理和结构化输出。没有采纳审批与 hooks，因为它们与全自动执行冲突。没有采纳 TodoWrite 和 plan mode，因为它们需要交互界面。上下文压缩留给后续 handoff。MCP 与插件系统留到核心循环稳定之后。完整的非目标清单见仓库根目录的 [README.md](../README.md)。
+ap 借鉴了 Claude Code 的循环骨架、只追加 transcript、技能清单、子代理和结构化输出。没有采纳审批与 hooks，因为它们与全自动执行冲突。没有采纳 TodoWrite 和 plan mode，因为它们需要交互界面。上下文压缩没有采纳：省略只作用在工具结果上，assistant 文本与 user 提示词永不改写，真的不够用就 handoff 到新 session，决策理由见 [proposals/context-budget-and-handoff.md](proposals/context-budget-and-handoff.md)。MCP 与插件系统留到核心循环稳定之后。完整的非目标清单见仓库根目录的 [README.md](../README.md)。
 
 ## 相关文档
 

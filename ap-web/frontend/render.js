@@ -15,7 +15,8 @@ export const MAX_ARG_BYTES = 240;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-const NORMAL_STOP_REASONS = new Set(["", "stop", "tool_use"]);
+// handoff 不是失败：本轮正常结束，接着在新 session 里继续。
+const NORMAL_STOP_REASONS = new Set(["", "stop", "tool_use", "handoff"]);
 
 // ---------------------------------------------------------------------------
 // 纯工具函数
