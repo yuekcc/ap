@@ -140,7 +140,7 @@ approved = 每名成员 status == "ok" 且 veto == false
 1. 解析参数，设置控制台，确定 `$AP_CONFIG` 与启动目录。
 2. 打开 `$AP_CONFIG/logs` 的当天日志文件。
 3. 读取并校验请求。
-4. 读取 `settings.json` 的 provider 子集，应用 `--model` 与 `--max-tokens`。
+4. 读取配置文件（`settings.jsonc` 优先）的 provider 子集，应用 `--model` 与 `--max-tokens`。
 5. 调 `apcore.env_open` 一次，工具注册表为空。三名成员共用只读 `Env`。
 6. 安装信号处理，启动三个线程，每名成员各跑一个 `Session_Kind.New` session。
 7. 每名成员先调用一次 `apcore.turn_run`。投票 JSON 不合法时，在同一个 session 再调用一次修复 turn。
@@ -233,14 +233,14 @@ constitution.md
 | 修复轮返回错误 | 成员 `error`，`stop_reason="repair_turn"` |
 | 成员被取消 | 成员 `error`，`stop_reason="cancelled"`，进程随后按信号退出 |
 | 线程创建失败 | 该成员同步执行，不单独计为失败 |
-| `settings.json` 缺失或字段无效 | 启动前退出码 2，不创建 session |
+| 配置文件（`settings.json` / `settings.jsonc`）缺失或字段无效 | 启动前退出码 2，不创建 session |
 | Ctrl+C、SIGTERM | 取消三名成员，关闭已打开的 session，进程以 130、143 退出，不输出决议 |
 
 即使存在 `status="error"` 的成员，stdout 仍会输出 fail-closed 的决议，退出码为 3。
 
 ## 配置
 
-`magi-cli` 与 ap 共用 `$AP_CONFIG/settings.json`，默认目录是 `~/.ap`。`--config-dir` 优先于 `AP_CONFIG`。
+`magi-cli` 与 ap 共用配置文件：`$AP_CONFIG/settings.jsonc` 优先，否则 `$AP_CONFIG/settings.json`，内容是 JSON5（注释、尾逗号合法），探测与解析规则见 [cli-and-config.md](cli-and-config.md)。默认目录是 `~/.ap`，`--config-dir` 优先于 `AP_CONFIG`。
 
 只读取以下字段：
 

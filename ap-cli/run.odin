@@ -53,7 +53,8 @@ run :: proc(args: []string) -> int {
 	apcore.log_file_open(config_dir)
 	defer apcore.log_file_close()
 
-	// settings.json 只由 CLI 读取；preview 不调用模型，因此不要求 API key。
+	// 配置文件（settings.jsonc 优先，否则 settings.json）只由 CLI 读取；
+	// preview 不调用模型，因此不要求 API key。
 	loaded, serr := load_settings(config_dir, !opts.print_system_prompt)
 	if !apcore.is_ok(serr) {
 		apcore.log_error("%s", serr.message)

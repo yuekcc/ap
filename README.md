@@ -67,7 +67,7 @@ odin build cmd/magi-cli -out:build/magi-cli$ext -vet
 
 ### 配置
 
-配置文件固定为 `$AP_CONFIG/settings.json`，默认 `~/.ap`，可用 `--config-dir` 或 `AP_CONFIG` 覆盖。最快的做法是复制示例：
+配置文件是 `$AP_CONFIG/settings.json` 或 `$AP_CONFIG/settings.jsonc`（同时存在时只用 `.jsonc`），默认目录 `~/.ap`，可用 `--config-dir` 或 `AP_CONFIG` 覆盖。内容是 JSON5，可以用 `//` 注释和尾逗号。最快的做法是复制示例：
 
 ```sh
 mkdir -p ~/.ap
@@ -84,6 +84,7 @@ cp settings.example.json ~/.ap/settings.json
 }
 ```
 
+想保留注释就把文件改名成 `settings.jsonc`，解析规格相同。
 其余字段见 [settings.example.json](settings.example.json) 和 [docs/cli-and-config.md](docs/cli-and-config.md)。`api_key` 也可以由环境变量 `AP_API_KEY` 提供，优先级更高；`bash` 工具执行命令前会剔除该变量。
 
 ### 第一次运行
@@ -189,7 +190,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 
 | 位置 | 职责 |
 | --- | --- |
-| `ap-cli/` | CLI adapter 与组装根：参数、`settings.json`、agent / 技能 / prompt、输出、退出码、信号 |
+| `ap-cli/` | CLI adapter 与组装根：参数、`settings.json(c)`、agent / 技能 / prompt、输出、退出码、信号 |
 | `ap-cli/tools/` | 五个内置工具、工具配置、进程树清理、子代理启动 |
 | `ap-cli/skills/` | 技能发现、frontmatter 解析、提示词块 |
 | `ap-core/` | SDK 门面：接收显式 `Config`，暴露会话生命周期 |
@@ -208,7 +209,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 
 ```
 $AP_CONFIG/
-  settings.json
+  settings.json                   # 或 settings.jsonc，同时存在时后者优先
   SYSTEM.md                       # 存在时替换内置固定指令段
   agents/<name>.md
   logs/app-YYYY-MM-DD.log         # 诊断日志，按本地日期一天一个

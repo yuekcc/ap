@@ -257,3 +257,70 @@ test_settings_context_window_override_validation :: proc(t: ^testing.T) {
 	settings = apcore.settings_defaults()
 	testing.expect_value(t, validate_context_budget(settings).kind, apcore.Error_Kind.None)
 }
+
+// 配置文件按 JSON5 解析：.jsonc 的注释、尾逗号和块注释都合法。
+@(test)
+test_settings_jsonc_comments_and_trailing_comma :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-jsonc")
+	defer os.remove_all(dir)
+	settings_write_file(
+		fmt.tprintf("%s/settings.jsonc", dir),
+		`{
+  // 行注释
+  "model": "jsonc-model",
+  /* 块注释 */
+  "api_key": "sk-jsonc",
+  "max_steps": 7,
+}`,
+	)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.model, "jsonc-model")
+	testing.expect_value(t, loaded.sdk.max_steps, 7)
+	testing.expect(t, strings.has_suffix(loaded.path, "settings.jsonc"))
+}
+
+// 两个文件同时存在时只用 .jsonc，.json 的内容被完全忽略。
+@(test)
+test_settings_jsonc_wins_over_json :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-jsonc-wins")
+	defer os.remove_all(dir)
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"from-json","api_key":"k"}`,
+	)
+	settings_write_file(
+		fmt.tprintf("%s/settings.jsonc", dir),
+		`{"model":"from-jsonc","api_key":"k"} // 优先`,
+	)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.model, "from-jsonc")
+	testing.expect(t, strings.has_suffix(loaded.path, "settings.jsonc"))
+}
+
+// 只有 .json 时行为不变：严格 JSON 之外的文件后缀同样走 JSON5 解析。
+@(test)
+test_settings_json_only_still_loads :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-json-only")
+	defer os.remove_all(dir)
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"from-json","api_key":"k"}`,
+	)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.model, "from-json")
+	testing.expect(t, strings.has_suffix(loaded.path, "settings.json"))
+}
+
+// 错误信息必须指向真正读的那个文件，否则用户会去改 .json 而看不到效果。
+@(test)
+test_settings_error_names_the_loaded_file :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-error-path")
+	defer os.remove_all(dir)
+	settings_write_file(fmt.tprintf("%s/settings.jsonc", dir), `{"api_key":"k"}`)
+	_, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.Usage)
+	testing.expect(t, strings.contains(err.message, "settings.jsonc"))
+}

@@ -77,7 +77,7 @@ odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 | 要改什么 | 从哪里开始 | 同步更新 |
 | --- | --- | --- |
 | CLI 参数 | `ap-cli/options.odin`、`ap-cli/run.odin` | `print_usage`、`options_test.odin`、`docs/cli-and-config.md` |
-| `settings.json` | `ap-cli/settings.odin`、`magi/settings.odin` | `settings.example.json`、`docs/cli-and-config.md` |
+| `settings.json(c)` | `ap-cli/settings.odin`、`magi/settings.odin` | `settings.example.json`、`docs/cli-and-config.md` |
 | 输出格式或 stderr 排版 | `ap-cli/output.odin` | `docs/cli-and-config.md`、输出测试 |
 | 基础 system prompt | `ap-core/engine/prompts/system.md` | `docs/context-management.md`、`--print-system-prompt` 行为 |
 | 交接提示词 | `ap-core/engine/prompts/handoff.md` | `docs/context-management.md` 的 handoff 章 |

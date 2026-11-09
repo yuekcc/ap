@@ -233,4 +233,4 @@ libcurl 的全局初始化不是线程安全的。首次调用用互斥锁串行
 - [errors-and-cancellation.md](errors-and-cancellation.md)：重试、取消与超时
 - [context-management.md](context-management.md)：messages 与工具段的来源
 - [react-loop-and-session.md](react-loop-and-session.md)：事件与 usage 的落盘
-- [cli-and-config.md](cli-and-config.md)：`settings.json` 中的 provider 字段
+- [cli-and-config.md](cli-and-config.md)：`settings.json(c)` 中的 provider 字段

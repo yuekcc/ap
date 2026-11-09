@@ -12,7 +12,7 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 | `cmd/ap-tui/` | `main` | 入口，调用 `aptui.run(os.args)` |
 | `cmd/ap-web/` | `main` | 入口，调用 `apweb.run(os.args)` |
 | `cmd/magi-cli/` | `main` | 入口，调用 `magi.run(os.args)` |
-| `ap-cli/` | `apcli` | CLI adapter 与组装根：argv、环境发现、`settings.json`、agent 定义、prompt sections、输出格式、退出码、信号 |
+| `ap-cli/` | `apcli` | CLI adapter 与组装根：argv、环境发现、`settings.json(c)`、agent 定义、prompt sections、输出格式、退出码、信号 |
 | `ap-cli/tools/` | `aptools` | 五个内置工具、`Tool_Config`、进程树清理、子代理启动 |
 | `ap-cli/skills/` | `apskills` | 技能发现、frontmatter 解析、提示词块与 `--list-skills` 简表 |
 | `ap-core/` | `apcore` | SDK 门面：`Config`、`Env`、会话生命周期、日志入口 |
@@ -27,7 +27,7 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 
 同目录即同包。`ap-cli/tools` 与 `ap-cli/skills` 是独立子包，不是 `apcli` 的一部分。`cmd/*` 每个目录只有 `main`，没有业务逻辑。`ap-core/*.odin` 的包名是 `apcore`，它不得定义 `main`，否则导入它的宿主会把入口链进来。
 
-`ap-cli` 是 ap 的组装根。它解析 argv、读取 `settings.json`、定位 bash、解析 agent 文件、发现技能、组装 prompt sections、安装信号、选择输出格式并映射退出码。`magi/settings.odin` 另有一份只读的 `settings.json` 读取器，只取 SDK 设置字段。`apcore` 只接收宿主传入的 `Config`，不读 argv、环境变量或 `settings.json`，不写 stdout，不装信号，不调用 `os.exit`。`ap-tui` 与 `ap-web` 通过 `ap-core/client` 读取 `AP_CONFIG`、`AP_AGENT_BIN` 与 `AP_BIN`。
+`ap-cli` 是 ap 的组装根。它解析 argv、读取 `settings.jsonc` 或 `settings.json`（JSON5 解析，`.jsonc` 优先）、定位 bash、解析 agent 文件、发现技能、组装 prompt sections、安装信号、选择输出格式并映射退出码。`magi/settings.odin` 另有一份只读的同类读取器，只取 SDK 设置字段。`apcore` 只接收宿主传入的 `Config`，不读 argv、环境变量或 `settings.json`，不写 stdout，不装信号，不调用 `os.exit`。`ap-tui` 与 `ap-web` 通过 `ap-core/client` 读取 `AP_CONFIG`、`AP_AGENT_BIN` 与 `AP_BIN`。
 
 ## 允许的 import 边
 

@@ -68,7 +68,7 @@ odin build cmd/ap-web -out:build/ap-web -vet
 ./build/ap-web --cwd /path/to/project
 ```
 
-打开浏览器访问 `http://127.0.0.1:8417`。ap 的配置（`model`、`base_url`、`api_key` 等）仍由 `ap` 自己读取，默认是 `~/.ap/settings.json`，可用 `--config-dir` 或 `AP_CONFIG` 覆盖。
+打开浏览器访问 `http://127.0.0.1:8417`。ap 的配置（`model`、`base_url`、`api_key` 等）仍由 `ap` 自己读取，默认是 `~/.ap/settings.json`（或 `settings.jsonc`，同时存在时后者优先），可用 `--config-dir` 或 `AP_CONFIG` 覆盖。
 
 ## CLI
 

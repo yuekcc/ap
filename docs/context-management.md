@@ -172,7 +172,7 @@ reserve = context_window_tokens * context_reserve_percent / 100
 - 把 `max_tokens` 改成 `8192` 时余量不变，`target = 1048576 - 8192 - 52428`。
 - 窄窗口也能开预算：窗口 `70000`、`max_tokens` `65536`、5% 余量时 `reserve = 3500`，`target = 964`。
 - `context_window_tokens = 0` 表示关闭预算，`target` 不参与任何决策，行为回到不计算 token 的版本。
-- 预算开启而 `target <= 0` 是配置错误。`settings.json` 的静态冲突（窗口不大于 `max_tokens` 或 `handoff_max_tokens`、`max_tokens + reserve` 吃掉整个窗口）在启动时退出 2；运行期算出的 `target <= 0` 写 `error(scope=session)` 并以 `.Usage` 结束。
+- 预算开启而 `target <= 0` 是配置错误。配置文件（`settings.jsonc` 优先）的静态冲突（窗口不大于 `max_tokens` 或 `handoff_max_tokens`、`max_tokens + reserve` 吃掉整个窗口）在启动时退出 2；运行期算出的 `target <= 0` 写 `error(scope=session)` 并以 `.Usage` 结束。
 
 估算对象是**整个请求**：system prompt + 全部 messages + 工具定义 JSON。三者都计入 `input_tokens`，分开算会漏。
 

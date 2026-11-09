@@ -206,3 +206,32 @@ write_settings :: proc(path, content: string) {
 		panic("cannot write test settings.json")
 	}
 }
+
+// magi 与 ap 的配置读取必须一致：settings.jsonc 优先，且按 JSON5 解析注释。
+@(test)
+test_settings_jsonc_preferred :: proc(t: ^testing.T) {
+	base := os.get_env("TEMP", context.allocator)
+	if len(base) == 0 {
+		base = os.get_env("TMPDIR", context.allocator)
+	}
+	dir := fmt.tprintf("%s/ap-magi-jsonc-%d", base, time.time_to_unix_nano(time.now()))
+	os.make_directory_all(dir)
+	defer os.remove_all(dir)
+	write_settings(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"from-json","api_key":"k"}`,
+	)
+	write_settings(
+		fmt.tprintf("%s/settings.jsonc", dir),
+		`{
+  // 行注释
+  "model": "from-jsonc",
+  "api_key": "k",
+  "max_tokens": 1000, /* 块注释 */
+}`,
+	)
+	loaded, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+	testing.expect_value(t, loaded.sdk.model, "from-jsonc")
+	testing.expect_value(t, loaded.sdk.max_tokens, 1000)
+}

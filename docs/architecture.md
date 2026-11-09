@@ -23,10 +23,10 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | 模块 | 负责 | 明确不做 |
 | --- | --- | --- |
 | `cmd/*` | 解析后调用对应库的 `run` | 不承载业务逻辑 |
-| `ap-cli`（`apcli`） | argv、环境发现、`settings.json`、agent 定义、prompt sections、输出、退出码、信号、组装 | 不 import engine，不含 loop 或 provider |
+| `ap-cli`（`apcli`） | argv、环境发现、`settings.json(c)`、agent 定义、prompt sections、输出、退出码、信号、组装 | 不 import engine，不含 loop 或 provider |
 | `ap-cli/tools`（`aptools`） | 五个内置工具、`Tool_Config`、进程树、子代理启动 | 不写 transcript 事件，不控制 loop |
 | `ap-cli/skills`（`apskills`） | 技能发现、frontmatter、提示词块、`--list-skills` | 不执行技能正文 |
-| `apcore` | 接收 `Config`、定位 project、组装 `Session_Request`、暴露会话生命周期、日志入口 | 不读 argv、环境变量或 `settings.json`，不写 stdout，不装信号，不决定退出码 |
+| `apcore` | 接收 `Config`、定位 project、组装 `Session_Request`、暴露会话生命周期、日志入口 | 不读 argv、环境变量或 `settings.json(c)`，不写 stdout，不装信号，不决定退出码 |
 | `ap-core/engine` | session、loop、provider、context、transcript 的编排 | 不 import `apcore`、`ap-cli` 或前端 |
 | `ap-core/tool` | `Tool`、`Tool_Context`、`Tool_Result`、`Registry`、执行管线 | 不 import engine，不提供具体工具 |
 | `ap-core/platform` | 路径与 project hash、session 发现、blob、JSON 与文本、平台原语、进程树、取消 token、日志文件 | 不 import 任何本地包，不含 agent 逻辑 |
@@ -247,7 +247,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error)
 2. 处理 `--help`、`--version`、`--list-skills` 后提前返回。
 3. 按 `--debug`、`--verbose` 或默认值设置日志级别。
 4. 解析配置目录。优先级是 `--config-dir`、`AP_CONFIG`、`~/.ap`。打开文件日志。
-5. 读取并校验 `settings.json`，拆成 `apcore.Settings` 与 `aptools.Tool_Config`。`--print-system-prompt` 不要求 API key。
+5. 读取并校验配置文件（`settings.jsonc` 优先，否则 `settings.json`；内容按 JSON5 解析），拆成 `apcore.Settings` 与 `aptools.Tool_Config`。`--print-system-prompt` 不要求 API key。
 6. 规范化启动目录，定位 bash，读取 home 目录。
 7. 由 `-s`、`-c`、`--fork-session` 决定 `Session_Kind`。
 8. 读取提示词。`--print-system-prompt` 跳过这一步。

@@ -199,7 +199,11 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 
 ## 配置文件
 
-配置文件固定为 `$AP_CONFIG/settings.json`。`ap-cli` 读取完整字段，`magi` 只读取 provider 相关字段。`ap-core` 的 SDK 门面只接收解析后的 `Settings`，不打开这个文件，也不读 `AP_*` 环境变量。
+配置文件是 `$AP_CONFIG/settings.json` 或 `$AP_CONFIG/settings.jsonc`。探测顺序是 `settings.jsonc` 优先：两者同时存在时只用 `.jsonc`，另一个文件既不参与合并也不参与校验。两个都不存在时按配置错误退出 2，报错指向 `settings.json`，因为示例和文档都从它出发。
+
+不论后缀，内容都按 JSON5 规格解析，所以注释和尾逗号合法。JSON5 比 JSONC 宽：除注释与尾逗号外还接受单引号字符串、十六进制数字、`NaN`/`Infinity`。注释只被扫描丢弃、不保留，因此配置文件只能手写，没有回写路径。
+
+`ap-cli` 与 `magi` 用同一套探测与解析规则，前者读取完整字段，后者只读取 provider 相关字段。`ap-core` 的 SDK 门面只接收解析后的 `Settings`，不打开这个文件，也不读 `AP_*` 环境变量。
 
 ```jsonc
 {
@@ -223,7 +227,7 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 
 约束：
 
-1. `model` 必填。即使命令行传了 `--model`，`settings.json` 中仍必须有 `model`。
+1. `model` 必填。即使命令行传了 `--model`，配置文件里仍必须有 `model`。
 2. `api_key` 可以由 `AP_API_KEY` 覆盖。两处都没有时退出 2，`--print-system-prompt` 除外。
 3. `base_url` 缺省为官方地址，末尾斜杠会被去掉，空值报错。
 4. 未知字段忽略并警告。类型错误、非法取值都按配置错误退出 2。显式 `null` 按缺失处理。
@@ -261,7 +265,7 @@ bash 查找顺序是 `AP_BASH`、PATH、常见安装位置。Windows 跳过路�
 
 ```text
 $AP_CONFIG/
-  settings.json
+  settings.json                      # 或 settings.jsonc，同时存在时后者优先
   SYSTEM.md                          # 存在时替换内置固定指令段
   agents/
     <name>.md                        # agent 定义
