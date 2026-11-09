@@ -14,9 +14,9 @@ Settings :: struct {
 	// 模型上下文窗口的总 token 数。预算计算的输入；0 表示关闭预算与自动
 	// 交接，行为回到不计算 token 的版本（见 docs/context-management.md）。
 	context_window_tokens:  int,
-	// 预算公式 target = window - max_tokens - reserve 里 reserve 占输出上限的
-	// 百分比。余量按当次调用的 max_tokens 等比算出，所以调小输出上限时余量
-	// 自动收紧，不会出现「窗口装不下 max_tokens + 固定余量」的死锁。
+	// 预算公式 target = window - max_tokens - reserve 里 reserve 占**窗口**的
+	// 百分比。真正要防的是本地估算的偏差，它随输入规模走、与输出上限无关，
+	// 所以余量按窗口算而不是按 max_tokens 算。
 	// 0 表示不留余量；只在预算开启时生效。
 	context_reserve_percent: int,
 	// 生成交接文档那次调用的 max_tokens。交接文本不需要 64K，所以单列一项；
@@ -31,10 +31,10 @@ DEFAULT_MAX_TOKENS :: 65536
 DEFAULT_CONTEXT_WINDOW_TOKENS :: 1048576
 
 // 预算公式里两个参数的默认值，同时是 settings.json 字段的缺省值。
-// 余量取输出上限的一半：估算偏差与输出长度波动共用这份空间。用比例而不是
-// 固定 token 数，是为了让 target 只随窗口与输出上限变化，调小 max_tokens
-// 时余量自动跟着收紧。
-DEFAULT_CONTEXT_RESERVE_PERCENT :: 50
+// 余量取窗口的 5%：1M 窗口下是 52428，够覆盖本地估算的系统性偏差，又不会
+// 明显压缩可用输入。用比例而不是固定 token 数，是为了让余量跟着窗口规模
+// 走——小窗口换成大模型时不必手工重调。
+DEFAULT_CONTEXT_RESERVE_PERCENT :: 5
 // 交接输出上限是绝对 token 数：交接文本不需要 64K，和 --max-tokens 无关。
 DEFAULT_HANDOFF_MAX_TOKENS :: 16384
 
@@ -59,12 +59,14 @@ settings_defaults :: proc() -> Settings {
 	}
 }
 
-// 余量按输出上限等比算出；百分比向下取整，0% 就是不留余量。
-context_reserve_tokens_for :: proc(settings: ^Settings, max_tokens: int) -> int {
-	if max_tokens <= 0 || settings.context_reserve_percent <= 0 {
+// 余量按窗口等比算出；百分比向下取整，0% 就是不留余量。
+// 基准是窗口而不是 max_tokens：max_tokens 已经是输出的硬上限，不再需要
+// 额外余量；真正会漂移的是输入侧的 token 估算。
+context_reserve_tokens_for :: proc(settings: ^Settings) -> int {
+	if settings.context_window_tokens <= 0 || settings.context_reserve_percent <= 0 {
 		return 0
 	}
-	return max_tokens * settings.context_reserve_percent / 100
+	return settings.context_window_tokens * settings.context_reserve_percent / 100
 }
 
 // 预算水位：target = window - max_tokens - reserve。
@@ -73,17 +75,17 @@ context_budget_target :: proc(settings: ^Settings, max_tokens: int) -> int {
 	if settings.context_window_tokens <= 0 {
 		return 0
 	}
-	return settings.context_window_tokens - max_tokens - context_reserve_tokens_for(settings, max_tokens)
+	return settings.context_window_tokens - max_tokens - context_reserve_tokens_for(settings)
 }
 
-// 交接调用的投影预算：窗口扣掉交接输出上限与按它算出的余量。
+// 交接调用的投影预算：窗口扣掉交接输出上限与**同一个**窗口余量。
+// 余量是预算的安全垫，交接请求也要留，不能因为输出上限不同就换一份。
 // 预算关闭时返回 0，表示不省略。
 handoff_budget_target :: proc(settings: ^Settings) -> int {
 	if settings.context_window_tokens <= 0 {
 		return 0
 	}
-	reserve := context_reserve_tokens_for(settings, settings.handoff_max_tokens)
-	return settings.context_window_tokens - settings.handoff_max_tokens - reserve
+	return settings.context_window_tokens - settings.handoff_max_tokens - context_reserve_tokens_for(settings)
 }
 
 // 预算开启时 target <= 0 是配置错误：预算公式失去意义，继续跑只会把请求

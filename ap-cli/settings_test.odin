@@ -139,10 +139,10 @@ test_settings_context_budget_defaults :: proc(t: ^testing.T) {
 	settings := apcore.settings_defaults()
 	testing.expect_value(t, settings.max_tokens, 65536)
 	testing.expect_value(t, settings.context_window_tokens, 1048576)
-	// 余量是比例（默认 50%），交接输出上限是绝对 token 数。
-	testing.expect_value(t, settings.context_reserve_percent, 50)
+	// 余量是按窗口算的比例（默认 5%），交接输出上限是绝对 token 数。
+	testing.expect_value(t, settings.context_reserve_percent, 5)
 	testing.expect_value(t, settings.handoff_max_tokens, 16384)
-	testing.expect_value(t, apcore.DEFAULT_CONTEXT_RESERVE_PERCENT, 50)
+	testing.expect_value(t, apcore.DEFAULT_CONTEXT_RESERVE_PERCENT, 5)
 	testing.expect_value(t, apcore.DEFAULT_HANDOFF_MAX_TOKENS, 16384)
 	testing.expect_value(t, apcore.HANDOFF_TRIGGER_PERCENT, 90)
 	testing.expect_value(t, apcore.CONTEXT_ELIDE_TARGET_PERCENT, 80)
@@ -168,7 +168,7 @@ test_settings_context_budget_fields :: proc(t: ^testing.T) {
 	settings_write_file(fmt.tprintf("%s/settings.json", dir), `{"model":"m","api_key":"k"}`)
 	loaded, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
-	testing.expect_value(t, loaded.sdk.context_reserve_percent, 50)
+	testing.expect_value(t, loaded.sdk.context_reserve_percent, 5)
 	testing.expect_value(t, loaded.sdk.handoff_max_tokens, 16384)
 
 	// 显式写入时覆盖默认值。
@@ -220,7 +220,7 @@ test_settings_context_budget_leaves_no_room :: proc(t: ^testing.T) {
 
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_percent":20}`,
+		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_percent":60}`,
 	)
 	_, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.Usage)
@@ -240,8 +240,15 @@ test_settings_context_budget_leaves_no_room :: proc(t: ^testing.T) {
 @(test)
 test_settings_context_window_override_validation :: proc(t: ^testing.T) {
 	settings := apcore.settings_defaults()
-	settings.context_window_tokens = 70000
+	settings.context_window_tokens = 60000
+	settings.context_reserve_percent = 60
 	testing.expect_value(t, validate_context_budget(settings).kind, apcore.Error_Kind.Usage)
+
+	// 同样窄的窗口，只要比例合理就能开预算——这是余量绑到窗口的意义：
+	// 窗口 70000、max_tokens 65536、5% 余量 = 3500，target 还有 964。
+	settings.context_window_tokens = 70000
+	settings.context_reserve_percent = 5
+	testing.expect_value(t, validate_context_budget(settings).kind, apcore.Error_Kind.None)
 
 	// 关掉预算时其它字段不参与校验。
 	settings.context_window_tokens = 0

@@ -194,7 +194,7 @@ test_settings_context_budget_fields :: proc(t: ^testing.T) {
 	// 余量吃掉整个窗口是配置错误。
 	write_settings(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_percent":20}`,
+		`{"model":"m","api_key":"k","context_window_tokens":70000,"max_tokens":65536,"context_reserve_percent":60}`,
 	)
 	_, err2 := load_settings(dir)
 	testing.expect_value(t, err2.kind, apcore.Error_Kind.Usage)

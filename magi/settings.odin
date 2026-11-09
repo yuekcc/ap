@@ -162,12 +162,12 @@ load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 				loaded.sdk.max_tokens,
 			)
 		}
-		reserve := loaded.sdk.max_tokens * loaded.sdk.context_reserve_percent / 100
+		reserve := loaded.sdk.context_window_tokens * loaded.sdk.context_reserve_percent / 100
 		room := loaded.sdk.context_window_tokens - loaded.sdk.max_tokens - reserve
 		if room <= 0 {
 			return loaded, apcore.errorf(
 				.Usage,
-				"settings.json: context_window_tokens (%d) leaves no budget: max_tokens (%d) + reserve (%d%% of max_tokens = %d) must be smaller",
+				"settings.json: context_window_tokens (%d) leaves no budget: max_tokens (%d) + reserve (%d%% of window = %d) must be smaller",
 				loaded.sdk.context_window_tokens,
 				loaded.sdk.max_tokens,
 				loaded.sdk.context_reserve_percent,

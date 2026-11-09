@@ -180,40 +180,48 @@ test_handoff_user_message_shape :: proc(t: ^testing.T) {
 	testing.expect_value(t, text, "## 上一会话交接\n来源 session: ses_1\n\ndoc")
 }
 
-// 预算余量按输出上限自适应，不是固定 token 数；交接输出上限单独配置。
-// 默认 percent = 50，所以默认 max_tokens 65536 仍然对应 32768 的余量。
+// 预算余量按**窗口**比例算出：真正要防的是输入侧估算偏差，它随输入规模
+// 走，和输出上限无关。默认 percent = 5，1M 窗口下就是 52428。
 @(test)
 test_context_budget_target_uses_settings :: proc(t: ^testing.T) {
 	settings := settings_defaults()
 	testing.expect_value(t, settings.context_reserve_percent, DEFAULT_CONTEXT_RESERVE_PERCENT)
 	testing.expect_value(t, settings.handoff_max_tokens, DEFAULT_HANDOFF_MAX_TOKENS)
-	testing.expect_value(t, context_reserve_tokens_for(&settings, settings.max_tokens), 32768)
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 52428)
 
-	// 默认值下的 target：1048576 - 65536 - 32768。
-	testing.expect_value(t, context_budget_target(&settings, settings.max_tokens), 950272)
+	// 默认值下的 target：1048576 - 65536 - 52428。
+	testing.expect_value(t, context_budget_target(&settings, settings.max_tokens), 1048576 - 65536 - 52428)
 
-	// 换一个输出上限，余量跟着等比缩放：target 仍然只由窗口与输出上限决定。
-	testing.expect_value(t, context_reserve_tokens_for(&settings, 8192), 4096)
-	testing.expect_value(t, context_budget_target(&settings, 8192), 1048576 - 8192 - 4096)
+	// 余量只看窗口，与输出上限无关：调小 max_tokens 不会改变余量。
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 52428)
+	testing.expect_value(t, context_budget_target(&settings, 8192), 1048576 - 8192 - 52428)
+
+	// 换一个窗口，余量等比缩放。
+	settings.context_window_tokens = 100000
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 5000)
+	settings.context_window_tokens = 128000
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 6400)
 
 	// 改比例后余量跟着变；0 表示不留余量。
-	settings.context_reserve_percent = 25
-	testing.expect_value(t, context_reserve_tokens_for(&settings, 65536), 16384)
+	settings = settings_defaults()
+	settings.context_reserve_percent = 10
+	settings.context_window_tokens = 100000
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 10000)
 	settings.context_reserve_percent = 0
-	testing.expect_value(t, context_reserve_tokens_for(&settings, 65536), 0)
-	testing.expect_value(t, context_budget_target(&settings, 65536), 1048576 - 65536)
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 0)
+	testing.expect_value(t, context_budget_target(&settings, 8192), 100000 - 8192)
 
 	// 关闭预算时 target 为 0，余量也不参与。
 	settings = settings_defaults()
 	settings.context_window_tokens = 0
 	testing.expect_value(t, context_budget_target(&settings, settings.max_tokens), 0)
+	testing.expect_value(t, context_reserve_tokens_for(&settings), 0)
 
-	// 交接调用的预算：窗口扣掉交接输出上限与按它算出的余量。
+	// 交接调用的预算扣的是同一个窗口余量，不按 handoff_max_tokens 缩放。
 	settings = settings_defaults()
-	testing.expect_value(t, handoff_budget_target(&settings), 1048576 - 16384 - 8192)
+	testing.expect_value(t, handoff_budget_target(&settings), 1048576 - 16384 - 52428)
 	settings.handoff_max_tokens = 4096
-	settings.context_reserve_percent = 10
-	testing.expect_value(t, handoff_budget_target(&settings), 1048576 - 4096 - 409)
+	testing.expect_value(t, handoff_budget_target(&settings), 1048576 - 4096 - 52428)
 	settings.context_window_tokens = 0
 	testing.expect_value(t, handoff_budget_target(&settings), 0)
 }

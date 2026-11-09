@@ -11,6 +11,6 @@
   "max_capture_bytes": 67108864,
   "stream_include_usage": true,
   "context_window_tokens": 1048576,
-  "context_reserve_percent": 50,
+  "context_reserve_percent": 5,
   "handoff_max_tokens": 16384
 }

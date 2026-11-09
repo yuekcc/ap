@@ -48,10 +48,10 @@
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `context_window_tokens` | `1048576` | 模型窗口大小。ap 面向 1M 上下文设计，预算与自动交接默认启用；`0` 表示关闭，行为回到当前版本 |
-| `context_reserve_percent` | `50` | 为输出波动、估算误差留的余量，占当次输出上限的百分比。默认 50 在 64K 输出上限下等于 `32768` |
+| `context_reserve_percent` | `5` | 预算安全垫，占**窗口**的百分比。基准是窗口而不是输出上限：真正会漂移的是输入侧估算，它的偏差随输入规模走 |
 | `handoff_max_tokens` | `16384` | 生成交接文档那次调用的 `max_tokens`。交接文本不需要 64K |
 
-三个字段都在实现时接入了 `settings.json` 与 `Settings`。`context_reserve_tokens` 在实现过程中改成了按比例自适应的 `context_reserve_percent`，理由见下方「待定」第 7 条；`handoff_max_tokens` 的缺省值来自 `ap-core/engine/config.odin` 的 `DEFAULT_HANDOFF_MAX_TOKENS`。
+三个字段都在实现时接入了 `settings.json` 与 `Settings`。余量字段在实现过程中从固定的 `context_reserve_tokens` 改成了按窗口比例的 `context_reserve_percent`，理由见下方「待定」第 7 条；`handoff_max_tokens` 的缺省值来自 `ap-core/engine/config.odin` 的 `DEFAULT_HANDOFF_MAX_TOKENS`。
 
 常量，不进配置：
 
@@ -75,11 +75,11 @@
 ### 目标计算
 
 ```
-target = context_window_tokens - max_tokens - max_tokens * context_reserve_percent / 100
+target = context_window_tokens - max_tokens - context_window_tokens * context_reserve_percent / 100
 ```
 
-- `max_tokens` 取本次请求的值（每个 turn 可能不同），余量随之等比缩放。
-- 按默认值算：`reserve = 65536 * 50 / 100 = 32768`，`1048576 - 65536 - 32768 = 950272`。
+- `max_tokens` 取本次请求的值（每个 turn 可能不同）；余量按窗口算，不随它变。
+- 按默认值算：`reserve = 1048576 * 5 / 100 = 52428`，`1048576 - 65536 - 52428 = 930412`。
 - `target <= 0` 时视为配置错误，退出 2。
 - 估算对象是**整个请求**：system prompt + 全部 messages + 工具定义 JSON。三者都计入 `input_tokens`，分开算会漏。
 
@@ -217,7 +217,7 @@ estimated = estimate_tokens(当前请求) * ratio_percent / 100
   - 「建议技能」需要技能清单（`name`、`location`），它只在冻结 prompt 里；
   - `AGENTS.md` 里的硬约束能被模型直接引用，比让它从对话里反推准确；
   - 冻结 prompt 是稳定前缀，与主请求共用同一段字节。本次不带 `tools`，所以缓存不一定全部命中，但也不会因为改写前缀而全量失效。
-- messages = **省略后的投影**（不是完整 transcript，模型也读不完）。用同一套省略规则，把 `limit_tokens` 设为 `context_window_tokens - handoff_max_tokens - handoff_max_tokens * context_reserve_percent / 100`；system 消息本身也计入这个预算。
+- messages = **省略后的投影**（不是完整 transcript，模型也读不完）。用同一套省略规则，把 `limit_tokens` 设为 `context_window_tokens - handoff_max_tokens - context_window_tokens * context_reserve_percent / 100`；system 消息本身也计入这个预算。
 - 可选的聚焦提示词：`--handoff "<prompt>"` 的 prompt 作为最后一条 `user` 消息附上，告诉模型下一次会话要做什么。同一条文本随后也是新 session 的第一个 turn，不需要两份（见「新 session」）。
 - `max_tokens = handoff_max_tokens`，`include_usage` 跟随 `stream_include_usage`。
 - 只尝试一次，不重试。失败时写 `error(scope=llm, kind=<原错误>, message="handoff failed: ...")` 并按现有路径结束（`--no-handoff` 的行为）。
@@ -396,7 +396,7 @@ CLI: stop_reason == handoff 时创建携带交接文本的新 session
 - **新版本读旧 transcript**：没有 `handoff` 事件、没有 `turn_end.context`，投影结果与当前逐字节相同。
 - **旧版本读新 transcript**：跳过 `handoff` 事件，`turn_end.context` 作为未知字段忽略，`stop_reason=handoff` 出现在 `json` 输出里但旧代码不识别——这是已知且可接受的降级，文档需写明。
 - **`settings.json` 新增键**：旧版本按现有规则 warning 并忽略。反过来，旧 `settings.json` 缺这些键时取默认值。**默认 `context_window_tokens = 1048576` 意味着预算与自动交接默认开启**，这是有意选择：ap 面向 1M 上下文模型设计，默认值就该与模型能力一致，让用户少配一个字段。需要旧行为的用户显式写 `"context_window_tokens": 0` 或传 `--no-handoff`。
-- **`max_tokens` 默认值同时从 8192 改为 65536**。这是同一个规格调整的一部分：64K 输出上限、90% 预算阈值、默认 50% 余量（即 `32768`）都是围绕同一规格确定的，单独改其中一项会让预算公式失去意义。旧配置显式写了 `max_tokens` 的不受影响。
+- **`max_tokens` 默认值同时从 8192 改为 65536**。这是同一个规格调整的一部分：64K 输出上限与 90% 预算阈值都是围绕同一规格确定的，单独改其中一项会让预算公式失去意义。旧配置显式写了 `max_tokens` 的不受影响。
 - **`--context-window 0` 与不传不等价**：不传时取配置值（默认 `1048576`，预算开启）；`--context-window 0` 显式关闭预算。
 
 ## 测试计划
@@ -465,7 +465,7 @@ CLI（`odin test ap-cli`）：
 4. **交接质量是新增的失败面。** 一次模型调用可能编造或漏项。可缓解的手段有三条：提示词要求「不确定就写不确定」；交接只靠省略后的投影，模型看不到的部分本来就不该被它写下来；`--no-handoff` 是可靠退路。另外，「建议技能」依赖 system prompt 里的技能清单（`name` 与 `location`），清单被 `--no-skills` 关掉时该小节必然为空——这是预期行为，不是缺陷。
 5. **退出码与 `stop_reason` 变化影响脚本与前端。** 只在开启预算时生效，但 `docs/cli-and-config.md` 与 `docs/integration.md` 要写清「`handoff` 不是失败」。
 6. **待定：交接后是否自动重放当前 turn 的原始提示词。** 本提案选择不自动重放，避免同一条提示词在两个 session 里各跑一遍、副作用翻倍。若实际使用中觉得麻烦，另开提案加 `--handoff --resume-prompt`。
-7. **已定：余量按输出上限比例自适应。** 字段是 `context_reserve_percent`（`0`–`100`，默认 `50`），余量在每次决策时按当次调用的输出上限算出，不落成固定 token 数。理由：固定值在小窗口或调小 `max_tokens` 的部署里会直接吃掉整个窗口（例如窗口 `70000`、`max_tokens` `65536`、固定余量 `32768` 时 `target` 必为负），而余量的本来用途就是覆盖本次输出的波动，它本来就该跟着输出上限走。代价是 `target` 会随 `--max-tokens` 变化，这是有意的：`--max-tokens` 调小意味着本次输出更短，余量理应同步收紧。
+7. **已定：余量按窗口比例自适应，基准是窗口不是输出上限。** 字段是 `context_reserve_percent`（`0`–`100`，默认 `5`），余量在每次决策时按窗口算出。经过两轮修正才定下来：固定 token 数在小窗口下会吃掉整个窗口（窗口 `70000`、`max_tokens` `65536`、固定余量 `32768` 时 `target` 必为负）；而按 `max_tokens` 比例也不对——`max_tokens` 本身就是输出的硬上限，输出不会超过它，不需要额外余量；真正会漂移的是输入侧的本地估算，它的偏差正比于输入规模。所以余量必须跟窗口走。代价是同一份配置换小窗口时余量变小，需要时可用 `context_reserve_percent` 调高。
 
 ## 相关文档
 
