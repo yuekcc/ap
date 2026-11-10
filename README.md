@@ -86,7 +86,7 @@ cp settings.example.json ~/.ap/settings.json
 ```
 
 想保留注释就把文件改名成 `settings.jsonc`，解析规格相同。
-其余字段见 [settings.example.json](settings.example.json) 和 [docs/cli-and-config.md](docs/cli-and-config.md)。`api_key` 也可以由环境变量 `AP_API_KEY` 提供，优先级更高；`bash` 工具执行命令前会剔除该变量。
+其余字段见 [settings.example.json](settings.example.json) 和 [docs/internal/cli-and-config.md](docs/internal/cli-and-config.md)。`api_key` 也可以由环境变量 `AP_API_KEY` 提供，优先级更高；`bash` 工具执行命令前会剔除该变量。
 
 ### 第一次运行
 
@@ -138,7 +138,7 @@ cat prompt.txt | ./build/ap --print0
 ./build/ap --print-system-prompt --no-agents-md --no-skills
 ```
 
-agent 定义放在 `$AP_CONFIG/agents/<name>.md`。技能放在 `~/.agents/skills/<name>/SKILL.md` 或 `<启动目录>/.agents/skills/<name>/SKILL.md`；ap 只把清单注入 system prompt，正文由模型按需读取。完整参数见 [docs/cli-and-config.md](docs/cli-and-config.md)。
+agent 定义放在 `$AP_CONFIG/agents/<name>.md`。技能放在 `~/.agents/skills/<name>/SKILL.md` 或 `<启动目录>/.agents/skills/<name>/SKILL.md`；ap 只把清单注入 system prompt，正文由模型按需读取。完整参数见 [docs/internal/cli-and-config.md](docs/internal/cli-and-config.md)。
 
 ## MAGI 决策
 
@@ -150,7 +150,7 @@ agent 定义放在 `$AP_CONFIG/agents/<name>.md`。技能放在 `~/.agents/skill
 cat request.json | ./build/magi-cli --print0
 ```
 
-请求 JSON 为 `{"question": "...", "context": "..."}`；默认输出 `magi.decision.v1` JSON。成员失败按否决处理。完整契约见 [docs/magi.md](docs/magi.md)。
+请求 JSON 为 `{"question": "...", "context": "..."}`；默认输出 `magi.decision.v1` JSON。成员失败按否决处理。完整契约见 [docs/internal/magi.md](docs/internal/magi.md)。
 
 ## 前端
 
@@ -162,7 +162,7 @@ cat request.json | ./build/magi-cli --print0
 ./build/ap-tui -s ses_...
 ```
 
-交互命令：`/new`、`/session`、`/help`、`/quit`。细节见 [docs/tui.md](docs/tui.md)。
+交互命令：`/new`、`/session`、`/help`、`/quit`。细节见 [docs/internal/tui.md](docs/internal/tui.md)。
 
 `ap-web`：
 
@@ -172,7 +172,7 @@ cat request.json | ./build/magi-cli --print0
 ./build/ap-web -c
 ```
 
-页面支持新建和切换 session、单轮取消、刷新后从 transcript 重放历史。不同标签页和不同 project 可以并发，同一 session 仍只允许一个 turn。默认只监听回环地址；监听其他地址会打印安全警告。API、SSE 和并发语义见 [docs/web.md](docs/web.md)。
+页面支持新建和切换 session、单轮取消、刷新后从 transcript 重放历史。不同标签页和不同 project 可以并发，同一 session 仍只允许一个 turn。默认只监听回环地址；监听其他地址会打印安全警告。API、SSE 和并发语义见 [docs/internal/web.md](docs/internal/web.md)。
 
 ## 架构
 
@@ -204,7 +204,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | `magi/` | MAGI 决策器：参数、输入、三角色提示词、并行投票、一票否决与输出 |
 | `cmd/` | 四个薄入口，只 import 对应的库包 |
 
-依赖方向是单向的。`ap-cli` 不能直接 import `engine`；SDK 不读 argv、环境变量、`settings.json`，也不写 stdout、不装信号；前端不 import agent 代码。这些边由 `tools/check-deps.sh` 在构建和测试时强制，改 import 后先跑它。完整规则见 [docs/architecture.md](docs/architecture.md) 和 [docs/dependencies.md](docs/dependencies.md)。
+依赖方向是单向的。`ap-cli` 不能直接 import `engine`；SDK 不读 argv、环境变量、`settings.json`，也不写 stdout、不装信号；前端不 import agent 代码。这些边由 `tools/check-deps.sh` 在构建和测试时强制，改 import 后先跑它。完整规则见 [docs/internal/architecture.md](docs/internal/architecture.md) 和 [docs/internal/dependencies.md](docs/internal/dependencies.md)。
 
 ## 存储
 
@@ -271,25 +271,26 @@ npm --prefix ap-web run build
 - 技能脚本执行、参数传入、远程安装
 - 远程会话共享、服务端部署
 
-完整清单和理由见 [docs/README.md](docs/README.md)。
+完整清单和理由见 [docs/internal/README.md](docs/internal/README.md)。
 
 ## 文档
 
 | 文件 | 内容 |
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | 仓库维护指南：构建、测试、包边界、改动地图 |
-| [docs/README.md](docs/README.md) | 规格总览、决策、术语、文档地图 |
-| [docs/architecture.md](docs/architecture.md) | 模块边界、依赖方向、进程模型 |
-| [docs/dependencies.md](docs/dependencies.md) | 包布局、允许的 import 边、检查器 |
-| [docs/cli-and-config.md](docs/cli-and-config.md) | 启动参数、输出格式、配置、存储布局 |
-| [docs/react-loop-and-session.md](docs/react-loop-and-session.md) | 循环状态机、事件 schema、恢复与 fork |
-| [docs/context-management.md](docs/context-management.md) | system prompt、记忆文件、消息投影 |
-| [docs/provider.md](docs/provider.md) | OpenAI 适配、SSE、usage、错误 |
-| [docs/tools.md](docs/tools.md) | 五个工具的契约、blob、进程与输出上限 |
-| [docs/subagents.md](docs/subagents.md) | agent 定义、启动协议、结果契约 |
-| [docs/skills.md](docs/skills.md) | 技能发现、`SKILL.md` 格式、提示词注入 |
-| [docs/tui.md](docs/tui.md) | `ap-tui` 的进程模型与渲染 |
-| [docs/web.md](docs/web.md) | `ap-web` 的 HTTP/SSE API 与并发语义 |
-| [docs/integration.md](docs/integration.md) | 新前端接入 ap 的集成指南 |
-| [docs/magi.md](docs/magi.md) | `magi-cli` 的角色、投票、输入输出与失败语义 |
-| [docs/errors-and-cancellation.md](docs/errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 |
+| [docs/README.md](docs/README.md) | 用户手册入口：安装、日常使用、界面、安全与参考 |
+| [docs/internal/README.md](docs/internal/README.md) | 规格总览、决策、术语、文档地图 |
+| [docs/internal/architecture.md](docs/internal/architecture.md) | 模块边界、依赖方向、进程模型 |
+| [docs/internal/dependencies.md](docs/internal/dependencies.md) | 包布局、允许的 import 边、检查器 |
+| [docs/internal/cli-and-config.md](docs/internal/cli-and-config.md) | 启动参数、输出格式、配置、存储布局 |
+| [docs/internal/react-loop-and-session.md](docs/internal/react-loop-and-session.md) | 循环状态机、事件 schema、恢复与 fork |
+| [docs/internal/context-management.md](docs/internal/context-management.md) | system prompt、记忆文件、消息投影 |
+| [docs/internal/provider.md](docs/internal/provider.md) | OpenAI 适配、SSE、usage、错误 |
+| [docs/internal/tools.md](docs/internal/tools.md) | 五个工具的契约、blob、进程与输出上限 |
+| [docs/internal/subagents.md](docs/internal/subagents.md) | agent 定义、启动协议、结果契约 |
+| [docs/internal/skills.md](docs/internal/skills.md) | 技能发现、`SKILL.md` 格式、提示词注入 |
+| [docs/internal/tui.md](docs/internal/tui.md) | `ap-tui` 的进程模型与渲染 |
+| [docs/internal/web.md](docs/internal/web.md) | `ap-web` 的 HTTP/SSE API 与并发语义 |
+| [docs/internal/integration.md](docs/internal/integration.md) | 新前端接入 ap 的集成指南 |
+| [docs/internal/magi.md](docs/internal/magi.md) | `magi-cli` 的角色、投票、输入输出与失败语义 |
+| [docs/internal/errors-and-cancellation.md](docs/internal/errors-and-cancellation.md) | 错误分类、重试、信号、超时、恢复 |
