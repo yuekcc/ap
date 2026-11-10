@@ -23,7 +23,7 @@ build_prompt_sections :: proc(opts: Prompt_Options) -> []string {
 	sections := make([dynamic]string, 0, 8)
 
 	env := strings.builder_make()
-	strings.write_string(&env, "## 环境\n")
+	strings.write_string(&env, "## 环境\n\n")
 	fmt.sbprintf(&env, "- OS: %v\n", ODIN_OS)
 	fmt.sbprintf(&env, "- cwd: %s\n", opts.cwd)
 	fmt.sbprintf(&env, "- 当前时间: %v\n", time.now())
@@ -38,7 +38,7 @@ build_prompt_sections :: proc(opts: Prompt_Options) -> []string {
 		global_memory := fmt.tprintf("%s/.agents/AGENTS.md", opts.home_dir)
 		if os.exists(global_memory) {
 			if data, err := os.read_entire_file_from_path(global_memory, context.allocator); err == nil {
-				append(&sections, fmt.tprintf("## 全局记忆 (AGENTS.md)\n%s\n", string(data)))
+				append(&sections, fmt.tprintf("## 全局记忆 (AGENTS.md)\n\n<global_agent_md>\n%s\n</global_agent_md>\n", string(data)))
 			}
 		}
 	}
@@ -46,7 +46,7 @@ build_prompt_sections :: proc(opts: Prompt_Options) -> []string {
 	if opts.include_memory {
 		for file in project_memory_files(opts.cwd) {
 			if data, err := os.read_entire_file_from_path(file, context.allocator); err == nil {
-				append(&sections, fmt.tprintf("## 项目记忆 (%s)\n%s\n", file, string(data)))
+				append(&sections, fmt.tprintf("## 项目记忆 (%s)\n\n<project_agent_md>\n%s\n</project_agent_md>\n", file, string(data)))
 			}
 		}
 	}

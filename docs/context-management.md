@@ -46,7 +46,7 @@ SDK 不解析应用层 section，不给它加标题，不合并空白，也不�
 
 环境段逐行写 `OS`、`cwd`、`当前时间`、`git 仓库`。时间取新 session 组装时的时刻，之后随 system prompt 冻结。
 
-记忆文件按文件原文注入。agent 正文去掉开头换行后注入。两者都不做 CRLF 规范化，不截断，不做 `@import`。只有 `SYSTEM.md` 经过规范化。
+记忆文件按文件原文注入，内容外包一层 `<global_agent_md>` 或 `<project_agent_md>` 标签，标题后和标签前后各留一个空行，便于模型区分记忆边界。agent 正文去掉开头换行后注入。两者都不做 CRLF 规范化，不截断，不做 `@import`。只有 `SYSTEM.md` 经过规范化。
 
 ## AGENTS.md 发现
 

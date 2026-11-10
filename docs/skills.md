@@ -61,9 +61,9 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 ```text
 ## 可用技能
 
-若 <available_skills> 里有明显适用于当前任务的 skill，先用 read_file 读取其 <location> 指向的 SKILL.md（文件过大或需要定位片段时用 bash），再照其中步骤执行。
-若多个都沾边，选最贴切的那个；若都不贴切，一个都不要读。
-skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成绝对路径再使用。
+若 <available_skills> 里有明显适用于当前任务的 skill，先用 read_file 读取其 <location> 指向的 SKILL.md（文件过大或需要定位片段时用 bash），再照其中步骤执行。若多个都沾边，选最贴切的那个；若都不贴切，一个都不要读。skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成绝对路径再使用。
+
+用户也会使用 /<skill_name> 方式调用 skill，如果 <skill_name> 能完全匹配某个 skill，也用上述的方式调用 skill。
 
 <available_skills>
   <skill>
