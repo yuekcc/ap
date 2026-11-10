@@ -82,7 +82,7 @@ ap --print0 --output-format stream-json \
 3. 收集 stderr 的尾部窗口。参考实现保留 64 KiB，超出时保留最近约 32 KiB 并对齐整行。正常退出可以不展示，非 0 退出时展示。
 4. 传了 `--verbose` 时可以实时展示 stderr，并把每行加 `[ap]` 之类的前缀。
 5. 不要把 stderr 合并进 stdout。任何普通日志混入 stdout 都会损坏行协议。
-6. `ap` 退出前可能向 stderr 打一行续聊提示，内容包含 `<可执行文件> -s <session_id>`。展示或忽略都可以。
+6. `ap` 退出前可能向 stderr 打一行续聊提示 `continue with -s <session_id>`。展示或忽略都可以。
 
 **结果**：`ap` 读到 stdin EOF 后开始 turn。stdout 的行可以直接交给事件解析器。异常退出时你有足够的 stderr 诊断信息。
 

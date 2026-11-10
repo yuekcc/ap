@@ -333,7 +333,7 @@ run :: proc(args: []string) -> int {
 		if value, ok := var_handoff.?; ok {
 			fmt.eprintf("\n---\n\nhandoff created session %s\n", value.session_id)
 		} else {
-			fmt.eprintf("\n---\n\n继续对话，执行：%s -s %s\n", normalized[0], session.session_id)
+			fmt.eprintf("\n---\n\ncontinue with -s %s\n", session.session_id)
 		}
 	}
 	return exit_code

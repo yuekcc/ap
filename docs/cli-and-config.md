@@ -130,7 +130,7 @@ turn 结束、进程退出前，三种格式都会向 stderr 打印续聊提示�
 ```text
 ---
 
-继续对话，执行：<argv[0]> -s <session_id>
+continue with -s <session_id>
 ```
 
 创建了交接 session 时，这一行换成 `handoff created session <id>`，指向新 session。
