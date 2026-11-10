@@ -37,6 +37,27 @@ bash_update :: proc(user: rawptr, chunk: string) {
 	}
 }
 
+bash_context_env :: proc(ctx: ^tool.Tool_Context) -> [dynamic]string {
+	// 先剔除继承来的同名变量，避免脚本读到外层 ap 会话的陈旧值。
+	env := filter_env_without(
+		"AP_API_KEY",
+		"AP_SESSION_ID",
+		"AP_PARENT_SESSION_ID",
+		"AP_TRANSCRIPT_PATH",
+	)
+	parent_session_id := ""
+	if value, ok := ctx.parent_session_id.?; ok {
+		parent_session_id = value
+	}
+	append(
+		&env,
+		fmt.aprintf("AP_SESSION_ID=%s", ctx.session_id),
+		fmt.aprintf("AP_PARENT_SESSION_ID=%s", parent_session_id),
+		fmt.aprintf("AP_TRANSCRIPT_PATH=%s", ctx.transcript_path),
+	)
+	return env
+}
+
 tool_bash :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
 	command, cerr := tool.tool_arg_string(args, "command")
 	if !platform.is_ok(cerr) {
@@ -67,12 +88,13 @@ tool_bash :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 		return tool.tool_fail("bash is not available")
 	}
 
-	env := filter_env_without("AP_API_KEY")
+	env := bash_context_env(ctx)
+	defer free_env(&env)
 	result := run_child(
 		{
 			command = []string{cfg.bash_path, "-c", command},
 			cwd = ctx.cwd,
-			env = env,
+			env = env[:],
 			timeout_ms = timeout_ms,
 			max_capture_bytes = cfg.max_capture_bytes,
 			cancel = ctx.cancel,

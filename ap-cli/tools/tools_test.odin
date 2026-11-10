@@ -110,8 +110,10 @@ tool_test_context :: proc(t: ^testing.T, name: string) -> Test_Tools {
 		project = project,
 		cancel = new(platform.Cancel_Token),
 		session_id = "s",
+		parent_session_id = "parent-s",
 		tool_call_id = "call_1",
 		agent_name = "general",
+		transcript_path = platform.session_file(project, "s"),
 	}
 	return {ctx = ctx, cfg = cfg, registry = registry, dir = dir}
 }
@@ -398,6 +400,32 @@ test_bash_strips_api_key :: proc(t: ^testing.T) {
 	res := tool.tool_execute(&tt.registry, "bash", json.Value(json_obj(`{"command":"test -z \"$AP_API_KEY\" && echo stripped"}`)), &tt.ctx)
 	testing.expect(t, res.ok)
 	testing.expect(t, test_contains(res.content, "stripped"))
+}
+
+@(test)
+test_bash_exposes_session_environment :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-bash-session-env")
+	defer test_cleanup(tt.dir)
+	// 外层进程同名变量必须被当前 session 的值覆盖。
+	os.set_env("AP_SESSION_ID", "stale")
+	os.set_env("AP_PARENT_SESSION_ID", "stale-parent")
+	os.set_env("AP_TRANSCRIPT_PATH", "stale-path")
+	defer {
+		os.unset_env("AP_SESSION_ID")
+		os.unset_env("AP_PARENT_SESSION_ID")
+		os.unset_env("AP_TRANSCRIPT_PATH")
+	}
+	command := `printf '%s|%s|%s' "$AP_SESSION_ID" "$AP_PARENT_SESSION_ID" "$AP_TRANSCRIPT_PATH"`
+	res := tool.tool_execute(&tt.registry, "bash", json.Value(json_obj(test_json(`{"command":%q}`, command))), &tt.ctx)
+	testing.expect(t, res.ok)
+	expected := fmt.tprintf("s|parent-s|%s", tt.ctx.transcript_path)
+	testing.expect(t, test_contains(res.content, expected))
+
+	tt.ctx.parent_session_id = nil
+	res2 := tool.tool_execute(&tt.registry, "bash", json.Value(json_obj(test_json(`{"command":%q}`, command))), &tt.ctx)
+	testing.expect(t, res2.ok)
+	expected_root := fmt.tprintf("s||%s", tt.ctx.transcript_path)
+	testing.expect(t, test_contains(res2.content, expected_root))
 }
 
 @(test)

@@ -257,7 +257,9 @@ continue with -s <session_id>
 | `AP_BASH` | 指定 bash 可执行文件的绝对路径。设置后不再搜索 PATH 和常见安装位置 |
 | `NO_COLOR` | 非空时关闭 `text` 模式 stderr 的 ANSI 颜色 |
 
-父子关联只走命令行参数，不使用 `AP_PARENT_*` 环境变量。`bash` 工具执行命令时会剔除 `AP_API_KEY`，避免把密钥暴露给模型可控的命令。
+`bash` 工具还会向子进程注入只读快照：`AP_SESSION_ID`、`AP_PARENT_SESSION_ID`（根 session 为空字符串）和 `AP_TRANSCRIPT_PATH`。它们只供脚本读取当前会话信息，不参与进程间通信。
+
+父子关联只走命令行参数，不使用 `AP_PARENT_*` 环境变量。`bash` 工具执行命令时会剔除 `AP_API_KEY`，避免把密钥暴露给模型可控的命令；继承来的三个会话变量也会先剔除再写入当前值。
 
 bash 查找顺序是 `AP_BASH`、PATH、常见安装位置。Windows 跳过路径中含 `system32` 或 `windowsapps` 的 `bash.exe`，避免选中 WSL 的 bash。
 

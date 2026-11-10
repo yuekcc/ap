@@ -174,17 +174,19 @@ Tool :: struct {
 }
 
 Tool_Context :: struct {
-	cwd:          string,
-	project:      platform.Project,
-	cancel:       ^platform.Cancel_Token,
-	session_id:   string,
-	tool_call_id: string,
-	agent_name:   string,
-	agent_depth:  int,
-	on_update:    proc(user: rawptr, chunk: string),
-	update_user:  rawptr,
-	on_progress:  proc(user: rawptr, kind: Progress_Kind, line: string),
-	progress_user: rawptr,
+	cwd:               string,
+	project:           platform.Project,
+	cancel:            ^platform.Cancel_Token,
+	session_id:        string,
+	parent_session_id: Maybe(string),
+	tool_call_id:      string,
+	agent_name:        string,
+	agent_depth:       int,
+	transcript_path:   string,
+	on_update:         proc(user: rawptr, chunk: string),
+	update_user:       rawptr,
+	on_progress:       proc(user: rawptr, kind: Progress_Kind, line: string),
+	progress_user:     rawptr,
 }
 
 registry_init :: proc(tools: []Tool) -> (Registry, platform.Error)

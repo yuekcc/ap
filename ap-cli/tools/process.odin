@@ -41,18 +41,44 @@ Run_Result :: struct {
 	error:       string,
 }
 
-filter_env_without :: proc(key: string) -> []string {
+// 复制当前进程环境并剔除指定变量。返回的动态数组以及保留的字符串都由
+// context.allocator 拥有，调用方用 free_env 释放。
+filter_env_without :: proc(keys: ..string) -> [dynamic]string {
 	env, _ := os.environ(context.allocator)
 	out := make([dynamic]string, 0, len(env))
-	prefix, _ := strings.to_upper(fmt.tprintf("%s=", key), context.temp_allocator)
 	for entry in env {
-		upper, _ := strings.to_upper(entry, context.temp_allocator)
-		if strings.has_prefix(upper, prefix) {
+		matches := false
+		for key in keys {
+			if env_key_matches(entry, key) {
+				matches = true
+				break
+			}
+		}
+		if matches {
+			delete(entry)
 			continue
 		}
 		append(&out, entry)
 	}
-	return out[:]
+	delete(env)
+	return out
+}
+
+// Windows 环境变量不区分大小写，统一按不区分大小写匹配；POSIX 下大写
+// 变量名也仍然只会命中同名项。
+env_key_matches :: proc(entry, key: string) -> bool {
+	if len(entry) <= len(key) || entry[len(key)] != '=' {
+		return false
+	}
+	return strings.equal_fold(entry[:len(key)], key)
+}
+
+free_env :: proc(env: ^[dynamic]string) {
+	for entry in env^ {
+		delete(entry)
+	}
+	delete(env^)
+	env^ = nil
 }
 
 spawn_child :: proc(

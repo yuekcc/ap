@@ -95,15 +95,16 @@ Loop :: struct {
 	sleep_fn:       Loop_Sleep_Fn,
 	registry:       tool.Registry,
 	active_tools:   []string,
-	model:          string,
-	agent_name:     string,
-	session_id:     string,
-	agent_depth:    int,
-	max_steps:      int,
-	max_tokens:     int,
-	cancel:         ^platform.Cancel_Token,
-	emitter:        Emitter,
-	events:         [dynamic]Event,
+	model:             string,
+	agent_name:        string,
+	session_id:        string,
+	parent_session_id: Maybe(string),
+	agent_depth:       int,
+	max_steps:         int,
+	max_tokens:        int,
+	cancel:            ^platform.Cancel_Token,
+	emitter:           Emitter,
+	events:            [dynamic]Event,
 	// loop_init 复制进来的历史事件不属于 loop，销毁时不能释放它们的行。
 	initial_event_count: int,
 	historical_usage: Usage,
@@ -188,6 +189,12 @@ loop_init :: proc(
 	events: []Event,
 	emitter: Emitter,
 ) -> Loop {
+	// 父 session 是冻结在 session_start 里的信息，loop 直接从事件恢复，
+	// 避免把已经在 transcript 中的字段再从 Session 传一遍。
+	parent_session_id: Maybe(string)
+	if start, found := last_session_start(events); found {
+		parent_session_id = start.parent_session_id
+	}
 	loop := Loop {
 		project = project,
 		settings = settings,
@@ -200,6 +207,7 @@ loop_init :: proc(
 		model = model,
 		agent_name = agent_name,
 		session_id = session_id,
+		parent_session_id = parent_session_id,
 		agent_depth = agent_depth,
 		max_steps = max_steps,
 		max_tokens = max_tokens,
@@ -546,9 +554,11 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 			project = l.project,
 			cancel = l.cancel,
 			session_id = l.session_id,
+			parent_session_id = l.parent_session_id,
 			tool_call_id = call.id,
 			agent_name = l.agent_name,
 			agent_depth = l.agent_depth,
+			transcript_path = l.store.path,
 			on_update = loop_tool_update,
 			update_user = l,
 			on_progress = l.emitter.on_progress,

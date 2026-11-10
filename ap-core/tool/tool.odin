@@ -36,13 +36,15 @@ Tool_Result :: struct {
 }
 
 Tool_Context :: struct {
-	cwd:          string,
-	project:      platform.Project,
-	cancel:       ^platform.Cancel_Token,
-	session_id:   string,
-	tool_call_id: string,
-	agent_name:   string,
-	agent_depth:  int,
+	cwd:               string,
+	project:           platform.Project,
+	cancel:            ^platform.Cancel_Token,
+	session_id:        string,
+	parent_session_id: Maybe(string),
+	tool_call_id:      string,
+	agent_name:        string,
+	agent_depth:       int,
+	transcript_path:   string,
 
 	on_update:     proc(user: rawptr, chunk: string),
 	update_user:   rawptr,

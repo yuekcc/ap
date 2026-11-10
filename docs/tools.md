@@ -173,7 +173,15 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 
 1. 每次调用是独立进程，不保留 cwd、环境变量或 shell 变量。默认 cwd 是启动目录。
 2. stdin 接 `/dev/null`，Windows 上接 `NUL`，交互式命令会立即读到 EOF。
-3. 继承 ap 的环境变量，但剔除 `AP_API_KEY`。
+3. 继承 ap 的环境变量，但剔除 `AP_API_KEY`，并注入当前会话信息：
+
+   | 变量 | 值 |
+   | --- | --- |
+   | `AP_SESSION_ID` | 当前 session id |
+   | `AP_PARENT_SESSION_ID` | 父 session id；根 session 为空字符串 |
+   | `AP_TRANSCRIPT_PATH` | 当前 transcript 的绝对路径 |
+
+   这些变量只描述当前 bash 调用所属的会话，脚本只能读取。通过 `bash` 再启动 `ap` 时，新进程仍按自己的会话重新注入。继承来的同名变量会先被剔除，不会读到外层会话的陈旧值。
 4. stdout 与 stderr 合并返回，两者顺序不保证。输出先做 UTF-8 清洗。
 5. 结果首行是 `[exit <code>, <duration>ms]`。
 6. 非 0 退出不算工具失败，返回 `ok:true` 和 `exit_code`，由模型判断。
