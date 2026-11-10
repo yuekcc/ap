@@ -116,6 +116,45 @@ export function sessionMeta(session) {
 	return `${short} · ${turns} 轮${running}`;
 }
 
+// 对话记录按最近活动时间分到「今天 / 昨天 / 前天 / 更早」。
+// ts 来自 session 文件 mtime（毫秒），按浏览器本地时区判断自然日。
+export const SESSION_DAY_GROUPS = [
+	{ key: "today", label: "今天" },
+	{ key: "yesterday", label: "昨天" },
+	{ key: "beforeYesterday", label: "前天" },
+	{ key: "earlier", label: "更早" },
+];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function startOfLocalDay(ms) {
+	const date = new Date(ms);
+	date.setHours(0, 0, 0, 0);
+	return date.getTime();
+}
+
+export function sessionDayBucket(ts, now = Date.now()) {
+	const value = Number(ts);
+	if (!Number.isFinite(value) || value <= 0) return "earlier";
+	// 用整数天差，避开夏令时导致的小时偏移；未来时间按今天处理。
+	const days = Math.round((startOfLocalDay(now) - startOfLocalDay(value)) / DAY_MS);
+	if (days <= 0) return "today";
+	if (days === 1) return "yesterday";
+	if (days === 2) return "beforeYesterday";
+	return "earlier";
+}
+
+export function groupSessionsByDay(sessions, now = Date.now()) {
+	const buckets = { today: [], yesterday: [], beforeYesterday: [], earlier: [] };
+	for (const session of Array.isArray(sessions) ? sessions : []) {
+		buckets[sessionDayBucket(session?.ts, now)].push(session);
+	}
+	return SESSION_DAY_GROUPS.map((group) => ({
+		...group,
+		sessions: buckets[group.key],
+	})).filter((group) => group.sessions.length > 0);
+}
+
 export function messageTexts(event) {
 	if (!Array.isArray(event?.content)) return [];
 	const out = [];

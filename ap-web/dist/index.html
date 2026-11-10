@@ -14,8 +14,7 @@
 <div class="app">
   <header class="titlebar">
     <div class="brand">
-      <span class="brand__mark" aria-hidden="true">a</span>
-      <span class="brand__name">ap</span>
+      <span class="brand__mark" aria-hidden="true">ap</span>
     </div>
 
     <nav class="workspaces" aria-label="工作空间">
@@ -69,20 +68,6 @@
       <p class="sidebar__label">对话记录</p>
 
       <nav class="sessions" aria-label="对话记录">
-        <template x-for="session in $store.ap.activeSessions" :key="session.session_id">
-          <button
-            class="session"
-            type="button"
-            :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
-            :disabled="$store.ap.loading"
-            :title="session.session_id"
-            @click="selectSession(session)"
-          >
-            <span class="session__title" x-text="sessionTitle(session)"></span>
-            <span class="session__meta" x-text="sessionMeta(session)"></span>
-          </button>
-        </template>
-
         <button
           class="session session--draft is-active"
           type="button"
@@ -95,15 +80,27 @@
           <span class="session__meta" x-text="$store.ap.running ? '运行中' : '尚未开始'"></span>
         </button>
 
+        <template x-for="group in $store.ap.sessionGroups" :key="group.key">
+          <section class="session-group">
+            <p class="session-group__label" x-text="group.label"></p>
+            <template x-for="session in group.sessions" :key="session.session_id">
+              <button
+                class="session"
+                type="button"
+                :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
+                :disabled="$store.ap.loading"
+                :title="session.session_id"
+                @click="selectSession(session)"
+              >
+                <span class="session__title" x-text="sessionTitle(session)"></span>
+                <span class="session__meta" x-text="sessionMeta(session)"></span>
+              </button>
+            </template>
+          </section>
+        </template>
+
         <p class="sessions__empty" x-show="showsEmptySessions()">暂无对话</p>
       </nav>
-
-      <div class="sidebar__foot">
-        <div class="sidebar__cwd" :title="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''">
-          <span class="sidebar__cwd-label">cwd</span>
-          <span class="sidebar__cwd-path" x-text="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"></span>
-        </div>
-      </div>
     </aside>
 
     <div class="workspace">

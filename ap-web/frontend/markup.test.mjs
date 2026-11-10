@@ -55,6 +55,12 @@ test("顶部是工作空间标签，侧栏承载新对话与当前空间的对�
 	assert.ok(titlebarStart >= 0 && titlebarEnd > titlebarStart, "index.html must have a titlebar");
 	const titlebar = html.slice(titlebarStart, titlebarEnd);
 	assert.ok(titlebar.includes('class="brand__mark"'), "logo lives in the titlebar");
+	assert.match(
+		titlebar,
+		/>ap<\/span>/,
+		"logo mark itself spells ap",
+	);
+	assert.ok(!titlebar.includes("brand__name"), "logo has no adjacent wordmark label");
 	assert.ok(
 		titlebar.includes('x-for="project in $store.ap.workspaceProjects"'),
 		"working directories become workspace tabs",
@@ -79,14 +85,27 @@ test("顶部是工作空间标签，侧栏承载新对话与当前空间的对�
 		"new session must not receive the click event as its cwd argument",
 	);
 	assert.ok(
-		sidebar.includes('x-for="session in $store.ap.activeSessions"'),
-		"sidebar lists conversations of the active workspace only",
+		sidebar.includes('x-for="group in $store.ap.sessionGroups"'),
+		"sidebar groups conversations by natural day",
+	);
+	assert.ok(
+		sidebar.includes('class="session-group__label"') &&
+			sidebar.includes('x-text="group.label"'),
+		"each day group renders its own label",
+	);
+	assert.ok(
+		sidebar.includes('x-for="session in group.sessions"'),
+		"day groups list their conversations",
 	);
 	assert.ok(
 		sidebar.includes("selectSession(session)"),
 		"sidebar sessions switch the active conversation",
 	);
 	assert.ok(sidebar.includes("sessionTitle(session)"), "sidebar shows formatted session titles");
+	assert.ok(
+		!sidebar.includes('class="sidebar__cwd"'),
+		"sidebar no longer repeats the working directory in its footer",
+	);
 	assert.ok(
 		!sidebar.includes(':disabled="$store.ap.running"'),
 		"session actions must stay usable while another session is running",

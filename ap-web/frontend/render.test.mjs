@@ -8,9 +8,11 @@ import {
 	applyTurnDone,
 	createState,
 	formatArgs,
+	groupSessionsByDay,
 	ingestHistory,
 	previewContent,
 	projectName,
+	sessionDayBucket,
 	sessionMeta,
 	sessionTitle,
 	truncateUtf8,
@@ -34,6 +36,45 @@ test("侧栏 project 名称取工作目录最后一段，兼容 Windows 分隔�
 	assert.equal(projectName("z:/projects/ap/"), "ap");
 	assert.equal(projectName("C:\\Users\\me\\code\\ap"), "ap");
 	assert.equal(projectName(""), "工作目录");
+});
+
+test("对话记录按今天 / 昨天 / 前天 / 更早分组，空组不出现", () => {
+	const at = (day, hour = 12) => new Date(2026, 10, day, hour, 0, 0).getTime();
+	const now = at(10);
+	const sessions = [
+		{ session_id: "today-a", ts: at(10, 1) },
+		{ session_id: "yesterday-a", ts: at(9, 23) },
+		{ session_id: "before-a", ts: at(8, 8) },
+		{ session_id: "earlier-a", ts: at(7, 8) },
+		{ session_id: "earlier-b", ts: 0 },
+	];
+
+	assert.equal(sessionDayBucket(at(10), now), "today");
+	assert.equal(sessionDayBucket(at(9), now), "yesterday");
+	assert.equal(sessionDayBucket(at(8), now), "beforeYesterday");
+	assert.equal(sessionDayBucket(at(5), now), "earlier");
+	// 时钟偏差导致的未来 mtime 归到今天。
+	assert.equal(sessionDayBucket(at(12), now), "today");
+
+	const groups = groupSessionsByDay(sessions, now);
+	assert.deepEqual(
+		groups.map((group) => group.label),
+		["今天", "昨天", "前天", "更早"],
+	);
+	assert.deepEqual(
+		groups.map((group) => group.sessions.map((session) => session.session_id)),
+		[
+			["today-a"],
+			["yesterday-a"],
+			["before-a"],
+			["earlier-a", "earlier-b"],
+		],
+	);
+
+	// 只保留有内容的组。
+	const sparse = groupSessionsByDay([{ session_id: "only", ts: at(10, 9) }], now);
+	assert.equal(sparse.length, 1);
+	assert.equal(sparse[0].label, "今天");
 });
 
 test("formatArgs 对齐 ap-tui：键排序、字符串不加引号、整体限 240 字节", () => {

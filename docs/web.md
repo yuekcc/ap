@@ -191,7 +191,7 @@ Unix 上的实现如下。
 - 强调色用 systemBlue `#007aff`；用户消息是纯色填充的 iMessage 气泡（18px 圆角，右下角 4px），助手文本保持正文色。
 - 交互只保留 120ms 的背景色淡入和聚焦色淡入；运行中脉冲与减少动态偏好下的禁用沿用原语义。
 - 页面骨架用 grid：外层是标题栏加主体，主体再分左右两栏；右栏是 `grid-template-rows: auto minmax(0, 1fr) auto`，消息区自己滚动。
-- 块级组件用 flex。窄屏（`max-width: 820px`）隐藏侧栏标题和底部路径，左栏折成顶部横向对话条，会话项改成胶囊；窄屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
+- 块级组件用 flex。窄屏（`max-width: 820px`）隐藏侧栏标题，左栏折成顶部横向对话条，会话项改成胶囊；窄屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
 
 前端行为与 `ap-tui` 对齐。
 
@@ -200,7 +200,7 @@ Unix 上的实现如下。
 - 用户输入和工具输出用 `textContent` 写入。只有 assistant 文本走 Markdown。
 - Markdown 用 `markdown-exit`，设置 `html: false`、`linkify: true`、`breaks: true`。原始 HTML 被转义，`javascript:` 和 `data:` 链接不会变成可点链接。外链带 `target="_blank"` 和 `rel="noopener noreferrer"`。图片设置 `loading="lazy"` 和 `referrerpolicy="no-referrer"`。
 - 顶部工作空间标签按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在标签条里本地合成一个空组。
-- 左栏只展示当前工作空间的对话记录；切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
+- 左栏只展示当前工作空间的对话记录，按 session 列表的 `ts` 在浏览器本地时区分成「今天 / 昨天 / 前天 / 更早」，空组不渲染；切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
 - 每个标签页持有自己的 `session_key`，SSE 按该 key 过滤。
 - 打开已有 session 的顺序是 `POST /api/session/resume`、`GET /api/history`、`GET /api/events`。
 - 首次订阅成功后补一次 history，填上 history 与 subscribe 之间的空档。

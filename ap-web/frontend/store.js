@@ -9,6 +9,7 @@ import {
 	applyEvent,
 	applyTurnDone,
 	createState,
+	groupSessionsByDay,
 	ingestHistory,
 	sessionTitle,
 } from "./render.js";
@@ -64,6 +65,11 @@ export function createStore() {
 		// 侧栏只展示当前工作空间的对话记录，不再按 project 分组。
 		get activeSessions() {
 			return this.activeProject?.sessions ?? [];
+		},
+
+		// 对话记录再按今天 / 昨天 / 前天 / 更早分组，空组不渲染。
+		get sessionGroups() {
+			return groupSessionsByDay(this.activeSessions);
 		},
 
 		get statusKind() {
