@@ -112,6 +112,15 @@ Tool_Execution_Start_Event :: struct {
 	args_preview: Maybe(string) `json:"args_preview,omitempty"`,
 }
 
+// Tool_Image_Ref 指向工具结果里的图片 blob。图片二进制与文本一样先写 blob
+// 再引用；mime_type 只存在事件里，blob 本身不带元数据。
+Tool_Image_Ref :: struct {
+	name:      string `json:"name,omitempty"`,
+	mime_type: string `json:"mime_type"`,
+	ref:       string `json:"ref"`,
+	bytes:     int    `json:"bytes"`,
+}
+
 Tool_Execution_End_Event :: struct {
 	using header: Event_Header,
 	tool_call_id:    string,
@@ -120,6 +129,7 @@ Tool_Execution_End_Event :: struct {
 	content_ref:     Maybe(string) `json:"content_ref,omitempty"`,
 	content_bytes:   Maybe(int)    `json:"content_bytes,omitempty"`,
 	content_preview: Maybe(string) `json:"content_preview,omitempty"`,
+	images:          []Tool_Image_Ref `json:"images,omitempty"`,
 	error:           Maybe(string) `json:"error"`,
 	duration_ms:     Maybe(int)    `json:"duration_ms"`,
 	exit_code:       Maybe(int)    `json:"exit_code"`,

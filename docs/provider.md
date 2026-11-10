@@ -81,6 +81,15 @@ Odin 没有异步运行时。流式读取用阻塞 IO 加回调。
 4. tool call 的 `arguments` 是 JSON 字符串。参数对象由上下文投影生成。
 5. 工具定义来自注册表，顺序与注册表声明顺序一致。
 6. 没有工具时不发送 `tools` 与 `tool_choice`。`parallel_tool_calls` 仍为 `false`。
+7. 工具结果带图片时，先发正常的 `role=tool` 文本消息，再发一条合成 `role=user` 消息，`content` 是 text + `image_url` 数组。图片在投影层编码成 `data:<mime>;base64,...`。OpenAI 兼容接口的 tool 消息通常只接受文本 part，拆成 user 消息兼容性最好，也不影响 tool call 配对。
+
+```json
+{"role": "tool", "tool_call_id": "call_1", "content": "[image a.png, image/png, 12345 bytes]"},
+{"role": "user", "content": [
+  {"type": "text", "text": "Images returned by the tool:\n- a.png (image/png)"},
+  {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+]}
+```
 
 请求头固定为 `Content-Type: application/json`、`Accept: text/event-stream`、`User-Agent: ap/<VERSION>` 与 `Authorization: Bearer <api_key>`。API key 不写日志，不写 transcript。
 
@@ -225,7 +234,7 @@ libcurl 的全局初始化不是线程安全的。首次调用用互斥锁串行
 - 不支持 Anthropic Messages API。
 - 不支持非流式 JSON 响应。
 - 不计算 token 或运行 tokenizer。
-- 不发送多模态内容。
+- 不发送用户输入的多模态内容；只发送 `read_file` 产生的工具图片附件。
 - 不支持 prompt cache 的显式标记。
 
 ## 相关文档

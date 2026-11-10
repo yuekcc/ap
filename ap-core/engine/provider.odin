@@ -4,6 +4,7 @@ import "../platform"
 
 import "base:runtime"
 import c "core:c/libc"
+import "core:encoding/base64"
 import "core:encoding/json"
 import "core:fmt"
 import "core:mem/virtual"
@@ -169,9 +170,19 @@ Chat_Stream_Options :: struct {
 	include_usage: bool,
 }
 
+// Chat_Wire_Message 是实际发给 provider 的消息。content 用 json.Value 承载，
+// 因为带图片的工具结果会展开成 text + image_url 的 content 数组。
+Chat_Wire_Message :: struct {
+	role:              string `json:"role"`,
+	content:           json.Value `json:"content"`,
+	reasoning_content: Maybe(string) `json:"reasoning_content,omitempty"`,
+	tool_calls:        []Chat_Tool_Call `json:"tool_calls,omitempty"`,
+	tool_call_id:      Maybe(string) `json:"tool_call_id,omitempty"`,
+}
+
 Chat_Request_Body :: struct {
 	model:               string `json:"model"`,
-	messages:            []Chat_Message `json:"messages"`,
+	messages:            []Chat_Wire_Message `json:"messages"`,
 	tools:               []Tool_Def `json:"tools,omitempty"`,
 	tool_choice:         Maybe(string) `json:"tool_choice,omitempty"`,
 	parallel_tool_calls: bool `json:"parallel_tool_calls"`,
@@ -180,10 +191,105 @@ Chat_Request_Body :: struct {
 	stream_options:      Maybe(Chat_Stream_Options) `json:"stream_options,omitempty"`,
 }
 
+chat_message_content :: proc(content: Maybe(string)) -> json.Value {
+	if text, ok := content.?; ok {
+		return json.Value(json.String(text))
+	}
+	return json.Null(nil)
+}
+
+// 以下三个构造器把动态字符串的所有权交给 JSON 树；destroy_value 会释放
+// 全部 key 与 value，因此这里必须 clone 字面量、直接接管动态文本。
+chat_text_part :: proc(text: string, allocator: runtime.Allocator) -> json.Value {
+	obj := make(json.Object, 2, allocator)
+	obj[strings.clone("type", allocator)] = json.Value(json.String(strings.clone("text", allocator)))
+	obj[strings.clone("text", allocator)] = json.Value(json.String(text))
+	return json.Value(obj)
+}
+
+chat_image_part :: proc(image: Chat_Image, allocator: runtime.Allocator) -> json.Value {
+	url := chat_image_data_url(image, allocator)
+	image_url := make(json.Object, 1, allocator)
+	image_url[strings.clone("url", allocator)] = json.Value(json.String(url))
+	obj := make(json.Object, 2, allocator)
+	obj[strings.clone("type", allocator)] = json.Value(json.String(strings.clone("image_url", allocator)))
+	obj[strings.clone("image_url", allocator)] = json.Value(image_url)
+	return json.Value(obj)
+}
+
+chat_image_data_url :: proc(image: Chat_Image, allocator: runtime.Allocator) -> string {
+	b := strings.builder_make(allocator)
+	strings.write_string(&b, "data:")
+	strings.write_string(&b, image.mime_type)
+	strings.write_string(&b, ";base64,")
+	encoded, _ := base64.encode(image.data, allocator = allocator)
+	strings.write_string(&b, encoded)
+	delete(encoded, allocator)
+	return strings.to_string(b)
+}
+
+chat_images_content :: proc(images: []Chat_Image, allocator: runtime.Allocator) -> json.Value {
+	b := strings.builder_make(allocator)
+	strings.write_string(&b, "Images returned by the tool:")
+	for image in images {
+		strings.write_byte(&b, '\n')
+		fmt.sbprintf(&b, "- %s (%s)", image.name, image.mime_type)
+	}
+	parts := make(json.Array, 0, len(images) + 1, allocator)
+	append(&parts, chat_text_part(strings.to_string(b), allocator))
+	for image in images {
+		append(&parts, chat_image_part(image, allocator))
+	}
+	return json.Value(parts)
+}
+
 build_chat_request_body :: proc(req: Chat_Message_Request) -> ([]byte, Error) {
+	wire_messages := make([dynamic]Chat_Wire_Message, 0, len(req.messages))
+	owned_contents := make([dynamic]json.Value, 0, len(req.messages))
+	defer {
+		for value in owned_contents {
+			json.destroy_value(value)
+		}
+		delete(owned_contents)
+		delete(wire_messages)
+	}
+	for msg in req.messages {
+		if len(msg.images) == 0 {
+			append(
+				&wire_messages,
+				Chat_Wire_Message {
+					role = msg.role,
+					content = chat_message_content(msg.content),
+					reasoning_content = msg.reasoning_content,
+					tool_calls = msg.tool_calls,
+					tool_call_id = msg.tool_call_id,
+				},
+			)
+			continue
+		}
+		// role=tool 的 content 在 OpenAI 兼容接口里通常是纯文本。图片拆成紧随
+		// 其后的 user 消息，所有支持视觉输入的兼容模型都能吃到。
+		content := chat_message_content(msg.content)
+		if content == nil {
+			content = json.Value(json.String(""))
+		}
+		append(
+			&wire_messages,
+			Chat_Wire_Message {
+				role = msg.role,
+				content = content,
+				reasoning_content = msg.reasoning_content,
+				tool_calls = msg.tool_calls,
+				tool_call_id = msg.tool_call_id,
+			},
+		)
+		image_content := chat_images_content(msg.images, context.allocator)
+		append(&owned_contents, image_content)
+		append(&wire_messages, Chat_Wire_Message{role = ROLE_USER, content = image_content})
+	}
 	body := Chat_Request_Body {
 		model = req.model,
-		messages = req.messages,
+		messages = wire_messages[:],
 		tools = req.tools,
 		parallel_tool_calls = false,
 		max_tokens = req.max_tokens,

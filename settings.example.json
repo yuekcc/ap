@@ -9,6 +9,8 @@
   "llm_timeout_ms": 600000,
   "blob_threshold_bytes": 102400,
   "max_capture_bytes": 67108864,
+  "image_input": false,
+  "image_max_bytes": 5242880,
   "stream_include_usage": true,
   "context_window_tokens": 1048576,
   "context_reserve_percent": 5,

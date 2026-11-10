@@ -218,6 +218,8 @@ continue with -s <session_id>
   "llm_timeout_ms": 600000,                 // 单次 LLM 请求总超时
   "blob_threshold_bytes": 102400,           // 超过则写 blob
   "max_capture_bytes": 67108864,            // 单次工具输出硬上限
+  "image_input": false,                     // read_file 是否返回图片附件
+  "image_max_bytes": 5242880,               // 单张图片上限
   "stream_include_usage": true,             // 请求 stream_options.include_usage
   "context_window_tokens": 1048576,         // 模型上下文窗口，0 表示不设预算
   "context_reserve_percent": 5,             // 余量占窗口的百分比，0 表示不留
@@ -231,7 +233,7 @@ continue with -s <session_id>
 2. `api_key` 可以由 `AP_API_KEY` 覆盖。两处都没有时退出 2，`--print-system-prompt` 除外。
 3. `base_url` 缺省为官方地址，末尾斜杠会被去掉，空值报错。
 4. 未知字段忽略并警告。类型错误、非法取值都按配置错误退出 2。显式 `null` 按缺失处理。
-5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、两个超时和两个尺寸上限必须为正。`max_agent_depth` 必须非负。
+5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、两个超时和三个尺寸上限（`blob_threshold_bytes`、`max_capture_bytes`、`image_max_bytes`）必须为正。`max_agent_depth` 必须非负。
 6. `context_window_tokens` 必须非负；`0` 表示不设预算，此时另外两个字段不参与计算。非零时必须大于 `max_tokens` 与 `handoff_max_tokens`，并且 `max_tokens + reserve` 必须小于窗口（`reserve = context_window_tokens * context_reserve_percent / 100`），否则预算公式的前两项必为负。`context_reserve_percent` 取 `0`–`100`，`handoff_max_tokens` 必须为正。这些冲突在启动时按配置错误退出 2。
 7. `ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`。
 
@@ -244,9 +246,11 @@ continue with -s <session_id>
 | `model`、`base_url`、`api_key` | SDK provider |
 | `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage`、`context_window_tokens`、`context_reserve_percent`、`handoff_max_tokens` | SDK loop |
 | `llm_timeout_ms` | SDK provider |
-| `tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
+| `tool_timeout_ms`、`max_capture_bytes`、`image_input`、`image_max_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
 
 配置文件路径不属于 SDK `Settings`，由 `ap-cli` 自己持有。
+
+`image_input` 默认 `false`。开启后 `read_file` 才会把 PNG、JPEG、GIF、WebP 作为图片附件交给模型；文本模型保持关闭可避免请求被 provider 拒绝。`image_max_bytes` 只限制单张图片，ap 不做缩放或转码。
 
 ## 环境变量
 

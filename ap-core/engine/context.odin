@@ -19,6 +19,15 @@ Chat_Tool_Function :: struct {
 	arguments: string,
 }
 
+// Chat_Image 是投影阶段的图片附件。data 指向本 step arena 里的 blob 内容，
+// 不参与 JSON 序列化；provider 会把它编码成 data URL，放进紧随 tool 消息的
+// user 消息。
+Chat_Image :: struct {
+	name:      string,
+	mime_type: string,
+	data:      []byte,
+}
+
 // 文本块之间的分隔符。
 NEWLINE_SEP :: "\n"
 
@@ -28,6 +37,7 @@ Chat_Message :: struct {
 	reasoning_content: Maybe(string) `json:"reasoning_content,omitempty"`,
 	tool_calls:        []Chat_Tool_Call `json:"tool_calls,omitempty"`,
 	tool_call_id:      Maybe(string) `json:"tool_call_id,omitempty"`,
+	images:            []Chat_Image `json:"-"`,
 }
 
 System_Prompt_Options :: struct {
@@ -232,6 +242,33 @@ tool_result_content_in :: proc(
 	return err_text, ok_error()
 }
 
+// 读取工具结果引用的图片 blob。图片和文本一样，缺失即上下文错误。
+tool_result_images_in :: proc(
+	project: Project,
+	end: Tool_Execution_End_Event,
+	allocator: runtime.Allocator,
+) -> ([]Chat_Image, Error) {
+	if len(end.images) == 0 {
+		return nil, ok_error()
+	}
+	images := make([]Chat_Image, len(end.images), allocator)
+	for image, i in end.images {
+		if len(image.ref) == 0 {
+			return nil, make_error(.Usage, "tool result image has empty blob reference")
+		}
+		data, berr := blob_read(project, image.ref, allocator)
+		if !is_ok(berr) {
+			return nil, berr
+		}
+		images[i] = Chat_Image {
+			name      = image.name,
+			mime_type = image.mime_type,
+			data      = data,
+		}
+	}
+	return images, ok_error()
+}
+
 project_messages :: proc(project: Project, events: []Event) -> ([]Chat_Message, Error) {
 	messages, _, err := project_messages_with_slots_in(project, events, context.allocator)
 	return messages, err
@@ -348,15 +385,28 @@ project_messages_with_slots_in :: proc(
 				if !is_ok(rerr) {
 					return nil, nil, rerr
 				}
+				images: []Chat_Image
+				if end.ok {
+					var_ierr: Error
+					images, var_ierr = tool_result_images_in(project, end, allocator)
+					if !is_ok(var_ierr) {
+						return nil, nil, var_ierr
+					}
+				}
 				// 字节数按解析后的内容长度算，与 content / content_ref 无关；
-				// 两种存储形式必须在阈值边界上得到同样的判定。
+				// 两种存储形式必须在阈值边界上得到同样的判定。图片字节也计入，
+				// 否则大图结果永远不会进入省略候选。
+				result_bytes := len(content)
+				for image in images {
+					result_bytes += len(image.data)
+				}
 				append(
 					&slots,
 					Tool_Result_Slot {
 						message_index = len(messages),
 						name = call.function.name,
 						ok = end.ok,
-						bytes = len(content),
+						bytes = result_bytes,
 					},
 				)
 				append(
@@ -365,6 +415,7 @@ project_messages_with_slots_in :: proc(
 						role = ROLE_TOOL,
 						content = content,
 						tool_call_id = call.id,
+						images = images,
 					},
 				)
 			}

@@ -22,7 +22,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 5. 单次捕获超过 `max_capture_bytes` 时终止工具并返回 `ok:false`，不做静默截断。
 6. 工具失败只作为 tool result 交还模型。只有 `fatal=true` 的基础设施故障才终止 turn。
 7. 相对路径相对 ap 启动目录。绝对路径可用。`~` 与 `~/...` 展开为主目录。不展开其它环境变量。Windows 上 `/` 与 `\` 都接受，但不接受 MSYS 的 `/z/...`。
-8. `read_file` 与 `edit_file` 只接受 UTF-8。`bash` 输出先做 UTF-8 清洗，非法字节替换为 `U+FFFD`。
+8. `read_file` 的文本路径与 `edit_file` 只接受 UTF-8；`read_file` 的图片路径按格式识别并作为图片附件返回。`bash` 输出先做 UTF-8 清洗，非法字节替换为 `U+FFFD`。
 9. 没有沙箱、审批或根目录限制。`--add-dir` 不存在。
 10. agent 定义的 `tools:` 只决定注册给模型的工具，不是权限系统。只要 `bash` 还在白名单里，它仍拥有完整进程权限。
 
@@ -32,15 +32,16 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 
 ```jsonc
 // 成功
-{"ok": true, "content": "<文本结果>", "duration_ms": 12,
- "exit_code": 0, "metadata": null, "fatal": false}
+{"ok": true, "content": "<文本结果>", "images": [],
+ "duration_ms": 12, "exit_code": 0, "metadata": null, "fatal": false}
 
 // 失败
-{"ok": false, "error": "<错误信息>", "duration_ms": 3,
- "metadata": null, "fatal": false}
+{"ok": false, "error": "<错误信息>", "images": [],
+ "duration_ms": 3, "metadata": null, "fatal": false}
 ```
 
 - `content` 是给模型的完整文本。落盘时超过阈值会替换成 `content_ref` 加预览。
+- `images` 是图片附件列表，每项包含 `name`、`mime_type` 与原始字节。引擎把字节写入 blob 后释放，事件里只保留引用。
 - `exit_code` 只由 `bash` 设置。
 - `metadata` 只由 `task` 设置，内容见 [subagents.md](subagents.md)。
 - `duration_ms` 由 `tool_execute` 统一计时。
@@ -64,6 +65,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 | 内容 | 引用字段 |
 | --- | --- |
 | 工具结果 | `content_ref`、`content_bytes`、`content_preview` |
+| 工具结果图片 | `images[].ref`、`images[].bytes`、`images[].mime_type` |
 | 工具参数 | `args_ref`、`args_bytes`、`args_preview` |
 | assistant 的 `tool_use.input` | `input_ref`、`input_bytes`、`input_preview` |
 | assistant 文本块 | `text_ref`、`text_bytes`、`text_preview` |
@@ -80,6 +82,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 ### 失败
 
 - 工具结果写 blob 失败时，该次工具返回 `ok:false`，错误为 `failed to persist output blob`，循环继续。
+- 工具结果图片写 blob 失败时，该次工具返回 `ok:false`，错误为 `failed to persist image blob`，循环继续。
 - 工具参数写 blob 失败时，终止当前 turn，写 `error(scope=session)`，跳过本 step 剩余 tool call，退出 4。
 - 新 session 的 system prompt 写 blob 失败时，启动阶段退出 4。
 - 常见原因是磁盘满或 `$AP_CONFIG` 不可写。
@@ -88,7 +91,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 
 ## read_file
 
-按行读取 UTF-8 文本文件。
+按行读取 UTF-8 文本文件，或把图片作为多模态附件返回。
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
@@ -108,6 +111,16 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 8. 文件不存在、是目录或不是普通文件时返回 `ok:false`。
 9. 读取到的行不是合法 UTF-8、含 NUL 或单行超过 `max_capture_bytes` 时返回 `ok:false`，提示改用 bash。
 10. 本次请求的累计输出超过 `max_capture_bytes` 时返回 `ok:false`，提示缩小范围。
+
+### 图片
+
+按魔数识别 PNG、JPEG、GIF、WebP。SVG 仍按文本文件读取。
+
+1. `image_input = false`（默认）时，图片文件返回 `ok:false`，提示开启配置，不按二进制错误处理。
+2. `image_input = true` 时，返回一行文本 `[image <path>, <mime>, <bytes> bytes]`，并把原始字节放进 `images`。`start_line` / `end_line` 对图片不生效。
+3. 图片超过 `image_max_bytes`（默认 `5242880`）时返回 `ok:false`，不自动缩放或转码。
+4. 只支持原样透传，不处理 EXIF 旋转、动画帧或色彩空间。
+5. 引擎把图片写入 blob，`tool_execution_end.images` 只记录 `name`、`mime_type`、`ref` 与 `bytes`。投影时 provider 把图片展开成紧随 tool 消息的 user 消息；具体见 [provider.md](provider.md)。
 
 示例：
 

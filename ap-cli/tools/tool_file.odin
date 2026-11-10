@@ -12,6 +12,92 @@ import "core:unicode/utf8"
 
 MAX_READ_LINES :: 2000
 DEFAULT_READ_LINES :: 500
+IMAGE_SNIFF_BYTES :: 16
+
+// 只接受主流视觉模型都支持的四类格式。SVG 仍是文本，不在这里处理。
+image_mime_type :: proc(prefix: []byte) -> string {
+	if len(prefix) >= 8 &&
+	   prefix[0] == 0x89 &&
+	   prefix[1] == 'P' &&
+	   prefix[2] == 'N' &&
+	   prefix[3] == 'G' &&
+	   prefix[4] == 0x0d &&
+	   prefix[5] == 0x0a &&
+	   prefix[6] == 0x1a &&
+	   prefix[7] == 0x0a {
+		return "image/png"
+	}
+	if len(prefix) >= 3 && prefix[0] == 0xff && prefix[1] == 0xd8 && prefix[2] == 0xff {
+		return "image/jpeg"
+	}
+	if len(prefix) >= 6 &&
+	   string(prefix[0:3]) == "GIF" &&
+	   (string(prefix[3:6]) == "87a" || string(prefix[3:6]) == "89a") {
+		return "image/gif"
+	}
+	if len(prefix) >= 12 && string(prefix[0:4]) == "RIFF" && string(prefix[8:12]) == "WEBP" {
+		return "image/webp"
+	}
+	return ""
+}
+
+read_image_mime :: proc(path: string) -> string {
+	file, ferr := os.open(path)
+	if ferr != nil {
+		return ""
+	}
+	defer os.close(file)
+	buf: [IMAGE_SNIFF_BYTES]byte
+	n, rerr := os.read(file, buf[:])
+	if rerr != nil && rerr != .EOF {
+		return ""
+	}
+	return image_mime_type(buf[:n])
+}
+
+read_image_file :: proc(resolved: string, mime: string, cfg: ^Tool_Config, size: i64) -> tool.Tool_Result {
+	if !cfg.image_input {
+		return tool.tool_fail(
+			fmt.tprintf(
+				"%s is an image (%s); set image_input=true in settings to read images",
+				resolved,
+				mime,
+			),
+		)
+	}
+	if size > i64(cfg.image_max_bytes) {
+		return tool.tool_fail(
+			fmt.tprintf(
+				"image exceeds image_max_bytes (%d > %d); downscale it first",
+				size,
+				cfg.image_max_bytes,
+			),
+		)
+	}
+	data, derr := os.read_entire_file_from_path(resolved, context.allocator)
+	if derr != nil {
+		return tool.tool_fail(fmt.tprintf("cannot read %s: %v", resolved, derr))
+	}
+	if len(data) > cfg.image_max_bytes {
+		delete(data)
+		return tool.tool_fail(
+			fmt.tprintf(
+				"image exceeds image_max_bytes (%d > %d); downscale it first",
+				len(data),
+				cfg.image_max_bytes,
+			),
+		)
+	}
+	if len(data) == 0 {
+		delete(data)
+		return tool.tool_fail(fmt.tprintf("empty image file: %s", resolved))
+	}
+	images := make([]tool.Tool_Image, 1)
+	images[0] = {name = resolved, mime_type = mime, data = data}
+	res := tool.tool_ok(fmt.tprintf("[image %s, %s, %d bytes]", resolved, mime, len(data)))
+	res.images = images
+	return res
+}
 
 has_nul :: proc(data: []byte) -> bool {
 	for b in data {
@@ -179,6 +265,11 @@ tool_read_file :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Con
 	}
 	if info.type != .Regular {
 		return tool.tool_fail(fmt.tprintf("not a regular file: %s", resolved))
+	}
+
+	mime := read_image_mime(resolved)
+	if len(mime) > 0 {
+		return read_image_file(resolved, mime, cfg, info.size)
 	}
 
 	lines, total, lerr := read_file_stream(resolved, start_line, end_line, cfg.max_capture_bytes)

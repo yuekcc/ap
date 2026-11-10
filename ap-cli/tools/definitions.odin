@@ -17,7 +17,7 @@ TOOL_INFOS := [5]Tool_Info {
 	{
 		name = "read_file",
 		description = "按行读取 UTF-8 文本文件；单次最多 2000 行，大文件用 start_line/end_line 分页读取。首行为元信息，其后每行格式为 `<NNN>\\t<content>`，NNN 是该行在文件中的实际行号（从 1 开始，不含补零或对齐）；内容本身不含行号，写回或匹配时不要带上它。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"start_line":{"type":"integer","minimum":1,"description":"起始行号（含），默认 1"},"end_line":{"type":"integer","minimum":1,"description":"结束行号（含），默认 start_line+499"}},"required":["file_path"],"additionalProperties":false}`,
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径（文本或图片），绝对或相对启动目录"},"start_line":{"type":"integer","minimum":1,"description":"起始行号（含），默认 1"},"end_line":{"type":"integer","minimum":1,"description":"结束行号（含），默认 start_line+499"}},"required":["file_path"],"additionalProperties":false}`,
 	},
 	{
 		name = "write_file",
@@ -41,6 +41,20 @@ TOOL_INFOS := [5]Tool_Info {
 	},
 }
 
+// read_file 的描述随配置变化：模型只有看到图片能力时才会对图片路径调用
+// read_file，而不是绕去 bash。
+read_file_description :: proc(cfg: ^Tool_Config) -> string {
+	base := TOOL_INFOS[0].description
+	if cfg != nil && cfg.image_input {
+		return fmt.tprintf(
+			"%s也支持读取图片：按魔数识别 PNG、JPEG、GIF、WebP，直接传 file_path 即可，图片会作为视觉附件返回；start_line/end_line 对图片无效；单张上限 %d 字节。",
+			base,
+			cfg.image_max_bytes,
+		)
+	}
+	return fmt.tprintf("%s当前未启用图片读取；PNG/JPEG/GIF/WebP 会返回错误。", base)
+}
+
 tool_info_by_name :: proc(name: string) -> (Tool_Info, bool) {
 	for info in TOOL_INFOS {
 		if info.name == name {
@@ -54,9 +68,13 @@ tool_info_by_name :: proc(name: string) -> (Tool_Info, bool) {
 builtin_tools :: proc(cfg: ^Tool_Config) -> []tool.Tool {
 	tools := make([]tool.Tool, len(TOOL_INFOS))
 	for info, i in TOOL_INFOS {
+		description := info.description
+		if info.name == "read_file" {
+			description = read_file_description(cfg)
+		}
 		tools[i] = tool.Tool {
 			name = info.name,
-			description = info.description,
+			description = description,
 			parameters_json = info.parameters,
 			user = cfg,
 		}

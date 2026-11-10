@@ -80,6 +80,15 @@ test_contains :: proc(haystack, needle: string) -> bool {
 	return strings.contains(haystack, needle)
 }
 
+free_test_images :: proc(images: []tool.Tool_Image) {
+	for image in images {
+		delete(image.data)
+	}
+	delete(images)
+}
+
+PNG_TEST_STRING: string : "\x89PNG\r\n\x1a\n\x01\x02\x03\x04"
+
 Test_Tools :: struct {
 	ctx:      tool.Tool_Context,
 	cfg:      ^Tool_Config,
@@ -178,6 +187,46 @@ test_read_file_crlf_and_utf8_errors :: proc(t: ^testing.T) {
 		&tt.ctx,
 	)
 	testing.expect(t, !missing.ok)
+}
+
+@(test)
+test_read_file_image_attachments :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-read-image")
+	defer test_cleanup(tt.dir)
+	tt.cfg.image_input = true
+	tt.cfg.image_max_bytes = 1024
+	path := fmt.tprintf("%s/pixel.png", tt.dir)
+	testing.expect_value(t, os.write_entire_file_from_bytes(path, transmute([]byte)PNG_TEST_STRING), nil)
+
+	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
+	defer free_test_images(res.images)
+	testing.expect(t, res.ok)
+	testing.expect(t, test_contains(res.content, "image/png"))
+	testing.expect_value(t, len(res.images), 1)
+	testing.expect_value(t, res.images[0].mime_type, "image/png")
+	testing.expect(t, test_contains(res.images[0].name, "pixel.png"))
+	testing.expect_value(t, len(res.images[0].data), len(PNG_TEST_STRING))
+	testing.expect(t, string(res.images[0].data) == PNG_TEST_STRING)
+}
+
+@(test)
+test_read_file_image_requires_config_and_size_limit :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-read-image-limits")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/pixel.png", tt.dir)
+	testing.expect_value(t, os.write_entire_file_from_bytes(path, transmute([]byte)PNG_TEST_STRING), nil)
+	args := json.Value(json_obj(test_json(`{"file_path":%q}`, path)))
+
+	res := tool.tool_execute(&tt.registry, "read_file", args, &tt.ctx)
+	testing.expect(t, !res.ok)
+	testing.expect(t, test_contains(res.error, "image_input=true"))
+
+	tt.cfg.image_input = true
+	tt.cfg.image_max_bytes = 4
+	args2 := json.Value(json_obj(test_json(`{"file_path":%q}`, path)))
+	res2 := tool.tool_execute(&tt.registry, "read_file", args2, &tt.ctx)
+	testing.expect(t, !res2.ok)
+	testing.expect(t, test_contains(res2.error, "image_max_bytes"))
 }
 
 @(test)
@@ -426,6 +475,39 @@ test_bash_exposes_session_environment :: proc(t: ^testing.T) {
 	testing.expect(t, res2.ok)
 	expected_root := fmt.tprintf("s||%s", tt.ctx.transcript_path)
 	testing.expect(t, test_contains(res2.content, expected_root))
+}
+
+@(test)
+test_read_file_description_follows_image_config :: proc(t: ^testing.T) {
+	cfg := new(Tool_Config)
+	cfg.tool_timeout_ms = 120000
+	cfg.max_capture_bytes = 1024
+	cfg.image_max_bytes = 12345
+
+	disabled := builtin_tools(cfg)
+	disabled_desc := ""
+	for item in disabled {
+		if item.name == "read_file" {
+			disabled_desc = item.description
+		}
+	}
+	testing.expect(t, test_contains(disabled_desc, "未启用图片读取"))
+
+	cfg.image_input = true
+	enabled := builtin_tools(cfg)
+	enabled_desc := ""
+	for item in enabled {
+		if item.name == "read_file" {
+			enabled_desc = item.description
+		}
+	}
+	testing.expect(t, test_contains(enabled_desc, "PNG"))
+	testing.expect(t, test_contains(enabled_desc, "12345"))
+
+	registry, rerr := tool.registry_init(enabled)
+	testing.expect(t, platform.is_ok(rerr))
+	section := tool.registry_prompt_section(&registry, []string{"read_file"})
+	testing.expect(t, test_contains(section, "PNG、JPEG、GIF、WebP"))
 }
 
 @(test)

@@ -325,6 +325,43 @@ test_chat_request_body_shape :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_chat_request_body_images_become_user_message :: proc(t: ^testing.T) {
+	messages := []Chat_Message {
+		{
+			role = "tool",
+			content = "[image pixel.png]",
+			tool_call_id = "call_img",
+			images = []Chat_Image {
+				{name = "pixel.png", mime_type = "image/png", data = []byte{1, 2, 3, 4}},
+			},
+		},
+	}
+	body, err := build_chat_request_body({model = "m", messages = messages, max_tokens = 16})
+	testing.expect_value(t, err.kind, Error_Kind.None)
+	value, perr := json.parse_string(string(body), .JSON, true)
+	testing.expect_value(t, perr, nil)
+	defer json.destroy_value(value)
+	msgs := value.(json.Object)["messages"].(json.Array)
+	testing.expect_value(t, len(msgs), 2)
+
+	tool := msgs[0].(json.Object)
+	json_expect(t, tool["role"], json.String("tool"))
+	json_expect(t, tool["tool_call_id"], json.String("call_img"))
+	json_expect(t, tool["content"], json.String("[image pixel.png]"))
+
+	user := msgs[1].(json.Object)
+	json_expect(t, user["role"], json.String("user"))
+	parts := user["content"].(json.Array)
+	testing.expect_value(t, len(parts), 2)
+	text_part := parts[0].(json.Object)
+	json_expect(t, text_part["type"], json.String("text"))
+	image_part := parts[1].(json.Object)
+	json_expect(t, image_part["type"], json.String("image_url"))
+	url := image_part["image_url"].(json.Object)["url"].(json.String)
+	testing.expect(t, strings.has_prefix(string(url), "data:image/png;base64,"))
+}
+
+@(test)
 test_chat_request_body_preserves_unicode :: proc(t: ^testing.T) {
 	messages := []Chat_Message{{role = "user", content = "中文请求"}}
 	body, err := build_chat_request_body({model = "m", messages = messages, max_tokens = 16})

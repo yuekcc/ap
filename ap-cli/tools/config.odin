@@ -11,6 +11,8 @@ Tool_Config :: struct {
 	max_steps:         int,
 	tool_timeout_ms:   int,
 	max_capture_bytes: int,
+	image_input:       bool,
+	image_max_bytes:   int,
 	max_agent_depth:   int,
 	no_agents_md:      bool,
 	no_skills:         bool,

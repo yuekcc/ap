@@ -514,6 +514,34 @@ loop_tool_update :: proc(user: rawptr, chunk: string) {
 	}
 }
 
+// 把工具返回的图片写成 blob，返回事件引用。无论成败都在这里释放图片
+// 原始字节：transcript 与后续投影只依赖 blob 引用。
+persist_tool_images :: proc(
+	project: Project,
+	images: []tool.Tool_Image,
+) -> ([]Tool_Image_Ref, string) {
+	refs := make([dynamic]Tool_Image_Ref, 0, len(images))
+	for image in images {
+		image_bytes := len(image.data)
+		sha, berr := blob_write(project, image.data)
+		delete(image.data)
+		if !is_ok(berr) {
+			delete(refs)
+			return nil, "failed to persist image blob"
+		}
+		append(
+			&refs,
+			Tool_Image_Ref {
+				name = image.name,
+				mime_type = image.mime_type,
+				ref = sha,
+				bytes = image_bytes,
+			},
+		)
+	}
+	return refs[:], ""
+}
+
 loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind: Error_Kind) {
 	for call in l.pending_calls {
 		if platform.cancel_token_cancelled(l.cancel) {
@@ -574,14 +602,30 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 			res.content = ""
 		}
 
+		image_refs: []Tool_Image_Ref
+		image_error := ""
+		if res.ok {
+			image_refs, image_error = persist_tool_images(l.project, res.images)
+		} else {
+			for image in res.images {
+				delete(image.data)
+			}
+		}
+
 		end_ev := Tool_Execution_End_Event {
 			tool_call_id = call.id,
 			ok = res.ok,
 			duration_ms = res.duration_ms,
 			exit_code = res.exit_code,
 			metadata = res.metadata,
+			images = image_refs,
 		}
-		if res.ok {
+		if len(image_error) > 0 {
+			end_ev.ok = false
+			end_ev.error = image_error
+			end_ev.content = nil
+			end_ev.images = nil
+		} else if res.ok {
 			if len(res.content) > l.settings.blob_threshold_bytes {
 				content_bytes: []byte = transmute([]byte)res.content
 				sha, berr := blob_write(l.project, content_bytes)
@@ -589,6 +633,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 					end_ev.ok = false
 					end_ev.error = "failed to persist output blob"
 					end_ev.content = nil
+					end_ev.images = nil
 				} else {
 					end_ev.content = nil
 					end_ev.content_ref = sha
@@ -604,8 +649,10 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		}
 		h2 := make_header(l.store, EVENT_TOOL_EXECUTION_END)
 		end_ev.header = h2
-		if aerr := loop_append(l, end_ev, h2); !is_ok(aerr) {
-			return false, aerr, .Internal
+		append_err := loop_append(l, end_ev, h2)
+		delete(image_refs)
+		if !is_ok(append_err) {
+			return false, append_err, .Internal
 		}
 		progress(l, .Block, "_%s %s (%dms)_", call.name, "ok" if end_ev.ok else "failed", res.duration_ms)
 		if was_cancelled {

@@ -34,6 +34,8 @@ test_settings_defaults_and_defaults_file :: proc(t: ^testing.T) {
 	testing.expect_value(t, loaded.tool.max_agent_depth, 1)
 	testing.expect_value(t, loaded.tool.tool_timeout_ms, 120000)
 	testing.expect_value(t, loaded.tool.max_capture_bytes, 67108864)
+	testing.expect_value(t, loaded.tool.image_input, false)
+	testing.expect_value(t, loaded.tool.image_max_bytes, 5242880)
 }
 
 @(test)
@@ -42,13 +44,15 @@ test_settings_tool_fields_are_split_out :: proc(t: ^testing.T) {
 	defer os.remove_all(dir)
 	settings_write_file(
 		fmt.tprintf("%s/settings.json", dir),
-		`{"model":"m","api_key":"k","max_agent_depth":3,"tool_timeout_ms":5000,"max_capture_bytes":1234}`,
+		`{"model":"m","api_key":"k","max_agent_depth":3,"tool_timeout_ms":5000,"max_capture_bytes":1234,"image_input":true,"image_max_bytes":2048}`,
 	)
 	loaded, err := load_settings(dir)
 	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
 	testing.expect_value(t, loaded.tool.max_agent_depth, 3)
 	testing.expect_value(t, loaded.tool.tool_timeout_ms, 5000)
 	testing.expect_value(t, loaded.tool.max_capture_bytes, 1234)
+	testing.expect_value(t, loaded.tool.image_input, true)
+	testing.expect_value(t, loaded.tool.image_max_bytes, 2048)
 }
 
 @(test)

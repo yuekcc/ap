@@ -51,7 +51,7 @@ Loop 只看 `Provider_Error.retryable`，不重新按 kind 分类。Provider 把
 
 ## 工具失败
 
-普通失败写入 `tool_execution_end(ok=false)`，循环继续。包括参数错误、路径不存在、文件非 UTF-8、edit 未匹配、bash 超时、输出超过 `max_capture_bytes` 与工具结果 blob 写入失败。各工具的具体文本与范围见 [tools.md](tools.md)。
+普通失败写入 `tool_execution_end(ok=false)`，循环继续。包括参数错误、路径不存在、文件非 UTF-8、图片超过 `image_max_bytes`、edit 未匹配、bash 超时、输出超过 `max_capture_bytes` 与工具结果 blob 写入失败。各工具的具体文本与范围见 [tools.md](tools.md)。
 
 `read_file` 请求超过 2000 行时截断并正常返回。bash 非 0 退出仍是 `ok=true`，`exit_code` 保留真实退出码。两者都不是失败。工具取消走信号取消路径，见下文。
 
@@ -66,7 +66,7 @@ Loop 只看 `Provider_Error.retryable`，不重新按 kind 分类。Provider 把
 
 工具参数 blob 写入失败发生在 `tool_execution_start` 之前。Loop 写 `error(scope=session)`，跳过本次及本 step 剩余工具，返回 `.Tool`。
 
-工具结果 blob 写入失败不是 fatal。`tool_execution_end` 写 `ok=false` 与 `error="failed to persist output blob"`，循环继续。
+工具结果 blob 写入失败不是 fatal。`tool_execution_end` 写 `ok=false` 与 `error="failed to persist output blob"`，循环继续。图片 blob 写入失败同理，错误为 `failed to persist image blob`。
 
 bash 超时与输出超限会先终止整棵进程树，再返回 `ok=false`。没有“连续失败 N 次熔断”，收敛依靠 `max_steps` 与模型自身判断。
 

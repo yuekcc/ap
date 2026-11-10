@@ -111,7 +111,7 @@ Provider 请求中的 messages 由一条 `role=system` 消息加投影结果组�
 | --- | --- |
 | `user_message` | 一条 `role=user` 消息 |
 | `message_end`，`stop_reason` 不是 `cancelled` | 一条 `role=assistant` 消息 |
-| `tool_execution_end` | 一条 `role=tool` 消息，跟在要求它的 assistant 消息后 |
+| `tool_execution_end` | 一条 `role=tool` 消息，跟在要求它的 assistant 消息后；provider 序列化时有图片会再展开成一条合成 `role=user` 图片消息 |
 | `session_start` | 不进入 messages，只提供 system prompt |
 | `handoff` | 不进入 messages，只提供交接文档 |
 | `message_start`、`step_start`、`turn_start`、`turn_end`、`error`、`cancel`、`session_end` | 忽略 |
@@ -132,6 +132,7 @@ assistant 消息的构造规则：
 - `text_ref`：读出完整文本，作为 `text` 块。
 - `input_ref`：读出后按 JSON 解析，作为工具参数。解析失败视为上下文错误。
 - `content_ref`：读出完整内容，作为 tool result。
+- `images[].ref`：读出图片原始字节，投影成 tool 消息的图片附件。
 - `session_start.content` 为空时，用 `content_ref` 还原 system prompt。
 
 blob 缺失、sha256 不匹配或读取失败时，组装返回 `.Usage` 错误，不静默降级。system prompt 的 blob 在打开 session 时失败。其它 blob 在第一个 step 失败。两者都退出 2。
@@ -151,6 +152,7 @@ blob 缺失、sha256 不匹配或读取失败时，组装返回 `.Usage` 错误�
 
 - `ok: true`：使用 `content` 或 `content_ref` 的完整内容。空内容就是空字符串。
 - `ok: false`：使用 `error`。`error` 缺失时写 `tool failed`。存在部分输出时，在错误文本后用 `\n` 拼接内容。
+- `images`：只在 `ok: true` 时读取对应 blob，附加到同一条 tool 消息。provider 序列化时图片展开成紧随其后的合成 user 消息。
 - `metadata`、`duration_ms`、`exit_code` 不进入 messages。
 
 ## token 预算
@@ -182,7 +184,7 @@ reserve = context_window_tokens * context_reserve_percent / 100
 estimate_tokens(s) = ceil(ascii_bytes(s) / 4) + ceil(non_ascii_bytes(s) / 3)
 ```
 
-逐字节统计类别，再对每条消息加固定结构开销（每条消息 4 token，每个 tool call 8 token）。工具定义按名字、描述与参数 JSON 估算。函数是纯的、无状态的，可单测。估算只用于「接近预算时怎么决策」，不追求绝对值准确。
+逐字节统计类别，再对每条消息加固定结构开销（每条消息 4 token，每个 tool call 8 token）。工具定义按名字、描述与参数 JSON 估算。图片按每张固定 `ESTIMATE_IMAGE_TOKENS`（`1600`）计入，不按 base64 或原始字节数估算。函数是纯的、无状态的，可单测。估算只用于「接近预算时怎么决策」，不追求绝对值准确。
 
 ### usage 校准
 
@@ -224,7 +226,7 @@ transcript 只追加，所以第 N 步发出的 messages 一定是第 N+1 步 me
 3. 从末尾倒数的 `ELIDE_KEEP_RECENT_RESULTS`（`6`）个候选不省略。
 4. 其余按**从旧到新**顺序逐个省略，直到估算落到目标以内或候选耗尽。
 
-字节数按解析后的内容长度计算，与 `content` / `content_ref` 无关：两种存储形式必须得到同样的判定，否则阈值边界上会出现不确定行为。
+字节数按解析后的内容长度计算，与 `content` / `content_ref` 无关：两种存储形式必须得到同样的判定，否则阈值边界上会出现不确定行为。图片结果的字节数还包含图片 blob 的原始字节，图片 token 按固定值另计。
 
 ### 桩文本
 
@@ -238,7 +240,8 @@ transcript 只追加，所以第 N 步发出的 messages 一定是第 N+1 步 me
 
 - **确定性**：同一 `(events, tools_tokens, limit_tokens, calibration_percent)` 必须产出逐字节相同的 messages。候选遍历用消息列表顺序，不用 map 迭代顺序。
 - **单调**：省略集合只随 events 增长而变大。最旧优先、target 固定的算法天然满足。
-- **成对结构不变**：只改 tool 消息的 `content`，不动 assistant 的 `tool_calls`、消息条数与顺序。
+- **成对结构不变**：只改 tool 消息的 `content` 与 `images`，不动 assistant 的 `tool_calls`、消息条数与顺序。
+- **图片一起省略**：省略带图片的 tool 结果时同时清空 `images`，不会只删文本留下图片。
 - **校验不变**：省略前仍按现有规则解析 blob、校验 sha256，失败照样返回 `.Usage`。省略不跳过任何校验。
 - **不省略时等价**：`limit_tokens <= 0` 时 `context_build_budgeted` 的 messages 与 `context_build` 逐字节相同。
 

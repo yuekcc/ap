@@ -57,6 +57,7 @@ Settings :: engine.Settings
 Tool :: tool.Tool
 Tool_Context :: tool.Tool_Context
 Tool_Result :: tool.Tool_Result
+Tool_Image :: tool.Tool_Image
 Tool_Def :: tool.Tool_Def
 Registry :: tool.Registry
 

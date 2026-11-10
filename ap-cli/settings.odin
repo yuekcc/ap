@@ -15,7 +15,7 @@ import "core:strings"
 // JSONC 宽（单引号字符串、十六进制、NaN/Infinity），这里接受超集而不另写
 // 一个去注释的预处理器。
 
-known_setting_keys := [14]string {
+known_setting_keys := [16]string {
 	"model",
 	"base_url",
 	"api_key",
@@ -26,6 +26,8 @@ known_setting_keys := [14]string {
 	"llm_timeout_ms",
 	"blob_threshold_bytes",
 	"max_capture_bytes",
+	"image_input",
+	"image_max_bytes",
 	"stream_include_usage",
 	"context_window_tokens",
 	"context_reserve_percent",
@@ -162,6 +164,8 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 			config_dir = config_dir,
 			tool_timeout_ms = 120000,
 			max_capture_bytes = 67108864,
+			image_input = false,
+			image_max_bytes = 5242880,
 			max_agent_depth = 1,
 		},
 		path = fmt.tprintf("%s/settings.json", config_dir),
@@ -232,6 +236,12 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if err := json_get_int(obj, loaded.path, "max_capture_bytes", &loaded.tool.max_capture_bytes); !apcore.is_ok(err) {
 		return loaded, err
 	}
+	if err := json_get_bool(obj, loaded.path, "image_input", &loaded.tool.image_input); !apcore.is_ok(err) {
+		return loaded, err
+	}
+	if err := json_get_int(obj, loaded.path, "image_max_bytes", &loaded.tool.image_max_bytes); !apcore.is_ok(err) {
+		return loaded, err
+	}
 	if err := json_get_bool(obj, loaded.path, "stream_include_usage", &loaded.sdk.stream_include_usage); !apcore.is_ok(err) {
 		return loaded, err
 	}
@@ -266,7 +276,9 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if loaded.tool.tool_timeout_ms <= 0 || loaded.sdk.llm_timeout_ms <= 0 {
 		return loaded, apcore.errorf(.Usage, "%s: timeouts must be positive", loaded.path)
 	}
-	if loaded.sdk.blob_threshold_bytes <= 0 || loaded.tool.max_capture_bytes <= 0 {
+	if loaded.sdk.blob_threshold_bytes <= 0 ||
+	   loaded.tool.max_capture_bytes <= 0 ||
+	   loaded.tool.image_max_bytes <= 0 {
 		return loaded, apcore.errorf(.Usage, "%s: size limits must be positive", loaded.path)
 	}
 	if err := validate_context_budget(loaded.sdk); !apcore.is_ok(err) {

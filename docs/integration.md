@@ -145,7 +145,7 @@ Windows 还要清理管道继承标志。启动子进程前，对前端自己保
 | `message_end` | `message_id`、`content` 的 `text`、`text_ref`、`text_preview` | 没收到文本增量时才用全文补齐。历史模式总用全文。 |
 | `tool_execution_start` | `tool_call_id`、`name`、`args`、`args_ref`、`args_preview` | 建工具卡片。参数压成单行并截到约 240 字节。 |
 | `tool_execution_update` | `tool_call_id`、`chunk` | 只在实时模式追加，典型是 `bash` 输出。不要截断。 |
-| `tool_execution_end` | `tool_call_id`、`ok`、`content`、`content_ref`、`content_preview`、`error`、`duration_ms`、`exit_code` | 收尾工具卡片。结果预览截到 200 行或 20000 字节，并提示完整内容在 transcript。 |
+| `tool_execution_end` | `tool_call_id`、`ok`、`content`、`content_ref`、`content_preview`、`images`、`error`、`duration_ms`、`exit_code` | 收尾工具卡片。结果预览截到 200 行或 20000 字节，并提示完整内容在 transcript。`images` 是可选图片附件，前端可忽略。 |
 | `error` | `scope`、`message`、`retryable` | 可重试显示为警告，否则显示为错误。 |
 | `cancel` | `scope` | 显示“已取消”。后面可能还有收尾事件。 |
 | `turn_end` | `stop_reason`、`usage`、`context` | 记录本 turn 的 stop reason。`stop_reason` 可能是 `stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`、`handoff`。`handoff` **不是失败**：本轮正常结束，交接文档已写入 `handoff` 事件，CLI 会创建承载它的新 session。`tool_use` 只出现在 `message_end`，不会出现在 `turn_end`。`context` 是可选观测字段，关闭预算时为 `null`。 |
@@ -227,7 +227,7 @@ Windows 还要清理管道继承标志。启动子进程前，对前端自己保
 1. 按文件行序读取。
 2. 同一文件可能有多个 `session_start`，渲染以最后一个为准。
 3. 解析失败的尾行直接跳过。崩溃留下的不完整行由 `ap` 下次启动时截掉。
-4. `session_start.content_ref`、文本块的 `text_ref`、`tool_use` 的 `input_ref`、`tool_execution_start.args_ref`、`tool_execution_end.content_ref` 都要读对应的 blob。
+4. `session_start.content_ref`、文本块的 `text_ref`、`tool_use` 的 `input_ref`、`tool_execution_start.args_ref`、`tool_execution_end.content_ref` 与 `tool_execution_end.images[].ref` 都要读对应的 blob。
 5. 展示层缺少 blob 时可以退化为对应的 `*_preview`，并在 UI 标记，不要静默当成空内容。这是前端重放的降级规则。`ap` 自己恢复上下文时不做这种降级，blob 缺失直接退出 2。
 6. 工具结果只展示 200 行或 20000 字节。完整内容仍在 transcript。
 7. 有 `tool_execution_start` 没有 `tool_execution_end` 的工具调用可以保留“运行中”或“已中断”状态。不要伪造结果。

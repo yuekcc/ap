@@ -20,6 +20,9 @@ ESTIMATE_NON_ASCII_DIVISOR :: 3
 // 结构字段的固定小开销：每条消息 4 token，每个 tool_call 8 token。
 ESTIMATE_MESSAGE_OVERHEAD :: 4
 ESTIMATE_TOOL_CALL_OVERHEAD :: 8
+// 图片 token 无法从字节数估算，按每张的固定值计入。这个值覆盖常见视觉
+// 模型单张中高分辨率图片的开销，偏保守。
+ESTIMATE_IMAGE_TOKENS :: 1600
 
 // 校准系数上下限，防估算函数退化或脏 usage 带偏。
 CALIBRATION_MIN_PERCENT :: 50
@@ -59,6 +62,12 @@ estimate_message_tokens :: proc(msg: Chat_Message) -> int {
 	}
 	if call_id, ok := msg.tool_call_id.?; ok {
 		total += estimate_text_tokens(call_id)
+	}
+	for image in msg.images {
+		total += ESTIMATE_IMAGE_TOKENS
+		// 图片消息额外的文本部分（文件名、MIME）很小，但仍计入。
+		total += estimate_text_tokens(image.name)
+		total += estimate_text_tokens(image.mime_type)
 	}
 	for call in msg.tool_calls {
 		total += ESTIMATE_TOOL_CALL_OVERHEAD
@@ -195,8 +204,14 @@ elide_tool_results :: proc(
 		}
 		stub := elided_stub(slot.name, slot.bytes)
 		before := estimate_text_tokens(old)
+		for image in msg.images {
+			before += ESTIMATE_IMAGE_TOKENS
+			before += estimate_text_tokens(image.name)
+			before += estimate_text_tokens(image.mime_type)
+		}
 		after := estimate_text_tokens(stub)
 		msg.content = stub
+		msg.images = nil
 		result.raw_estimate += after - before
 		result.elided_results += 1
 		result.elided_bytes += slot.bytes

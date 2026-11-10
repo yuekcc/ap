@@ -38,6 +38,17 @@ test_estimate_counts_message_structure :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_estimate_counts_images_as_fixed_tokens :: proc(t: ^testing.T) {
+	msg := Chat_Message {
+		role    = ROLE_TOOL,
+		content = "",
+		images  = []Chat_Image{{name = "a.png", mime_type = "image/png", data = []byte{1, 2, 3}}},
+	}
+	expected := 4 + ESTIMATE_IMAGE_TOKENS + estimate_text_tokens("a.png") + estimate_text_tokens("image/png")
+	testing.expect_value(t, estimate_message_tokens(msg), expected)
+}
+
+@(test)
 test_calibration_percent :: proc(t: ^testing.T) {
 	// 没有观测值时不校准。
 	testing.expect_value(t, calibration_percent_from(0, 0), 100)
@@ -68,17 +79,24 @@ test_elide_keeps_recent_and_small_and_failed :: proc(t: ^testing.T) {
 		if i == 2 {
 			content = "small"
 		}
-		append(&messages, Chat_Message{role = ROLE_TOOL, content = content, tool_call_id = "c"})
+		msg := Chat_Message{role = ROLE_TOOL, content = content, tool_call_id = "c"}
+		slot_bytes := len(content)
+		if i == 0 {
+			msg.images = []Chat_Image{{name = "a.png", mime_type = "image/png", data = []byte{1, 2, 3}}}
+			slot_bytes += 3
+		}
+		append(&messages, msg)
 		append(
 			&slots,
-			Tool_Result_Slot{message_index = i, name = "bash", ok = ok, bytes = len(content)},
+			Tool_Result_Slot{message_index = i, name = "bash", ok = ok, bytes = slot_bytes},
 		)
 	}
 	base := estimate_messages_tokens(messages[:])
 	result := elide_tool_results(messages[:], slots[:], 1, 100, base, context.allocator)
 	// 可省略候选是 0,3,4,5,6,7,8,9，去掉最近 6 个后只剩 0,3。
 	testing.expect_value(t, result.elided_results, 2)
-	testing.expect_value(t, messages[0].content.?, elided_stub("bash", len(big)))
+	testing.expect_value(t, messages[0].content.?, elided_stub("bash", len(big) + 3))
+	testing.expect_value(t, len(messages[0].images), 0)
 	testing.expect(t, strings.has_prefix(messages[1].content.?, "failed: "))
 	testing.expect_value(t, messages[2].content.?, "small")
 	testing.expect_value(t, messages[3].content.?, elided_stub("bash", len(big)))

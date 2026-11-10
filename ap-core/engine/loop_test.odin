@@ -67,6 +67,8 @@ fake_provider_call :: proc(
 	return provider_error_none()
 }
 
+LOOP_TEST_IMAGE: string : "\x89PNG\r\n\x1a\n"
+
 loop_test_bash_exec :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
 	obj, _ := args.(json.Object)
 	command, _ := obj["command"].(json.String)
@@ -77,6 +79,17 @@ loop_test_bash_exec :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Cont
 			strings.write_byte(&b, 'x')
 		}
 		text = strings.to_string(b)
+	}
+	if strings.contains(string(command), "return-image") {
+		data := make([]byte, len(LOOP_TEST_IMAGE))
+		copy(data, transmute([]byte)LOOP_TEST_IMAGE)
+		images := make([]tool.Tool_Image, 1)
+		images[0] = {
+			name      = "pixel.png",
+			mime_type = "image/png",
+			data      = data,
+		}
+		return {ok = true, content = "[image pixel.png]", exit_code = 0, images = images}
 	}
 	return {ok = true, content = text, exit_code = 0}
 }
@@ -204,6 +217,56 @@ test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, found_ref)
 	testing.expect(t, found_size > 100000)
+	loop_test_finish(&loop, dir)
+}
+
+@(test)
+test_loop_persists_tool_images :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-image")
+	args := make(json.Object)
+	args["command"] = json.String("return-image")
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{tool_name = "bash", tool_id = "call_image", tool_input = args, stop = .Tool_Use},
+			{text = "done", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "read an image")
+	testing.expect_value(t, result.fatal_error, "")
+	testing.expect_value(t, result.error_kind, Error_Kind.None)
+
+	events, _ := transcript_read_all(loop.project, loop.session_id)
+	found := false
+	for ev in events {
+		if ev.type != "tool_execution_end" {
+			continue
+		}
+		end: Tool_Execution_End_Event
+		json.unmarshal_string(ev.line, &end)
+		if len(end.images) != 1 {
+			continue
+		}
+		found = true
+		testing.expect_value(t, end.images[0].mime_type, "image/png")
+		testing.expect_value(t, end.images[0].name, "pixel.png")
+		data, berr := blob_read(loop.project, end.images[0].ref)
+		testing.expect_value(t, berr.kind, Error_Kind.None)
+		testing.expect_value(t, len(data), 8)
+		delete(data)
+	}
+	testing.expect(t, found)
+
+	messages, merr := project_messages(loop.project, events)
+	testing.expect_value(t, merr.kind, Error_Kind.None)
+	found_message := false
+	for msg in messages {
+		if len(msg.images) == 1 {
+			found_message = true
+			testing.expect_value(t, len(msg.images[0].data), 8)
+		}
+	}
+	testing.expect(t, found_message)
 	loop_test_finish(&loop, dir)
 }
 

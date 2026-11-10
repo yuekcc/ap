@@ -200,6 +200,7 @@ assistant 消息只在开始与结束时落盘。流式增量只用于展示，�
 | `tool_execution_start` | `args_ref`、`args_bytes`、`args_preview` | 参数 blob 引用、字节数、预览 |
 | `tool_execution_end` | `tool_call_id`、`ok`、`content`、`error` | 结果或错误，二者按 `ok` 取一 |
 | `tool_execution_end` | `content_ref`、`content_bytes`、`content_preview` | 结果 blob 引用、字节数、预览 |
+| `tool_execution_end` | `images` | 图片附件数组，每项含 `name`、`mime_type`、`ref`、`bytes`；无图片时省略 |
 | `tool_execution_end` | `duration_ms`、`exit_code`、`metadata` | 耗时、退出码、工具附加信息 |
 
 约定：
@@ -208,8 +209,9 @@ assistant 消息只在开始与结束时落盘。流式增量只用于展示，�
 2. `exit_code` 只有 `bash` 写。非 0 退出仍是 `ok: true`。
 3. `metadata` 由工具决定。`task` 写入 `child_session_id`、`stop_reason`、`usage`、`duration_ms`。其它工具为 `null`。
 4. 工具结果 blob 写入失败时写 `ok: false`、`content: null`、`error: "failed to persist output blob"`，循环继续。
-5. 取消时写 `ok: false`、`error: "cancelled"`、`content: null`。
-6. 工具执行返回 fatal 故障时，写本工具的 end 与一条 `error(scope=tool)`，随后终止 turn。同一 step 剩余的 tool call 不执行，也没有 end。
+5. 工具结果图片 blob 写入失败时写 `ok: false`、`content: null`、`images: null`、`error: "failed to persist image blob"`，循环继续。
+6. 取消时写 `ok: false`、`error: "cancelled"`、`content: null`。
+7. 工具执行返回 fatal 故障时，写本工具的 end 与一条 `error(scope=tool)`，随后终止 turn。同一 step 剩余的 tool call 不执行，也没有 end。
 
 ## error
 

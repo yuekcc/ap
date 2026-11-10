@@ -51,6 +51,7 @@ ap 是用 Odin 写的 coding agent。输入一条提示词，它进入 ReAct 循
 | 大输出 | 超过 `blob_threshold_bytes` 写 blob，默认 102400 字节 | [tools.md](tools.md) |
 | 诊断日志 | stderr 加 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，默认 warning 及以上 | [cli-and-config.md](cli-and-config.md) |
 | 上下文 | 面向 1M 窗口做 token 预算：本地估算加 usage 校准，接近窗口先省略较早的大工具输出，仍不够就 handoff 到新 session。不做对话压缩与消息级淘汰 | [context-management.md](context-management.md) |
+| 图片输入 | `read_file` 在 `image_input=true` 时把 PNG/JPEG/GIF/WebP 写入 blob，provider 以合成 user 图片消息发送 | [tools.md](tools.md) |
 | 恢复 | 以 transcript 为准，system prompt、model、agent、cwd 与工具集冻结 | [react-loop-and-session.md](react-loop-and-session.md) |
 | 记忆与注入 | `AGENTS.md` 分层注入，`SYSTEM.md` 可替换基础段，`--no-agents-md` 与 `--no-skills` 可裁剪 | [context-management.md](context-management.md) |
 | 技能 | 只发现并注入清单，正文按需读取 | [skills.md](skills.md) |
@@ -115,6 +116,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [errors-and-cancellation.md](errors-and-cancellation.md) | 错误分类、重试、取消、超时、落盘 | 规格 |
 | [proposals/cli-explicit-prompt-source.md](proposals/cli-explicit-prompt-source.md) | 提示词三选一的设计记录 | 设计记录 |
 | [proposals/context-budget-and-handoff.md](proposals/context-budget-and-handoff.md) | token 预算、工具结果省略与 handoff 的设计记录（已实现，决策理由保留） | 设计记录 |
+| [proposals/read-image.md](proposals/read-image.md) | `read_file` 图片输入、blob 引用与合成 user 消息的设计记录（已实现） | 设计记录 |
 | [proposals/cli-prompt-context-tools.md](proposals/cli-prompt-context-tools.md) | 上下文裁剪与工具开关的设计记录 | 设计记录 |
 | [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
 | [TODO.md](TODO.md) | docs 重写计划与验收清单 | 工作清单 |

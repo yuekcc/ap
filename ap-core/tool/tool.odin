@@ -25,6 +25,14 @@ Tool_Def :: struct {
 	function: Function_Def,
 }
 
+// Tool_Image 是工具返回给引擎的图片附件。data 由工具用 context.allocator
+// 分配，引擎写入 blob 后负责释放；name 与 mime_type 只用于记录和提示词。
+Tool_Image :: struct {
+	name:      string,
+	mime_type: string,
+	data:      []byte,
+}
+
 Tool_Result :: struct {
 	ok:          bool,
 	content:     string,
@@ -32,6 +40,7 @@ Tool_Result :: struct {
 	duration_ms: int,
 	exit_code:   Maybe(int),
 	metadata:    json.Value,
+	images:      []Tool_Image,
 	fatal:       bool,
 }
 

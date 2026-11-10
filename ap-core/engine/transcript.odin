@@ -31,6 +31,7 @@ Content_Block :: protocol.Content_Block
 Message_End_Event :: protocol.Message_End_Event
 Tool_Execution_Start_Event :: protocol.Tool_Execution_Start_Event
 Tool_Execution_End_Event :: protocol.Tool_Execution_End_Event
+Tool_Image_Ref :: protocol.Tool_Image_Ref
 Error_Event :: protocol.Error_Event
 Cancel_Event :: protocol.Cancel_Event
 Handoff_Event :: protocol.Handoff_Event

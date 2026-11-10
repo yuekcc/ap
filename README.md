@@ -18,6 +18,7 @@ ap 本体没有交互界面。`ap-tui`（终端）和 `ap-web`（浏览器）是
 - session 持久化、恢复（`-s` / `-c`）、fork；只追加 JSONL transcript；内容寻址 blob
 - OpenAI chat completions 兼容 provider：SSE 流式、tool calls、usage、重试、超时、取消
 - 五个工具：`read_file`、`write_file`、`edit_file`、`bash`、`task`
+- `read_file` 可选图片输入：开启 `image_input` 后把 PNG/JPEG/GIF/WebP 作为多模态附件交给视觉模型
 - 独立进程子代理、agent 定义文件、工具白名单和深度限制
 - 技能发现与清单注入；全局和项目 `AGENTS.md`；`$AP_CONFIG/SYSTEM.md` 覆盖基础提示词
 - token 预算与工具结果省略：本地估算加 usage 校准，接近窗口时把较早的大工具输出替换成固定桩
