@@ -84,7 +84,7 @@
         </template>
 
         <button
-          class="session session--draft"
+          class="session session--draft is-active"
           type="button"
           x-show="showsDraftSession()"
           :disabled="$store.ap.loading"
@@ -180,19 +180,6 @@
 
           <div class="composer__bar">
             <div class="composer__actions">
-              <button
-                class="control"
-                type="button"
-                x-show="$store.ap.isWindows"
-                @click="pickDirectory"
-                :disabled="$store.ap.running || $store.ap.picking"
-                title="选择工作目录"
-              >
-                <svg class="control__icon" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M1.8 4.2c0-.6.5-1 1-1h3l1.3 1.6h6.1c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H2.8c-.5 0-1-.4-1-1V4.2Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                </svg>
-                <span x-text="$store.ap.picking ? '选择中…' : '选择目录'"></span>
-              </button>
               <span
                 class="composer__cwd"
                 x-show="$store.ap.projectCwd ?? $store.ap.config?.cwd"

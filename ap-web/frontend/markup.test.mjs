@@ -1,5 +1,5 @@
-// 布局约定是 docs/web.md 的硬性要求：目录选择入口在输入框旁（composer），
-// 顶部「+」只负责打开新的工作空间。这里直接读 index.html 做结构断言，不引入 DOM 依赖。
+// 布局约定是 docs/web.md 的硬性要求：目录选择入口收敛到顶部「+」，
+// 输入区只回显当前工作空间路径。这里直接读 index.html 做结构断言，不引入 DOM 依赖。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const indexPath = fileURLToPath(new URL("../index.html", import.meta.url));
 const stylesPath = fileURLToPath(new URL("./styles.css", import.meta.url));
 
-test("目录选择入口位于输入区，与发送/取消同一行", async () => {
+test("输入区只回显工作空间路径，不再重复目录选择入口", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const headerEnd = html.indexOf("</header>");
 	const footerStart = html.indexOf('<footer class="composer">');
@@ -21,15 +21,11 @@ test("目录选择入口位于输入区，与发送/取消同一行", async () =
 	assert.ok(header.includes("openWorkspace()"), "titlebar + opens a workspace, not the picker");
 
 	const composer = html.slice(footerStart);
-	const pickIndex = composer.indexOf('@click="pickDirectory"');
+	assert.ok(!composer.includes("pickDirectory"), "composer must not host a directory picker");
+	assert.ok(!composer.includes("选择目录"), "composer must not label a directory picker");
 	const actionsIndex = composer.indexOf('class="composer__actions"');
 	const inputIndex = composer.indexOf('class="composer__input"');
 	assert.ok(inputIndex >= 0 && actionsIndex > inputIndex, "composer row is textarea + actions");
-	assert.ok(pickIndex > actionsIndex, "pick button must be inside composer__actions");
-	assert.ok(
-		composer.includes('x-show="$store.ap.isWindows"'),
-		"pick button stays Windows-only",
-	);
 	assert.ok(
 		composer.includes('class="composer__cwd"') &&
 			composer.includes("$store.ap.projectCwd"),
@@ -138,6 +134,16 @@ test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐�
 		"body splits into a conversation sidebar and a workspace",
 	);
 	assert.ok(css.includes(".workspace-tab.is-active"), "active workspace tab needs its own state");
+	assert.match(
+		css,
+		/body\s*\{[^}]*padding:\s*0/,
+		"app must fill the viewport without outer margins",
+	);
+	assert.match(
+		css,
+		/\.session\.is-active\s*\{[^}]*background:\s*var\(--accent\)/,
+		"the current conversation is highlighted in system blue",
+	);
 
 	// 控件保持胶囊/圆形，与 iOS 的默认形状一致。
 	assert.match(

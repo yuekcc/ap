@@ -105,7 +105,6 @@ h1, h2, h3, h4, h5, h6 {
   --bad: #ff3b30;
   --warn: #ff9500;
 
-  --radius-app: 20px;
   --radius-card: 12px;
   --radius-field: 10px;
   --radius-sm: 8px;
@@ -121,10 +120,10 @@ html {
   height: 100%;
 }
 
-/* 分组底色上浮一张白色面板，像 iOS 应用窗口；内部分两栏。 */
+/* 应用直接铺满视口；内部分隔靠 hairline，不再留外框和圆角。 */
 body {
   height: 100dvh;
-  padding: 12px;
+  padding: 0;
   overflow: hidden;
   background: var(--bg-grouped);
   color: var(--fg);
@@ -140,8 +139,6 @@ body {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--separator-soft);
-  border-radius: var(--radius-app);
   background: var(--bg);
 }
 
@@ -428,9 +425,15 @@ body {
   background: var(--fill-2);
 }
 
+/* 当前对话用 systemBlue 整块高亮，和 iOS 列表的选中态一致。 */
 .session.is-active {
-  border-color: var(--separator-soft);
-  background: var(--bg);
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.session.is-active:hover:not(:disabled) {
+  background: var(--accent-pressed);
 }
 
 .session:focus-visible {
@@ -466,7 +469,11 @@ body {
   color: var(--fg-3);
 }
 
-.session--draft .session__title {
+.session.is-active .session__meta {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.session--draft:not(.is-active) .session__title {
   color: var(--fg-2);
 }
 
@@ -1044,12 +1051,6 @@ body {
   cursor: not-allowed;
 }
 
-.control__icon {
-  width: 14px;
-  height: 14px;
-  color: var(--accent);
-}
-
 .composer__stop-mark {
   width: 8px;
   height: 8px;
@@ -1157,17 +1158,8 @@ body {
   }
 }
 
-/* 窄屏：应用面板铺满，工作空间留在顶栏，侧栏折成横向对话条。 */
+/* 窄屏：工作空间留在顶栏，侧栏折成横向对话条。 */
 @media (max-width: 820px) {
-  body {
-    padding: 0;
-  }
-
-  .app {
-    border: 0;
-    border-radius: 0;
-  }
-
   .titlebar {
     height: 54px;
     padding: 0 10px;

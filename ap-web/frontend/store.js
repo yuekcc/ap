@@ -41,14 +41,6 @@ export function createStore() {
 		projectCwd: null,
 		draft: "",
 
-		get platform() {
-			return String(this.config?.platform ?? "").toLowerCase();
-		},
-
-		get isWindows() {
-			return this.platform === "windows";
-		},
-
 		get currentTitle() {
 			return this.sessionId ? sessionTitle({ session_id: this.sessionId }) : "新会话";
 		},
