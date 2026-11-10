@@ -1,5 +1,5 @@
 // 布局约定是 docs/web.md 的硬性要求：目录选择入口在输入框旁（composer），
-// 不在顶栏。这里直接读 index.html 做结构断言，不引入 DOM 依赖。
+// 顶部「+」只负责打开新的工作空间。这里直接读 index.html 做结构断言，不引入 DOM 依赖。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -12,12 +12,13 @@ test("目录选择入口位于输入区，与发送/取消同一行", async () =
 	const html = await readFile(indexPath, "utf8");
 	const headerEnd = html.indexOf("</header>");
 	const footerStart = html.indexOf('<footer class="composer">');
-	assert.ok(headerEnd > 0, "index.html must have a header");
-	assert.ok(footerStart > headerEnd, "composer must follow the header");
+	assert.ok(headerEnd > 0, "index.html must have a titlebar");
+	assert.ok(footerStart > headerEnd, "composer must follow the titlebar");
 
 	const header = html.slice(0, headerEnd);
-	assert.ok(!header.includes("pickDirectory"), "pick action must not live in the topbar");
-	assert.ok(!header.includes("选择目录"), "pick button must not live in the topbar");
+	assert.ok(!header.includes("pickDirectory"), "pick action must not live in the titlebar");
+	assert.ok(!header.includes("选择目录"), "pick button must not live in the titlebar");
+	assert.ok(header.includes("openWorkspace()"), "titlebar + opens a workspace, not the picker");
 
 	const composer = html.slice(footerStart);
 	const pickIndex = composer.indexOf('@click="pickDirectory"');
@@ -50,8 +51,27 @@ test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", asy
 	assert.ok(!html.includes("x-html=\"item.streamed"), "tool output must not be rendered as html");
 });
 
-test("左侧会话栏按工作目录分组，并承载新会话入口", async () => {
+test("顶部是工作空间标签，侧栏承载新对话与当前空间的对话记录", async () => {
 	const html = await readFile(indexPath, "utf8");
+
+	const titlebarStart = html.indexOf('<header class="titlebar">');
+	const titlebarEnd = html.indexOf("</header>");
+	assert.ok(titlebarStart >= 0 && titlebarEnd > titlebarStart, "index.html must have a titlebar");
+	const titlebar = html.slice(titlebarStart, titlebarEnd);
+	assert.ok(titlebar.includes('class="brand__mark"'), "logo lives in the titlebar");
+	assert.ok(
+		titlebar.includes('x-for="project in $store.ap.workspaceProjects"'),
+		"working directories become workspace tabs",
+	);
+	assert.ok(
+		titlebar.includes("switchWorkspace(project)"),
+		"clicking a tab switches the active workspace",
+	);
+	assert.ok(
+		titlebar.includes('@click="openWorkspace()"'),
+		"the + button opens a new workspace",
+	);
+
 	const asideStart = html.indexOf('<aside class="sidebar">');
 	const asideEnd = html.indexOf("</aside>");
 	assert.ok(asideStart >= 0 && asideEnd > asideStart, "index.html must have a sidebar");
@@ -63,16 +83,12 @@ test("左侧会话栏按工作目录分组，并承载新会话入口", async ()
 		"new session must not receive the click event as its cwd argument",
 	);
 	assert.ok(
-		sidebar.includes('x-for="project in $store.ap.sidebarProjects"'),
-		"sidebar groups sessions by working directory",
+		sidebar.includes('x-for="session in $store.ap.activeSessions"'),
+		"sidebar lists conversations of the active workspace only",
 	);
 	assert.ok(
-		sidebar.includes("newSessionIn(project.cwd)"),
-		"each project can start its own session",
-	);
-	assert.ok(
-		sidebar.includes("selectSession(project, session)"),
-		"sidebar sessions switch the active session within their project",
+		sidebar.includes("selectSession(session)"),
+		"sidebar sessions switch the active conversation",
 	);
 	assert.ok(sidebar.includes("sessionTitle(session)"), "sidebar shows formatted session titles");
 	assert.ok(
@@ -114,6 +130,14 @@ test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐�
 		/\.tool\s*\{[^}]*background:\s*var\(--bg\)/,
 		"cards must sit on white",
 	);
+
+	// 新布局：顶部工作空间标签 + 左栏对话记录 + 右栏工作区。
+	assert.match(
+		css,
+		/\.app__body\s*\{[^}]*grid-template-columns:\s*var\(--sidebar-w\)/,
+		"body splits into a conversation sidebar and a workspace",
+	);
+	assert.ok(css.includes(".workspace-tab.is-active"), "active workspace tab needs its own state");
 
 	// 控件保持胶囊/圆形，与 iOS 的默认形状一致。
 	assert.match(

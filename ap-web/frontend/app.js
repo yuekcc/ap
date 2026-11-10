@@ -420,8 +420,21 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		newSessionIn(cwd) {
-			return this.newSession(cwd);
+		// 点击顶部工作空间标签：切到该目录最近一条对话；还没有对话就在该目录开新 slot。
+		switchWorkspace(project) {
+			const store = this.$store.ap;
+			if (!project?.cwd || store.loading) return;
+			if (project.cwd === store.projectCwd) return;
+			const latest = project.sessions?.[0];
+			if (latest?.session_id) {
+				return this.resumeSession(latest.session_id, project.cwd);
+			}
+			return this.newSession(project.cwd);
+		},
+
+		// 顶部「+」：打开系统目录选择框，在选中的目录开一个新工作空间。
+		openWorkspace() {
+			return this.pickDirectory();
 		},
 
 		async resumeSession(sessionId, cwd) {
@@ -445,9 +458,10 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		selectSession(project, session) {
-			if (!project?.cwd || !session?.session_id) return;
-			return this.resumeSession(session.session_id, project.cwd);
+		selectSession(session) {
+			const cwd = this.$store.ap.projectCwd;
+			if (!cwd || !session?.session_id) return;
+			return this.resumeSession(session.session_id, cwd);
 		},
 
 		async pickDirectory() {
@@ -487,16 +501,20 @@ export function registerApp(Alpine) {
 			return project?.cwd === this.$store.ap.projectCwd;
 		},
 
-		// 当前活动 session 还没出现在项目列表里（新 slot 尚未落盘）时，
-		// 在所属 project 下显示一条占位会话。
-		showsDraftSession(project) {
-			if (!this.isActiveProject(project)) return false;
-			const sessionId = this.$store.ap.sessionId;
+		// 当前活动 session 还没出现在对话列表里（新 slot 尚未落盘）时，
+		// 在当前工作空间下显示一条占位会话。
+		showsDraftSession() {
+			const store = this.$store.ap;
+			const project = store.activeProject;
+			if (!project) return false;
+			const sessionId = store.sessionId;
 			return !(project.sessions ?? []).some((item) => item.session_id === sessionId);
 		},
 
-		showsEmptyProject(project) {
-			return !this.isActiveProject(project) && (project.sessions ?? []).length === 0;
+		showsEmptySessions() {
+			const store = this.$store.ap;
+			const sessions = store.activeSessions;
+			return sessions.length === 0 && !this.showsDraftSession();
 		},
 
 		sessionTitle(session) {

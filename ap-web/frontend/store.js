@@ -53,10 +53,10 @@ export function createStore() {
 			return this.sessionId ? sessionTitle({ session_id: this.sessionId }) : "新会话";
 		},
 
-		// 侧栏分组：服务端的 project 列表 + 当前正在使用的目录。
+		// 顶部工作空间标签：服务端的 project 列表 + 当前正在使用的目录。
 		// 新选中的目录在第一次 turn 落地前还没有 session 文件，先本地合成一个空组，
 		// 否则用户看不到自己刚打开的工作目录。
-		get sidebarProjects() {
+		get workspaceProjects() {
 			const groups = this.projects.slice();
 			if (!this.projectCwd) return groups;
 			if (!groups.some((project) => project.cwd === this.projectCwd)) {
@@ -66,7 +66,12 @@ export function createStore() {
 		},
 
 		get activeProject() {
-			return this.sidebarProjects.find((project) => project.cwd === this.projectCwd) ?? null;
+			return this.workspaceProjects.find((project) => project.cwd === this.projectCwd) ?? null;
+		},
+
+		// 侧栏只展示当前工作空间的对话记录，不再按 project 分组。
+		get activeSessions() {
+			return this.activeProject?.sessions ?? [];
 		},
 
 		get statusKind() {

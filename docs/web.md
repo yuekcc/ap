@@ -158,7 +158,7 @@ Windows 上的实现如下。
 
 Unix 上的实现如下。
 
-- phase 1 没有统一的原生目录对话框 API，返回 501 `not_implemented`。前端隐藏入口。
+- phase 1 没有统一的原生目录对话框 API，返回 501 `not_implemented`。输入框旁的入口隐藏；顶部「+」仍可见，点击后提示当前平台不支持。
 
 目录选择遵循下面的语义。
 
@@ -167,7 +167,7 @@ Unix 上的实现如下。
 - 成功只返回规范化后的绝对路径。服务器不修改进程级 `cwd`，也不清空其他 session。
 - 前端随后调用 `POST /api/session/new {cwd}`，在该目录开新 slot。
 - `cwd` 属于每个 `Session_Runtime`。不同 project 的 turn 可以同时运行。
-- `ap-web` 重启后默认 project 回到启动目录。侧栏仍可通过 `/api/projects` 打开其他目录的历史 session。
+- `ap-web` 重启后默认 project 回到启动目录。顶部工作空间标签仍可通过 `/api/projects` 打开其他目录的历史 session。
 - 前端把本标签页的 `{key, id, cwd}` 存到 `sessionStorage`。刷新时优先按真实 id 加 cwd 恢复。
 
 ## 前端
@@ -184,12 +184,14 @@ Unix 上的实现如下。
 
 - 先引入 `github-markdown-css`，再用 Josh's Custom CSS Reset，应用样式接在后面。
 - 只提供浅色主题。`color-scheme: light`，不写暗色分支。
-- 视觉风格是 iOS 18 的扁平分组列表：`body` 用系统分组背景 `--bg-grouped`，卡片、标题栏和输入区是纯白 `--bg`，用 hairline `--separator` 分隔，不用背景模糊、投影和渐变。
+- 视觉风格是 iOS 18 的扁平分组界面：系统分组底色 `--bg-grouped` 上浮一张白色应用面板，面板内部左右分栏；不用背景模糊、投影和渐变。
+- 顶部标题栏依次是 logo、工作空间标签和「+」新建工作空间按钮。工作空间标签是一条分段控件，当前 project 用白色胶囊高亮；「+」在 Windows 上打开系统目录选择框，选中目录后在该目录开新 slot（Unix 返回 501 并由前端提示）。
+- 左栏是「开启新对话」按钮和当前工作空间的对话记录列表；右栏是 session 标题、消息区和录入框。`POST /api/cwd/pick` 仍保留输入框旁的入口，与发送/停止同一行。
 - 系统色与形状收敛成 `--bg-grouped`、`--fill`、`--separator`、`--accent`、`--radius-*` 等自定义属性。改主题只改这些变量，不在选择器里散写颜色。
 - 强调色用 systemBlue `#007aff`；用户消息是纯色填充的 iMessage 气泡（18px 圆角，右下角 4px），助手文本保持正文色。
 - 交互只保留 120ms 的背景色淡入和聚焦色淡入；运行中脉冲与减少动态偏好下的禁用沿用原语义。
-- 页面骨架用 grid。工作区是 `grid-template-rows: auto minmax(0, 1fr) auto`，消息区自己滚动。
-- 块级组件用 flex。窄屏（`max-width: 820px`）把侧栏折成顶部列表条，会话项改成胶囊；窄屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
+- 应用面板用 grid：外层是标题栏加主体，主体再分左右两栏；右栏是 `grid-template-rows: auto minmax(0, 1fr) auto`，消息区自己滚动。
+- 块级组件用 flex。窄屏（`max-width: 820px`）让面板铺满视口，左栏折成顶部横向对话条，会话项改成胶囊；窄屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
 
 前端行为与 `ap-tui` 对齐。
 
@@ -197,7 +199,8 @@ Unix 上的实现如下。
 - `tool_execution_start` 建卡片。`tool_execution_update` 增量追加。`tool_execution_end` 标记状态、耗时和退出码。非流式结果超过 200 行或 20000 字节时截断。
 - 用户输入和工具输出用 `textContent` 写入。只有 assistant 文本走 Markdown。
 - Markdown 用 `markdown-exit`，设置 `html: false`、`linkify: true`、`breaks: true`。原始 HTML 被转义，`javascript:` 和 `data:` 链接不会变成可点链接。外链带 `target="_blank"` 和 `rel="noopener noreferrer"`。图片设置 `loading="lazy"` 和 `referrerpolicy="no-referrer"`。
-- 侧栏按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在本地合成一个空组。
+- 顶部工作空间标签按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在标签条里本地合成一个空组。
+- 左栏只展示当前工作空间的对话记录；切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
 - 每个标签页持有自己的 `session_key`，SSE 按该 key 过滤。
 - 打开已有 session 的顺序是 `POST /api/session/resume`、`GET /api/history`、`GET /api/events`。
 - 首次订阅成功后补一次 history，填上 history 与 subscribe 之间的空档。
