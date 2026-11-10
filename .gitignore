@@ -6,3 +6,4 @@
 .ap/
 .rpi
 node_modules/
+.playwright-cli
