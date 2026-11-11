@@ -49,7 +49,7 @@ test_decode_basic_keys :: proc(t: ^testing.T) {
 		{"arrow csi", []string{"\x1b[A\x1b[B\x1b[C\x1b[D"}, []Key_Kind{.Up, .Down, .Right, .Left}},
 		{"arrow ss3", []string{"\x1bOA\x1bOD"}, []Key_Kind{.Up, .Left}},
 		{"arrow explicit", []string{"\x1b[1;1A"}, []Key_Kind{.Up}},
-		{"modified arrow ignored", []string{"\x1b[1;5A"}, []Key_Kind{.Ignore}},
+		{"modified arrow", []string{"\x1b[1;5A"}, []Key_Kind{.Up}},
 		{"home end", []string{"\x1b[H\x1b[F"}, []Key_Kind{.Home, .End}},
 		{"home end tilde", []string{"\x1b[1~\x1b[4~"}, []Key_Kind{.Home, .End}},
 		{"delete", []string{"\x1b[3~\x1b[3;1~"}, []Key_Kind{.Delete, .Delete}},
@@ -219,4 +219,107 @@ test_term_pending_kitty :: proc(t: ^testing.T) {
 	term_push_pending(&term, transmute([]u8)partial)
 	complete, _ = term_pending_kitty(&term)
 	testing.expect(t, !complete)
+}
+
+@(test)
+test_decode_numpad :: proc(t: ^testing.T) {
+	// application keypad 模式：数字走 SS3 p-y，Enter 是 SS3 M，其余按键是运算符。
+	events := collect_events([]string{"\x1bOp\x1bOq\x1bOs\x1bOy\x1bOu\x1bOM\x1bOk\x1bOm\x1bOn\x1bOl"})
+	defer events_destroy(&events)
+	want := []struct {
+		kind: Key_Kind,
+		r:    rune,
+	} {
+		{.Rune, '0'},
+		{.Rune, '1'},
+		{.Rune, '3'},
+		{.Rune, '9'},
+		{.Rune, '5'},
+		{.Enter, 0},
+		{.Rune, '+'},
+		{.Rune, '-'},
+		{.Rune, '.'},
+		{.Rune, ','},
+	}
+	testing.expect_value(t, len(events), len(want))
+	for w, i in want {
+		if i >= len(events) {
+			break
+		}
+		key, ok := events[i].(Key)
+		if !ok {
+			testing.expectf(t, false, "event %d is not a Key", i)
+			continue
+		}
+		testing.expectf(t, key.kind == w.kind && key.r == w.r, "event %d: got %v %q", i, key.kind, key.r)
+	}
+}
+
+@(test)
+test_decode_numpad_navigation_ignored :: proc(t: ^testing.T) {
+	// NumLock 关闭且不在 application keypad 模式：小键盘发来 Begin / Insert / PgUp / PgDn。
+	expect_kinds(
+		t,
+		[]string{"\x1b[E\x1b[2~\x1b[5~\x1b[6~"},
+		[]Key_Kind{.Ignore, .Ignore, .Ignore, .Ignore},
+	)
+}
+
+@(test)
+test_decode_modified_arrows :: proc(t: ^testing.T) {
+	events := collect_events(
+		[]string{"\x1b[1;5C", "\x1b[1;3D", "\x1b[1;2A", "\x1b[1;6B", "\x1b[1;5H", "\x1b[1;5F"},
+	)
+	defer events_destroy(&events)
+	cases := []struct {
+		kind: Key_Kind,
+		mods: Key_Mods,
+	} {
+		{.Right, {.Ctrl}},
+		{.Left, {.Alt}},
+		{.Up, {.Shift}},
+		{.Down, {.Shift, .Ctrl}},
+		{.Home, {.Ctrl}},
+		{.End, {.Ctrl}},
+	}
+	testing.expect_value(t, len(events), len(cases))
+	for c, i in cases {
+		if i >= len(events) {
+			break
+		}
+		key, ok := events[i].(Key)
+		if !ok {
+			testing.expectf(t, false, "event %d is not a Key", i)
+			continue
+		}
+		testing.expectf(
+			t,
+			key.kind == c.kind && key.mods == c.mods,
+			"event %d: got %v %v, want %v %v",
+			i,
+			key.kind,
+			key.mods,
+			c.kind,
+			c.mods,
+		)
+	}
+}
+
+@(test)
+test_decode_kitty_modifiers :: proc(t: ^testing.T) {
+	// 小键盘 Enter 和 Shift+字符走 CSI-u，修饰键用第二个参数编码。
+	events := collect_events([]string{"\x1b[13;1u", "\x1b[97;2u"})
+	defer events_destroy(&events)
+	testing.expect_value(t, len(events), 2)
+	if len(events) != 2 {
+		return
+	}
+	enter, _ := events[0].(Key)
+	testing.expect_value(t, enter.kind, Key_Kind.Enter)
+	testing.expect_value(t, enter.mods, Key_Mods{})
+
+	rune_key, _ := events[1].(Key)
+	testing.expect_value(t, rune_key.kind, Key_Kind.Rune)
+	testing.expect_value(t, rune_key.r, 'a')
+	testing.expect_value(t, rune_key.mods, Key_Mods{.Shift})
 }

@@ -240,3 +240,45 @@ test_editor_input_limit :: proc(t: ^testing.T) {
 	testing.expect(t, truncated)
 	testing.expect_value(t, len(e.buffer), before)
 }
+
+@(test)
+test_editor_word_movement :: proc(t: ^testing.T) {
+	e := editor_with("git status --short")
+	defer editor_destroy(&e)
+
+	editor_word_left(&e)
+	testing.expect_value(t, e.cursor, 11)
+	editor_word_left(&e)
+	testing.expect_value(t, e.cursor, 4)
+	editor_word_left(&e)
+	testing.expect_value(t, e.cursor, 0)
+
+	editor_word_right(&e)
+	testing.expect_value(t, e.cursor, 4)
+	editor_word_right(&e)
+	testing.expect_value(t, e.cursor, 11)
+	editor_word_right(&e)
+	testing.expect_value(t, e.cursor, 18)
+}
+
+@(test)
+test_editor_apply_modified_arrows :: proc(t: ^testing.T) {
+	e := editor_with("one two\nthree")
+	defer editor_destroy(&e)
+
+	editor_apply_key(&e, Key{kind = .Left, mods = {.Ctrl}}, 80, 0)
+	testing.expect_value(t, e.cursor, 8)
+	editor_apply_key(&e, Key{kind = .Left, mods = {.Alt}}, 80, 0)
+	testing.expect_value(t, e.cursor, 4)
+	editor_apply_key(&e, Key{kind = .Right, mods = {.Ctrl}}, 80, 0)
+	testing.expect_value(t, e.cursor, 8)
+
+	editor_apply_key(&e, Key{kind = .Home, mods = {.Ctrl}}, 80, 0)
+	testing.expect_value(t, e.cursor, 0)
+	editor_apply_key(&e, Key{kind = .End, mods = {.Ctrl}}, 80, 0)
+	testing.expect_value(t, e.cursor, 13)
+
+	// Shift+← 没有选中语义，按普通 ← 处理。
+	editor_apply_key(&e, Key{kind = .Left, mods = {.Shift}}, 80, 0)
+	testing.expect_value(t, e.cursor, 12)
+}

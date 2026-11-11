@@ -168,6 +168,68 @@ editor_right :: proc(e: ^Editor) {
 	e.desired_col = -1
 }
 
+// Ctrl+←/→、Alt+←/→：按空白分词移动，路径算一个词。
+editor_word_left :: proc(e: ^Editor) {
+	e.cursor = editor_word_start(e.buffer[:], e.cursor)
+	e.desired_col = -1
+}
+
+editor_word_right :: proc(e: ^Editor) {
+	e.cursor = editor_word_end(e.buffer[:], e.cursor)
+	e.desired_col = -1
+}
+
+// 先跳过光标前的空白，再退到前一个词的词首。
+editor_word_start :: proc(buf: []u8, pos: int) -> int {
+	i := pos
+	for i > 0 {
+		r, _ := utf8.decode_last_rune_in_bytes(buf[:i])
+		if !editor_is_space(r) {
+			break
+		}
+		i = editor_prev_rune_start(buf, i)
+	}
+	for i > 0 {
+		r, _ := utf8.decode_last_rune_in_bytes(buf[:i])
+		if editor_is_space(r) {
+			break
+		}
+		i = editor_prev_rune_start(buf, i)
+	}
+	return i
+}
+
+// 先走到当前词的词尾，再跳过后面的空白。
+editor_word_end :: proc(buf: []u8, pos: int) -> int {
+	i := pos
+	for i < len(buf) {
+		r, _ := utf8.decode_rune_in_bytes(buf[i:])
+		if editor_is_space(r) {
+			break
+		}
+		i = editor_next_rune_end(buf, i)
+	}
+	for i < len(buf) {
+		r, _ := utf8.decode_rune_in_bytes(buf[i:])
+		if !editor_is_space(r) {
+			break
+		}
+		i = editor_next_rune_end(buf, i)
+	}
+	return i
+}
+
+// Ctrl+Home / Ctrl+End：整个缓冲区开头或结尾。
+editor_buffer_start :: proc(e: ^Editor) {
+	e.cursor = 0
+	e.desired_col = -1
+}
+
+editor_buffer_end :: proc(e: ^Editor) {
+	e.cursor = len(e.buffer)
+	e.desired_col = -1
+}
+
 editor_line_start :: proc(e: ^Editor) -> int {
 	i := e.cursor
 	for i > 0 && e.buffer[i - 1] != '\n' {
@@ -212,27 +274,9 @@ editor_kill_to_start :: proc(e: ^Editor) {
 	editor_remove_range(e, start, e.cursor)
 }
 
-// Ctrl+W：先跳过光标前的空白，再删到前一个空白或行首。以空白分词，路径算一个词。
+// Ctrl+W：按空白分词删掉前一个词。路径算一个词。
 editor_delete_word :: proc(e: ^Editor) {
-	if e.cursor <= 0 {
-		return
-	}
-	i := e.cursor
-	for i > 0 {
-		r, _ := utf8.decode_last_rune_in_bytes(e.buffer[:i])
-		if !editor_is_space(r) {
-			break
-		}
-		i = editor_prev_rune_start(e.buffer[:], i)
-	}
-	start := i
-	for start > 0 {
-		r, _ := utf8.decode_last_rune_in_bytes(e.buffer[:start])
-		if editor_is_space(r) {
-			break
-		}
-		start = editor_prev_rune_start(e.buffer[:], start)
-	}
+	start := editor_word_start(e.buffer[:], e.cursor)
 	if start == e.cursor {
 		return
 	}
@@ -259,17 +303,33 @@ editor_apply_key :: proc(e: ^Editor, key: Key, cols, prefix_width: int) -> Edito
 	case .Delete:
 		editor_delete(e)
 	case .Left:
-		editor_left(e)
+		if key_modified_move(key) {
+			editor_word_left(e)
+		} else {
+			editor_left(e)
+		}
 	case .Right:
-		editor_right(e)
+		if key_modified_move(key) {
+			editor_word_right(e)
+		} else {
+			editor_right(e)
+		}
 	case .Up:
 		editor_up(e, cols, prefix_width)
 	case .Down:
 		editor_down(e, cols, prefix_width)
 	case .Home, .Ctrl_A:
-		editor_home(e)
+		if key_modified_move(key) {
+			editor_buffer_start(e)
+		} else {
+			editor_home(e)
+		}
 	case .End, .Ctrl_E:
-		editor_end(e)
+		if key_modified_move(key) {
+			editor_buffer_end(e)
+		} else {
+			editor_end(e)
+		}
 	case .Ctrl_K:
 		editor_kill_to_end(e)
 	case .Ctrl_U:
@@ -294,6 +354,11 @@ editor_apply_key :: proc(e: ^Editor, key: Key, cols, prefix_width: int) -> Edito
 	case .Ignore:
 	}
 	return .None
+}
+
+// Ctrl/Alt + 方向键：按词移动；Ctrl/Alt + Home/End：整个缓冲区开头或结尾。
+key_modified_move :: proc(key: Key) -> bool {
+	return .Ctrl in key.mods || .Alt in key.mods
 }
 
 editor_is_space :: proc(r: rune) -> bool {

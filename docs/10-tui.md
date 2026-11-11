@@ -56,8 +56,10 @@
 | Enter | 提交。缓冲区只有空白时不提交 |
 | Ctrl+Enter | 插入换行。需要终端支持 Kitty keyboard protocol |
 | ←、→ | 按字符移动 |
+| Ctrl+←、Ctrl+→、Alt+←、Alt+→ | 按词移动 |
 | ↑、↓ | 按可视行移动 |
 | Home、End、Ctrl+A、Ctrl+E | 到当前逻辑行首或行尾 |
+| Ctrl+Home、Ctrl+End | 到整个输入内容开头或结尾 |
 | Backspace、Delete | 删除前一个或后一个字符 |
 | Ctrl+K | 删到行尾 |
 | Ctrl+U | 删到行首 |
@@ -66,6 +68,8 @@
 | Esc | 清空缓冲区 |
 
 终端不支持 Kitty keyboard protocol 时，Ctrl+Enter 不可用，启动时会提示一次。
+
+数字小键盘可以直接输入数字和运算符，小键盘 Enter 同样提交。NumLock 关闭时，小键盘的方向键、Home、End、Delete 与主键盘上的对应键一致。
 
 粘贴内容会原样插入。整段粘贴超过 1 MiB 时截断并插入 `[input truncated]`。
 

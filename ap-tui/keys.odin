@@ -28,9 +28,18 @@ Key_Kind :: enum {
 	Ignore,
 }
 
+Key_Mod :: enum {
+	Shift,
+	Alt,
+	Ctrl,
+}
+
+Key_Mods :: bit_set[Key_Mod]
+
 Key :: struct {
 	kind: Key_Kind,
 	r:    rune,
+	mods: Key_Mods,
 }
 
 Paste :: struct {
@@ -125,8 +134,8 @@ reset_sequence :: proc(d: ^Decoder) {
 	d.seq_len = 0
 }
 
-emit_key :: proc(events: ^[dynamic]Event, kind: Key_Kind, r: rune = 0) {
-	append(events, Event(Key{kind = kind, r = r}))
+emit_key :: proc(events: ^[dynamic]Event, kind: Key_Kind, r: rune = 0, mods: Key_Mods = {}) {
+	append(events, Event(Key{kind = kind, r = r, mods = mods}))
 }
 
 emit_unsupported :: proc(events: ^[dynamic]Event) {
@@ -409,17 +418,22 @@ handle_csi :: proc(d: ^Decoder, events: ^[dynamic]Event) {
 	case 'D':
 		arrow(&p, events, .Left)
 	case 'H':
-		if plain_param(&p) {
-			emit_key(events, .Home)
+		mods, ok := csi_mods(&p)
+		if ok {
+			emit_key(events, .Home, 0, mods)
 		} else {
 			emit_key(events, .Ignore)
 		}
 	case 'F':
-		if plain_param(&p) {
-			emit_key(events, .End)
+		mods, ok := csi_mods(&p)
+		if ok {
+			emit_key(events, .End, 0, mods)
 		} else {
 			emit_key(events, .Ignore)
 		}
+	case 'E':
+		// 小键盘 5（NumLock 关闭）的 Begin 键，输入框没有对应动作。
+		emit_key(events, .Ignore)
 	case '~':
 		handle_csi_tilde(d, &p, events)
 	case:
@@ -433,13 +447,17 @@ handle_csi_u :: proc(p: ^Csi_Params, events: ^[dynamic]Event) {
 		return
 	}
 	code := p.nums[0]
-	mod := 1
+	mods: Key_Mods
 	if p.count >= 2 {
-		mod = p.nums[1]
+		decoded, ok := decode_modifier(p.nums[1])
+		if !ok {
+			emit_unsupported(events)
+			return
+		}
+		mods = decoded
 	}
-	ctrl := (mod - 1) & 4 != 0
 
-	if ctrl {
+	if .Ctrl in mods {
 		switch code {
 		case 'a', 'A':
 			emit_key(events, .Ctrl_A)
@@ -461,20 +479,16 @@ handle_csi_u :: proc(p: ^Csi_Params, events: ^[dynamic]Event) {
 		return
 	}
 
-	if p.count > 1 {
-		emit_unsupported(events)
-		return
-	}
 	switch code {
 	case 13:
-		emit_key(events, .Enter)
+		emit_key(events, .Enter, 0, mods)
 	case 27:
 		emit_key(events, .Escape)
 	case 127, 8:
 		emit_key(events, .Backspace)
 	case:
 		if code >= 0x20 && code <= 0x10ffff {
-			emit_key(events, .Rune, rune(code))
+			emit_key(events, .Rune, rune(code), mods)
 		} else {
 			emit_unsupported(events)
 		}
@@ -482,22 +496,48 @@ handle_csi_u :: proc(p: ^Csi_Params, events: ^[dynamic]Event) {
 }
 
 arrow :: proc(p: ^Csi_Params, events: ^[dynamic]Event, kind: Key_Kind) {
-	// CSI A（无参数）、CSI 1 A、CSI 1;1 A 是无修饰方向键；带修饰的忽略。
-	if p.count == 0 || (p.count == 1 && p.nums[0] == 1) || (p.count == 2 && p.nums[1] == 1) {
-		emit_key(events, kind)
-	} else {
+	mods, ok := csi_mods(p)
+	if !ok {
 		emit_key(events, .Ignore)
+		return
 	}
+	emit_key(events, kind, 0, mods)
 }
 
-plain_param :: proc(p: ^Csi_Params) -> bool {
-	if p.count == 0 {
-		return true
+// 方向键和 Home/End 的修饰键编码：CSI A（无参数）、CSI 1 A、CSI 1;1 A 是无修饰；
+// 第二个参数是 modifier code，1 + shift(1) + alt(2) + ctrl(4)。
+csi_mods :: proc(p: ^Csi_Params) -> (mods: Key_Mods, ok: bool) {
+	switch p.count {
+	case 0:
+		return {}, true
+	case 1:
+		return {}, p.nums[0] == 1
+	case 2:
+		if p.nums[0] != 1 {
+			return {}, false
+		}
+	case:
+		return {}, false
 	}
-	if p.count == 1 {
-		return p.nums[0] == 1
+	return decode_modifier(p.nums[1])
+}
+
+// modifier code 是 1 + shift(1) + alt(2) + ctrl(4)。
+decode_modifier :: proc(code: int) -> (mods: Key_Mods, ok: bool) {
+	bits := code - 1
+	if bits < 0 || bits > 7 {
+		return {}, false
 	}
-	return p.count == 2 && p.nums[1] == 1
+	if bits & 1 != 0 {
+		mods |= {.Shift}
+	}
+	if bits & 2 != 0 {
+		mods |= {.Alt}
+	}
+	if bits & 4 != 0 {
+		mods |= {.Ctrl}
+	}
+	return mods, true
 }
 
 handle_csi_tilde :: proc(d: ^Decoder, p: ^Csi_Params, events: ^[dynamic]Event) {
@@ -521,6 +561,9 @@ handle_csi_tilde :: proc(d: ^Decoder, p: ^Csi_Params, events: ^[dynamic]Event) {
 		emit_key(events, .End)
 	case 3:
 		emit_key(events, .Delete)
+	case 2, 5, 6:
+		// Insert / PgUp / PgDn（也是小键盘 NumLock 关闭时的 0、9、3），输入框没有对应动作。
+		emit_key(events, .Ignore)
 	case 200:
 		d.mode = .Paste
 	case 201:
@@ -547,6 +590,26 @@ handle_ss3 :: proc(d: ^Decoder, events: ^[dynamic]Event) {
 		emit_key(events, .Home)
 	case 'F':
 		emit_key(events, .End)
+	case 'p' ..= 'y':
+		// application keypad 模式下的小键盘数字 0-9。
+		emit_key(events, .Rune, rune(int('0') + int(final - 'p')))
+	case 'n':
+		emit_key(events, .Rune, '.')
+	case 'm':
+		emit_key(events, .Rune, '-')
+	case 'k':
+		emit_key(events, .Rune, '+')
+	case 'l':
+		emit_key(events, .Rune, ',')
+	case 'o':
+		emit_key(events, .Rune, '/')
+	case 'j':
+		emit_key(events, .Rune, '*')
+	case 'X':
+		emit_key(events, .Rune, '=')
+	case 'M':
+		// 小键盘 Enter。
+		emit_key(events, .Enter)
 	case:
 		emit_unsupported(events)
 	}

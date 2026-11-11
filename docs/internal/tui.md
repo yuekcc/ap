@@ -118,8 +118,11 @@ stdin 和 stdout 都是 TTY 时，每轮进入 raw mode，用自绘的多行编�
 | Enter | 提交。缓冲区 trim 后为空时不提交 |
 | Ctrl+Enter | 插入换行。需要 Kitty keyboard protocol |
 | ←、→ | 按 rune 移动 |
+| Ctrl+←、Ctrl+→、Alt+←、Alt+→ | 按空白分词移动到前一个或后一个词边界 |
 | ↑、↓ | 按可视行移动，尽量保持列号 |
 | Home、End、Ctrl+A、Ctrl+E | 到当前逻辑行首或行尾 |
+| Ctrl+Home、Ctrl+End | 到整个缓冲区开头或结尾 |
+| 小键盘方向键 | NumLock 关闭时发的是普通方向键；NumLock 打开时按小键盘规则插入数字 |
 | Backspace、Delete | 删除前一个或后一个 rune，跨行时合并行 |
 | Ctrl+K | 删到逻辑行尾 |
 | Ctrl+U | 删到逻辑行首 |
@@ -135,6 +138,8 @@ stdin 和 stdout 都是 TTY 时，每轮进入 raw mode，用自绘的多行编�
 - 首次进入 raw 时发送 `CSI > 1 u` push Kitty flags，再发送 `CSI ? u` 探测。120ms 内收到 `CSI ? <flags> u` 且 flags 包含 1 才算支持。
 - 探测失败时留在 raw。方向键、Home、End、Delete 和 legacy 控制字节仍可用，但拿不到 Ctrl+Enter。启动时提示一次 `terminal does not report kitty keyboard protocol: Ctrl+Enter unavailable`。
 - legacy 模式下孤立的 ESC 用约 20ms 超时消歧。粘贴终止符被截断时，用 150ms 超时把已收到的内容落地。
+- 方向键和 Home/End 的修饰键按 `CSI 1;<modifier>` 解码。Shift+方向键没有选中语义，按无修饰处理；Ctrl/Alt 参与按词移动和缓冲区首尾跳转。
+- 数字小键盘：NumLock 打开且终端处于 application keypad 模式时，数字和 `.` `-` `+` `,` `/` `*` `=`、Enter 走 SS3 序列，按对应字符和提交处理；NumLock 关闭时的小键盘方向键、Home、End、Delete 与主键盘一致，Insert、PgUp、PgDn 和 Begin 忽略。
 - 长行按显示宽度硬折行。CJK 和全角字符占 2 列，组合字符占 0 列。逻辑行内的 `\n` 强制换行。
 - 首行前缀是 `› `，续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示。编辑块不进入滚动区。
 
