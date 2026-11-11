@@ -78,15 +78,16 @@ ap-tui [options]
 2. 逐行解析 v1 transcript。
 3. `user_message` 用 `› ` 前缀显示。
 4. `message_end` 的 `text` 块显示为 assistant 文本。
-5. 工具调用从 `tool_execution_start` 建卡片，从 `tool_execution_end` 收尾。
+5. `tool_execution_start` 画一行工具调用，`tool_execution_end` 在同一行补上状态；工具结果本身不重放。
 6. `error`、`cancel` 和异常的 `turn_end` 按实时规则显示。
-7. `message_update` 和 `tool_execution_update` 在历史模式忽略，因为最终文本已经在 `message_end` 和工具结果里。
+7. `message_update` 在历史模式忽略，因为最终文本已经在 `message_end` 里；`tool_execution_update` 在两种模式下都不渲染。
 
 大字段从同目录 `blobs/` 解析：
 
 - `message_end` 文本块的 `text_ref`。
 - `tool_execution_start.args_ref`。
-- `tool_execution_end.content_ref`。
+
+工具结果不参与渲染，所以重放不读 `tool_execution_end.content_ref`。
 
 展示层缺少 blob 时退化为对应的 `*_preview`，并在界面上标记。这只是历史重放的降级规则。`ap` 自己恢复上下文时 blob 缺失会退出 2。重放只读文件，不调用模型，不执行工具，也不写 transcript。
 
@@ -96,9 +97,8 @@ ap-tui [options]
 - 用户消息和输入框使用 `› ` 前缀。非 TTY 回退路径打印 `> `。
 - assistant 文本使用 `● ` 前缀。文本 delta 实时输出。
 - 工具调用使用 `◆ ` 前缀，后接工具名和参数。参数压成单行并截到约 240 字节。
-- `bash` 的实时输出按两格缩进、暗色显示，不截断。
-- 工具结束时显示 `✓` 或 `✗`、耗时和退出码。只有流式输出为空时才展示非流式结果。
-- 非流式工具结果和历史重放里的工具结果最多展示 200 行或 20000 字节。超出时提示完整内容在 transcript。
+- 工具结束把 `✓` 或 `✗`、耗时、退出码追加到调用行末尾，失败时再附错误信息。错误压成单行并截到 200 字节。一次工具调用只占一行。
+- 工具输出不渲染：`tool_execution_update` 增量被忽略，`tool_execution_end` 的结果（含图片）也不展示。完整结果留在 transcript，由 web 界面和 `ap` 恢复使用。
 - `message_end` 只在没有收到过文本 delta 时补全文，避免重复。
 - `error` 中 `retryable=true` 显示为黄色警告，否则显示为红色错误，并带上 `scope`。
 - `cancel` 显示为 `cancelled [<scope>]`。

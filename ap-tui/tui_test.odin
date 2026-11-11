@@ -95,10 +95,9 @@ test_render_live_stream :: proc(t: ^testing.T) {
 		.Live,
 	)
 	testing.expect(t, strings.contains(out, "● hello world"))
-	testing.expect(t, strings.contains(out, "◆ read_file"))
-	testing.expect(t, strings.contains(out, "file_path=ap/main.odin"))
-	testing.expect(t, strings.contains(out, "file body"))
-	testing.expect(t, strings.contains(out, "✓ 12ms"))
+	// 工具调用压成一行：命令行 + 耗时 + 状态，不展示输出内容。
+	testing.expect(t, strings.contains(out, "◆ read_file (file_path=ap/main.odin) ✓ 12ms\n"))
+	testing.expect(t, !strings.contains(out, "file body"))
 	// 文本增量已经展示过，message_end 不应重复整段文本。
 	testing.expect_value(t, strings.count(out, "hello world"), 1)
 }
@@ -118,10 +117,55 @@ test_render_history :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, strings.contains(out, "› do it"))
 	testing.expect(t, strings.contains(out, "● working"))
-	testing.expect(t, strings.contains(out, "◆ bash"))
-	testing.expect(t, strings.contains(out, "command=ls"))
-	testing.expect(t, strings.contains(out, "✗ 3ms boom"))
+	testing.expect(t, strings.contains(out, "◆ bash (command=ls) ✗ 3ms boom\n"))
 	testing.expect(t, strings.contains(out, "turn ended: max_steps"))
+}
+
+@(test)
+test_render_tool_error_is_single_line :: proc(t: ^testing.T) {
+	out := test_render_to_file(
+		t,
+		{
+			`{"type":"tool_execution_start","tool_call_id":"c1","name":"bash","args":{"command":"false"}}`,
+			`{"type":"tool_execution_end","tool_call_id":"c1","ok":false,"error":"line one\nline two","exit_code":1}`,
+		},
+		.Live,
+	)
+	testing.expect(t, strings.contains(out, "◆ bash (command=false) ✗ exit 1 line one line two\n"))
+}
+
+// 工具运行期间插入的 note（如 --verbose 的 stderr）会打断调用行：状态退化成缩进行。
+@(test)
+test_render_tool_end_after_note :: proc(t: ^testing.T) {
+	dir := test_temp_dir("tool_note")
+	defer os.remove_all(dir)
+	project := client.Project {
+		config_dir = dir,
+		root = dir,
+		hash = "test",
+		dir = dir,
+		blobs_dir = fmt.aprintf("%s/blobs", dir),
+	}
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	r := Renderer {
+		out = file,
+		color = false,
+		project = &project,
+		at_line_start = true,
+	}
+	tool_start(&r, "bash", "command=ls")
+	note(&r, "[ap] stderr line")
+	tool_end(&r, true, "", 7, nil)
+	os.close(file)
+
+	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
+	testing.expect_value(t, string(data), "◆ bash (command=ls)\n[ap] stderr line\n  ✓ 7ms\n")
 }
 
 @(test)

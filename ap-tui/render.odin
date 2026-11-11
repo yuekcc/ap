@@ -28,7 +28,6 @@ Renderer :: struct {
 	assistant_active:      bool,
 	message_had_text_delta: bool,
 	tool_active:           bool,
-	tool_had_update:       bool,
 }
 
 write_text :: proc(r: ^Renderer, text: string) {
@@ -95,30 +94,7 @@ finish_assistant :: proc(r: ^Renderer) {
 	}
 }
 
-// 工具输出按两格缩进、暗色显示；跨 chunk 维护行首状态。
-write_indented_dim :: proc(r: ^Renderer, text: string) {
-	if len(text) == 0 {
-		return
-	}
-	b := strings.builder_make(context.temp_allocator)
-	defer strings.builder_destroy(&b)
-
-	at_start := r.at_line_start
-	for i in 0 ..< len(text) {
-		ch := text[i]
-		if at_start && ch != '\n' {
-			strings.write_string(&b, "  ")
-			at_start = false
-		}
-		strings.write_byte(&b, ch)
-		if ch == '\n' {
-			at_start = true
-		}
-	}
-	paint(r, DIM, strings.to_string(b))
-	r.at_line_start = at_start
-}
-
+// 工具调用只占一行：调用行在 start 时写出，结束状态追加在同一行。
 tool_start :: proc(r: ^Renderer, name, args: string) {
 	finish_assistant(r)
 	ensure_line_start(r)
@@ -128,42 +104,21 @@ tool_start :: proc(r: ^Renderer, name, args: string) {
 		write_text(r, " ")
 		paint(r, DIM, fmt.tprintf("(%s)", args))
 	}
-	ensure_line_start(r)
 	r.tool_active = true
-	r.tool_had_update = false
 }
 
-tool_update :: proc(r: ^Renderer, chunk: string) {
-	if !r.tool_active || len(chunk) == 0 {
-		return
-	}
-	r.tool_had_update = true
-	write_indented_dim(r, chunk)
-}
-
-tool_end :: proc(
-	r: ^Renderer,
-	ok: bool,
-	content: string,
-	has_content: bool,
-	err: string,
-	duration_ms: Maybe(int),
-	exit_code: Maybe(int),
-) {
+// 工具输出不进终端：只保留耗时、结果状态和错误，完整结果在 transcript 里。
+tool_end :: proc(r: ^Renderer, ok: bool, err: string, duration_ms: Maybe(int), exit_code: Maybe(int)) {
 	if !r.tool_active {
 		return
 	}
 
-	if ok && !r.tool_had_update && has_content && len(content) > 0 {
-		preview, truncated := client.preview_content(content)
-		write_indented_dim(r, preview)
-		if truncated {
-			write_indented_dim(r, "… (truncated; full content is in the transcript)\n")
-		}
+	// 调用行被别的输出（如 --verbose 的 stderr）打断时，状态单独缩进成行。
+	if r.at_line_start {
+		paint(r, DIM, "  ")
+	} else {
+		paint(r, DIM, " ")
 	}
-
-	ensure_line_start(r)
-	paint(r, DIM, "  ")
 	if ok {
 		paint(r, GREEN, "✓")
 	} else {
@@ -182,7 +137,9 @@ tool_end :: proc(
 		paint(r, DIM, strings.to_string(meta))
 	}
 	if !ok && len(err) > 0 {
-		paint(r, RED, fmt.tprintf(" %s", err))
+		trimmed, _ := client.truncate_utf8(err, 200)
+		oneline, _ := strings.replace_all(trimmed, "\n", " ", context.temp_allocator)
+		paint(r, RED, fmt.tprintf(" %s", oneline))
 	}
 	ensure_line_start(r)
 	r.tool_active = false
@@ -247,17 +204,12 @@ render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) 
 		r.message_had_text_delta = false
 	case protocol.EVENT_TOOL_EXECUTION_START:
 		tool_start(r, ev.name, client.tool_args_text(ev, r.project))
-	case protocol.EVENT_TOOL_EXECUTION_UPDATE:
-		if mode == .Live {
-			tool_update(r, ev.chunk)
-		}
 	case protocol.EVENT_TOOL_EXECUTION_END:
-		content, has_content := client.tool_result_text(ev, r.project)
 		err := ""
 		if e, ok := ev.error.?; ok {
 			err = e
 		}
-		tool_end(r, ev.ok, content, has_content, err, ev.duration_ms, ev.exit_code)
+		tool_end(r, ev.ok, err, ev.duration_ms, ev.exit_code)
 	case protocol.EVENT_ERROR:
 		render_error(r, ev.scope, ev.message, ev.retryable)
 	case protocol.EVENT_CANCEL:
