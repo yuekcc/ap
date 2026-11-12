@@ -221,6 +221,138 @@ test_render_mask_suppresses_hint :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_render_completion_menu :: proc(t: ^testing.T) {
+	s := screen_init(40, 10)
+	defer screen_destroy(&s)
+	r: Renderer
+	render_init(&r)
+
+	e := editor_with("he")
+	defer editor_destroy(&e)
+	editor_set_cursor(&e, 2)
+
+	menu := []Completion{{text = "hello"}, {text = "help"}}
+	cfg := Render_Config {
+		prompt        = "> ",
+		prefix_width  = 2,
+		menu          = menu,
+		menu_selected = 0,
+	}
+	draw(&s, &r, &e, cfg, 40, 10)
+
+	testing.expect_value(t, screen_row_text(&s, 0), "> he")
+	testing.expect_value(t, screen_row_text(&s, 1), "> hello")
+	testing.expect_value(t, screen_row_text(&s, 2), "  help")
+	row, col := screen_cursor(&s)
+	testing.expect_value(t, row, 0)
+	testing.expect_value(t, col, 4)
+
+	cfg.menu_selected = 1
+	draw(&s, &r, &e, cfg, 40, 10)
+	testing.expect_value(t, screen_row_text(&s, 1), "  hello")
+	testing.expect_value(t, screen_row_text(&s, 2), "> help")
+}
+
+@(test)
+test_render_completion_menu_description :: proc(t: ^testing.T) {
+	s := screen_init(40, 10)
+	defer screen_destroy(&s)
+	r: Renderer
+	render_init(&r)
+
+	e := editor_with("he")
+	defer editor_destroy(&e)
+	editor_set_cursor(&e, 2)
+
+	menu := []Completion{{text = "hello", description = "greeting"}}
+	draw(&s, &r, &e, Render_Config {
+		prompt        = "> ",
+		prefix_width  = 2,
+		menu          = menu,
+		menu_selected = 0,
+	}, 40, 10)
+
+	testing.expect_value(t, screen_row_text(&s, 1), "> hello  greeting")
+}
+
+@(test)
+test_render_completion_menu_window :: proc(t: ^testing.T) {
+	s := screen_init(40, 8)
+	defer screen_destroy(&s)
+	r: Renderer
+	render_init(&r)
+
+	e := editor_with("x")
+	defer editor_destroy(&e)
+	editor_set_cursor(&e, 1)
+
+	names := [10]string{"item0", "item1", "item2", "item3", "item4", "item5", "item6", "item7", "item8", "item9"}
+	menu: [10]Completion
+	for name, i in names {
+		menu[i] = Completion{text = name}
+	}
+	draw(&s, &r, &e, Render_Config {
+		prompt        = "> ",
+		prefix_width  = 2,
+		menu          = menu[:],
+		menu_selected = 9,
+	}, 40, 8)
+
+	testing.expect_value(t, screen_row_text(&s, 0), "> x")
+	testing.expect_value(t, screen_row_text(&s, 1), "  item7")
+	testing.expect_value(t, screen_row_text(&s, 2), "  item8")
+	testing.expect_value(t, screen_row_text(&s, 3), "> item9")
+	row, col := screen_cursor(&s)
+	testing.expect_value(t, row, 0)
+	testing.expect_value(t, col, 3)
+}
+
+@(test)
+test_render_completion_menu_too_short :: proc(t: ^testing.T) {
+	s := screen_init(40, 2)
+	defer screen_destroy(&s)
+	r: Renderer
+	render_init(&r)
+
+	e := editor_with("he")
+	defer editor_destroy(&e)
+	editor_set_cursor(&e, 2)
+
+	menu := []Completion{{text = "hello"}, {text = "help"}}
+	draw(&s, &r, &e, Render_Config {
+		prompt        = "> ",
+		prefix_width  = 2,
+		menu          = menu,
+		menu_selected = 0,
+	}, 40, 2)
+
+	testing.expect_value(t, screen_row_text(&s, 0), "> he")
+	testing.expect_value(t, screen_row_text(&s, 1), "")
+}
+
+@(test)
+test_render_completion_menu_truncated :: proc(t: ^testing.T) {
+	s := screen_init(10, 6)
+	defer screen_destroy(&s)
+	r: Renderer
+	render_init(&r)
+
+	e := editor_with("x")
+	defer editor_destroy(&e)
+	editor_set_cursor(&e, 1)
+
+	menu := []Completion{{text = "verylongcompletion"}}
+	draw(&s, &r, &e, Render_Config {
+		prompt        = "> ",
+		prefix_width  = 2,
+		menu          = menu,
+		menu_selected = 0,
+	}, 10, 6)
+
+	testing.expect_value(t, screen_row_text(&s, 1), "> verylong")
+}
+
+@(test)
 test_render_mask :: proc(t: ^testing.T) {
 	s := screen_init(80, 24)
 	defer screen_destroy(&s)

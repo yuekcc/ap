@@ -5,9 +5,11 @@ import "core:unicode/utf8"
 Render_Config :: struct {
 	prompt:       string,
 	prefix_width: int,
-	color:        bool,
-	mask:         bool,
-	hint:         string,
+	color:         bool,
+	mask:          bool,
+	hint:          string,
+	menu:          []Completion,
+	menu_selected: int,
 }
 
 // Renderer 只记住上一次画了多少行、光标在第几行，用来把新帧画在旧帧上面。
@@ -34,7 +36,15 @@ render_frame :: proc(r: ^Renderer, out: ^[dynamic]u8, e: ^Editor, cfg: Render_Co
 	l := layout(buf, cur, cols, cfg.prefix_width)
 	defer layout_destroy(&l)
 
-	capacity := rows - 1
+	menu_total := len(cfg.menu)
+	menu_budget := 0
+	if menu_total > 0 && rows > 2 && cols > 2 {
+		// 菜单最多占一半，给输入块留出空间。
+		menu_max := max(1, (rows - 1) / 2)
+		menu_budget = min(menu_total, menu_max)
+	}
+
+	capacity := rows - 1 - menu_budget
 	if capacity < 1 {
 		capacity = 1
 	}
@@ -75,8 +85,53 @@ render_frame :: proc(r: ^Renderer, out: ^[dynamic]u8, e: ^Editor, cfg: Render_Co
 		drawn += 1
 	}
 
+	// 补全菜单画在输入块下方，每项一行；选中项用 "> " 标记并加反色。
+	if menu_budget > 0 {
+		menu_start, menu_end := menu_window(menu_total, cfg.menu_selected, menu_budget)
+		for i := menu_start; i < menu_end; i += 1 {
+			if drawn > 0 {
+				render_append_string(out, "\r\n")
+			}
+			item := cfg.menu[i]
+			selected := i == cfg.menu_selected
+			if selected {
+				render_append_string(out, "> ")
+			} else {
+				render_append_string(out, "  ")
+			}
+
+			remaining := cols - 2
+			if remaining < 0 {
+				remaining = 0
+			}
+			if cfg.color && selected {
+				render_append_string(out, "\x1b[7m")
+			}
+			render_write_text_limited(out, item.text, remaining)
+			if cfg.color && selected {
+				render_append_string(out, "\x1b[0m")
+			}
+
+			if len(item.description) > 0 {
+				used := 2 + display_width(item.text)
+				desc_remaining := cols - used - 2
+				if desc_remaining > 0 {
+					render_append_string(out, "  ")
+					if cfg.color {
+						render_append_string(out, "\x1b[2m")
+					}
+					render_write_text_limited(out, item.description, desc_remaining)
+					if cfg.color {
+						render_append_string(out, "\x1b[0m")
+					}
+				}
+			}
+			drawn += 1
+		}
+	}
+
 	// hints 画在最后一条逻辑行的右侧，不参与布局，也不移动光标。
-	if cfg.hint != "" && !cfg.mask && end == len(l.rows) {
+	if cfg.hint != "" && !cfg.mask && menu_budget == 0 && end == len(l.rows) {
 		last := l.rows[end - 1]
 		used := cfg.prefix_width + display_width(string(buf[last.start:last.start + last.len]))
 		remaining := cols - used
@@ -128,6 +183,24 @@ render_abort :: proc(r: ^Renderer, out: ^[dynamic]u8) {
 	}
 	render_append_string(out, "\x1b[0J")
 	r^ = {}
+}
+
+// 补全菜单的可见窗口。selected < 0 时从第一项开始；否则尽量把选中项放在窗口中间。
+menu_window :: proc(total, selected, budget: int) -> (start, end: int) {
+	if total <= budget {
+		return 0, total
+	}
+	start = 0
+	if selected >= 0 {
+		start = selected - budget / 2
+		if start < 0 {
+			start = 0
+		}
+		if start + budget > total {
+			start = total - budget
+		}
+	}
+	return start, start + budget
 }
 
 // mask 模式按 grapheme 输出一个 '*'，换行保留。光标偏移也映射到掩码后的缓冲区。

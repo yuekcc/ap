@@ -15,7 +15,7 @@
 - history：添加、上下浏览、草稿恢复、最大长度、文件保存/加载。
 - mask 模式：每个 grapheme 显示为一个 `*`。
 - hints：右侧提示，提交前自动剥离。
-- completion：单候选替换当前 token；多候选插入最长公共前缀。
+- completion：单候选替换当前 token；多候选插入最长公共前缀并显示菜单，Tab/Shift+Tab/↑/↓ 切换，Esc 关闭。
 - Windows VT input / console mode，Unix termios + poll。
 - raw 模式生命周期：`line_editor_enter_raw` / `line_editor_leave_raw`。
 - 异步事件循环：`line_editor_begin` / `feed` / `timeout` / `poll_timeout` / `resize` / `abort_line`，以及中间打印输出用的 `hide` / `show`。
@@ -23,7 +23,6 @@
 
 未实现（后续）：
 
-- 补全候选菜单与 Shift+Tab 反向循环。
 - 持久化 history（`ap-tui` 目前只在进程内保留）。
 
 ## 分层
@@ -69,8 +68,9 @@ legacy 是永久路径，kitty 只是渐进增强：
 - tab 按 8 列制表位展开，layout 与 render 使用同一规则。
 - 折行点上的光标属于下一行；硬换行前的光标留在本行行尾。
 - 需要滚动时首行让给 `…`，内容区少一行。
-- mask 模式按 grapheme 输出一个 `*`，换行保留，光标列按掩码后的缓冲区计算。
+- mask 模式按 grapheme 输出一个 `*`，换行保留，光标列按掩码后的缓冲区计算；mask 下不显示 hints，也不启动 completion。
 - hints 画在最后一条逻辑行右侧，不参与布局；提交前用不带 hint 的帧重画。
+- 补全菜单画在输入块下方，每项一行，选中项用 `> ` 标记；菜单最多占终端一半高度，围绕选中项滚动。菜单打开时不显示 hints。
 - `Renderer` 只记住上一帧的 `drawn` 和 `cursor_row`，用相对移动清屏重绘。
 
 ## 所有权

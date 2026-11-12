@@ -10,3 +10,11 @@ Completer :: struct {
 	ctx:      rawptr,
 	complete: proc(ctx: rawptr, line: string, cursor: int, out: ^[dynamic]Completion),
 }
+
+// 补全菜单状态。items/text/description 的所有权属于 Line_Editor。
+Completion_Menu :: struct {
+	active:      bool,
+	items:       [dynamic]Completion,
+	selected:    int,
+	token_start: int,
+}

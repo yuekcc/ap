@@ -56,7 +56,7 @@ lineedit.history_load(&le.history, "history.txt")
 - legacy VT100/ANSI 输入永久保留；kitty keyboard protocol 只启用 `flag 1`（disambiguate），不探测、不查询。
 - bracketed paste，CRLF/CR 归一成 LF。
 - history 上下浏览、草稿恢复、保存/加载。
-- mask、hints、token completion、异步 hide/show。
+- mask、hints、token completion（多候选菜单）、异步 hide/show。
 - Windows 使用 VT input + console mode；Unix 使用 termios + poll。
 
 ## 测试

@@ -54,10 +54,11 @@ Line_Editor :: struct {
 	decoder:   Decoder,
 	editor:    Editor,
 	history:   History,
-	renderer:  Renderer,
-	out:       [dynamic]u8,
-	pipe_buf:  [dynamic]u8,
-	prompt:    string,
+	renderer:   Renderer,
+	completion: Completion_Menu,
+	out:        [dynamic]u8,
+	pipe_buf:   [dynamic]u8,
+	prompt:     string,
 	cfg:       Render_Config,
 	cols:      int,
 	rows:      int,
@@ -149,6 +150,7 @@ line_editor_destroy :: proc(le: ^Line_Editor) {
 
 	line_editor_leave_raw(le)
 
+	line_editor_completion_clear(le)
 	decoder_destroy(&le.decoder)
 	editor_destroy(&le.editor)
 	history_destroy(&le.history)
@@ -174,6 +176,7 @@ line_editor_begin :: proc(le: ^Line_Editor, prompt: string) -> bool {
 	history_reset(&le.history)
 	decoder_reset(&le.decoder)
 	render_init(&le.renderer)
+	line_editor_completion_clear(le)
 
 	delete(le.prompt)
 	cloned, err := strings.clone(prompt, context.allocator)
@@ -256,6 +259,7 @@ line_editor_abort_line :: proc(le: ^Line_Editor) {
 	if le == nil || !le.active {
 		return
 	}
+	line_editor_completion_clear(le)
 	line_editor_abort(le)
 	le.active = false
 }
@@ -268,8 +272,125 @@ line_editor_redraw_current :: proc(le: ^Line_Editor) {
 	if le.rows <= 0 {
 		le.rows = 24
 	}
-	line_editor_update_hint(le, &le.cfg)
+	line_editor_update_render_cfg(le, &le.cfg)
 	line_editor_redraw(le, le.cfg, le.cols, le.rows)
+}
+
+line_editor_update_render_cfg :: proc(le: ^Line_Editor, cfg: ^Render_Config) {
+	cfg.hint = ""
+	if le.completion.active && len(le.completion.items) > 0 {
+		cfg.menu = le.completion.items[:]
+		cfg.menu_selected = le.completion.selected
+	} else {
+		cfg.menu = nil
+		cfg.menu_selected = -1
+	}
+	if !le.completion.active && le.config.hint != nil && !le.config.mask {
+		cfg.hint = le.config.hint(le.config.hint_ctx, editor_text(&le.editor), le.editor.cursor)
+	}
+}
+
+line_editor_completion_clear :: proc(le: ^Line_Editor) {
+	for c in le.completion.items {
+		delete(c.text)
+		delete(c.description)
+	}
+	delete(le.completion.items)
+	le.completion = {}
+}
+
+line_editor_completion_apply :: proc(le: ^Line_Editor) {
+	idx := le.completion.selected
+	if idx < 0 || idx >= len(le.completion.items) {
+		return
+	}
+	start := le.completion.token_start
+	if start < 0 || start > le.editor.cursor {
+		start = editor_token_start(le.editor.buffer[:], le.editor.cursor)
+	}
+	editor_remove_range(&le.editor, start, le.editor.cursor)
+	editor_insert_text(&le.editor, le.completion.items[idx].text)
+}
+
+line_editor_completion_step :: proc(le: ^Line_Editor, delta: int) -> bool {
+	n := len(le.completion.items)
+	if !le.completion.active || n == 0 {
+		return false
+	}
+	if le.completion.selected < 0 {
+		if delta > 0 {
+			le.completion.selected = 0
+		} else {
+			le.completion.selected = n - 1
+		}
+	} else {
+		x := (le.completion.selected + delta) % n
+		if x < 0 {
+			x += n
+		}
+		le.completion.selected = x
+	}
+	line_editor_completion_apply(le)
+	return true
+}
+
+line_editor_start_completion :: proc(le: ^Line_Editor, backward: bool) -> bool {
+	line_editor_completion_clear(le)
+	if le.config.mask || le.config.completer.complete == nil {
+		return false
+	}
+
+	le.config.completer.complete(
+		le.config.completer.ctx,
+		editor_text(&le.editor),
+		le.editor.cursor,
+		&le.completion.items,
+	)
+
+	n := len(le.completion.items)
+	if n == 0 {
+		line_editor_completion_clear(le)
+		return false
+	}
+
+	le.completion.token_start = editor_token_start(le.editor.buffer[:], le.editor.cursor)
+	if n == 1 {
+		le.completion.selected = 0
+		line_editor_completion_apply(le)
+		line_editor_completion_clear(le)
+		return true
+	}
+
+	token := string(le.editor.buffer[le.completion.token_start:le.editor.cursor])
+	prefix := le.completion.items[0].text
+	for i in 1 ..< n {
+		prefix = common_prefix(prefix, le.completion.items[i].text)
+	}
+	if len(prefix) > len(token) && strings.has_prefix(prefix, token) {
+		editor_remove_range(&le.editor, le.completion.token_start, le.editor.cursor)
+		editor_insert_text(&le.editor, prefix)
+	}
+
+	le.completion.active = true
+	le.completion.selected = -1
+	if backward {
+		_ = line_editor_completion_step(le, -1)
+	}
+	return true
+}
+
+key_is_complete :: proc(key: Key) -> bool {
+	if key.kind == .Tab && .Shift not_in key.mods {
+		return true
+	}
+	if key.kind == .Rune && .Ctrl in key.mods && (key.r == 'i' || key.r == 'I') {
+		return true
+	}
+	return false
+}
+
+key_is_complete_prev :: proc(key: Key) -> bool {
+	return key.kind == .Tab && .Shift in key.mods
 }
 
 line_editor_process_events :: proc(
@@ -284,6 +405,41 @@ line_editor_process_events :: proc(
 	for ev in events^ {
 		switch e in ev {
 		case Key:
+			if le.completion.active {
+				if key_is_complete(e) {
+					if line_editor_completion_step(le, 1) {
+						changed = true
+					}
+					continue
+				}
+				if key_is_complete_prev(e) {
+					if line_editor_completion_step(le, -1) {
+						changed = true
+					}
+					continue
+				}
+				#partial switch e.kind {
+				case .Up:
+					if line_editor_completion_step(le, -1) {
+						changed = true
+					}
+					continue
+				case .Down:
+					if line_editor_completion_step(le, 1) {
+						changed = true
+					}
+					continue
+				case .Escape:
+					// 菜单打开时 Esc 只关菜单，不清空输入。
+					line_editor_completion_clear(le)
+					changed = true
+					continue
+				case:
+					line_editor_completion_clear(le)
+					changed = true
+				}
+			}
+
 			switch editor_apply_key(&le.editor, e, le.cols, le.cfg.prefix_width) {
 			case .Submit:
 				submitted = true
@@ -292,11 +448,13 @@ line_editor_process_events :: proc(
 			case .Eof:
 				want_eof = true
 			case .History_Prev:
+				line_editor_completion_clear(le)
 				if text, ok := history_prev(&le.history, editor_text(&le.editor)); ok {
 					editor_set_text(&le.editor, text)
 					changed = true
 				}
 			case .History_Next:
+				line_editor_completion_clear(le)
 				if text, ok := history_next(&le.history, editor_text(&le.editor)); ok {
 					editor_set_text(&le.editor, text)
 					changed = true
@@ -305,27 +463,20 @@ line_editor_process_events :: proc(
 				changed = true
 			case .Complete:
 				if le.config.completer.complete != nil {
-					completions: [dynamic]Completion
-					le.config.completer.complete(
-						le.config.completer.ctx,
-						editor_text(&le.editor),
-						le.editor.cursor,
-						&completions,
-					)
-					if editor_apply_completions(&le.editor, completions[:]) {
+					if line_editor_start_completion(le, false) {
 						changed = true
 					}
-					for c in completions {
-						delete(c.text)
-						delete(c.description)
-					}
-					delete(completions)
 				} else {
 					// 没有补全器时 Tab 插入一个制表符。
 					editor_insert_rune(&le.editor, '\t')
 					changed = true
 				}
 			case .Complete_Prev:
+				if le.config.completer.complete != nil {
+					if line_editor_start_completion(le, true) {
+						changed = true
+					}
+				}
 			case .None:
 				// 普通文本输入、删除、光标移动都返回 None；除明确无动作的键外都重绘。
 				if e.kind != .Ignore && e.kind != .Insert {
@@ -333,6 +484,7 @@ line_editor_process_events :: proc(
 				}
 			}
 		case Paste:
+			line_editor_completion_clear(le)
 			editor_insert_text(&le.editor, e.text)
 			changed = true
 		case Unsupported:
@@ -344,18 +496,22 @@ line_editor_process_events :: proc(
 	events_destroy(events)
 
 	if canceled {
+		line_editor_completion_clear(le)
 		line_editor_abort(le)
 		le.active = false
 		return "", .Canceled
 	}
 	if want_eof {
+		line_editor_completion_clear(le)
 		line_editor_abort(le)
 		le.active = false
 		return "", .Eof
 	}
 	if submitted {
 		// 同一 chunk 里可能同时到达文本和 Enter：提交前补画最后一次缓冲区。
-		// 提示词不留在最终行上。
+		// 菜单和提示词不留在最终行上。
+		line_editor_completion_clear(le)
+		line_editor_update_render_cfg(le, &le.cfg)
 		le.cfg.hint = ""
 		line_editor_redraw(le, le.cfg, le.cols, le.rows)
 		current := editor_text(&le.editor)
@@ -418,13 +574,6 @@ line_editor_read_line :: proc(le: ^Line_Editor, prompt: string) -> (line: string
 		case .Error:
 			return "", .Error
 		}
-	}
-}
-
-line_editor_update_hint :: proc(le: ^Line_Editor, cfg: ^Render_Config) {
-	cfg.hint = ""
-	if le.config.hint != nil && !le.config.mask {
-		cfg.hint = le.config.hint(le.config.hint_ctx, editor_text(&le.editor), le.editor.cursor)
 	}
 }
 

@@ -111,7 +111,7 @@ ap-tui [options]
 
 stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前进入 raw mode，提交后、turn 开始前离开 raw，把终端交还内核。非 TTY 时 `lineedit` 使用 pipe 模式按行读取，`ap-tui` 自己打印 `> ` 提示符。
 
-`ap-tui` 没有配置 completer、hints 和持久化 history；history 只保存在当前进程内。编辑块首行前缀是 `› `，续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示。编辑块不进入滚动区。
+`ap-tui` 配置了斜杠命令 completer；hints 和持久化 history 未启用，history 只保存在当前进程内。编辑块首行前缀是 `› `，续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示。编辑块不进入滚动区。
 
 编辑框支持下面的按键。
 
@@ -130,7 +130,7 @@ stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前�
 | Ctrl+K | 删到逻辑行尾 |
 | Ctrl+U | 删到逻辑行首 |
 | Ctrl+W | 删除前一个空白分隔的词。`a/b` 算一个词 |
-| Tab | 没有配置 completer 时插入一个制表符 |
+| Tab、Shift+Tab | 补全斜杠命令；菜单打开时切换候选 |
 | Ctrl+L | 用当前尺寸重绘编辑块 |
 | Ctrl+C | 缓冲区非空时清空。缓冲区为空时退出 `ap-tui` |
 | Ctrl+D | 缓冲区非空时删除光标下的字符。缓冲区为空时退出 `ap-tui` |
@@ -144,6 +144,7 @@ stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前�
 - legacy 模式下孤立的 ESC 用约 20ms 超时消歧。粘贴终止符被截断时，用 150ms 超时把已收到的内容落地。
 - 长行按显示宽度硬折行。CJK、emoji ZWJ、区域旗帜和组合字符使用 grapheme 宽度；tab 按 8 列制表位展开。逻辑行内的 `\n` 强制换行。
 - raw 模式下 OPOST 关闭，编辑块内部用 `\r\n`；turn 期间离开 raw，流式输出使用普通 `\n`。
+- 多候选时首次 Tab 插入最长公共前缀并在输入块下方显示菜单；再次 Tab/Shift+Tab/↑/↓ 切换并应用候选，Esc 只关菜单，其他按键关闭菜单。菜单最多占终端一半高度，围绕选中项滚动。
 
 ### Kitty keyboard protocol
 
@@ -218,7 +219,7 @@ odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 - turn 运行期间不读 stdin。这期间的按键由终端留在输入缓冲里，turn 结束后会被当成下一条提示词。
 - turn 运行期间 Ctrl+C 是内核 `SIGINT`，会同时终止 `ap-tui` 和 `ap`。`ap-tui` 不会回到输入框。
 - 不显示 reasoning，也没有 token 或 usage 状态行。
-- 输入框没有持久化 history、选中、撤销、鼠标和补全菜单。`ap-tui` 未配置 completer，Tab 插入制表符。
+- 输入框没有持久化 history、选中、撤销和鼠标支持。补全只覆盖斜杠命令。
 
 ## 相关文档
 

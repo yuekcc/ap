@@ -13,10 +13,56 @@ Input :: struct {
 	inited:    bool,
 }
 
+Tui_Command :: struct {
+	text:        string,
+	description: string,
+}
+
+TUI_COMMANDS := [?]Tui_Command {
+	{"/new", "丢弃当前 session，下一条提示词新建 session"},
+	{"/session", "显示当前 session id"},
+	{"/help", "显示命令列表"},
+	{"/quit", "退出"},
+	{"/exit", "退出（/quit 同义）"},
+}
+
+// 只补全整行都是斜杠命令的情况；带空格或参数后不再补全。
+tui_complete :: proc(ctx: rawptr, line: string, cursor: int, out: ^[dynamic]lineedit.Completion) {
+	_, _ = ctx, cursor
+	token := strings.trim_left_space(line)
+	if len(token) == 0 || token[0] != '/' {
+		return
+	}
+	for i in 0 ..< len(token) {
+		switch token[i] {
+		case ' ', '\t', '\n', '\r':
+			return
+		}
+	}
+	for cmd in TUI_COMMANDS {
+		if !strings.has_prefix(cmd.text, token) {
+			continue
+		}
+		text, err := strings.clone(cmd.text)
+		if err != nil {
+			continue
+		}
+		desc, derr := strings.clone(cmd.description)
+		if derr != nil {
+			delete(text)
+			continue
+		}
+		append(out, lineedit.Completion{text = text, description = desc})
+	}
+}
+
 input_init :: proc(input: ^Input) -> bool {
 	input^ = {}
 	input.stdin_tty = os.is_tty(os.stdin)
 	input.inited = lineedit.line_editor_init_file(&input.editor, os.stdin, os.stdout)
+	if input.inited {
+		input.editor.config.completer = lineedit.Completer{complete = tui_complete}
+	}
 	return input.inited
 }
 
