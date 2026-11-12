@@ -107,45 +107,51 @@ ap-tui [options]
 - ANSI 颜色在 stdout 不是 TTY、设置了 `NO_COLOR` 或传了 `--no-color` 时关闭。
 - reasoning delta 不展示。
 
-## raw mode 输入
+## 输入
 
-stdin 和 stdout 都是 TTY 时，每轮进入 raw mode，用自绘的多行编辑框读取提示词。提交后、turn 开始前离开 raw，把终端交还内核。非 TTY 或 raw mode 进入失败时退回 `bufio` 行输入。
+stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前进入 raw mode，提交后、turn 开始前离开 raw，把终端交还内核。非 TTY 时 `lineedit` 使用 pipe 模式按行读取，`ap-tui` 自己打印 `> ` 提示符。
+
+`ap-tui` 没有配置 completer、hints 和持久化 history；history 只保存在当前进程内。编辑块首行前缀是 `› `，续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示。编辑块不进入滚动区。
 
 编辑框支持下面的按键。
 
 | 按键 | 行为 |
 | --- | --- |
-| Enter | 提交。缓冲区 trim 后为空时不提交 |
-| Ctrl+Enter | 插入换行。需要 Kitty keyboard protocol |
+| Enter | 提交。缓冲区 trim 后为空时 `ap-tui` 忽略并重新提示 |
+| Ctrl+Enter、Shift+Enter、Alt+Enter | 插入换行。Ctrl/Shift+Enter 需要 Kitty keyboard protocol；Alt+Enter 在 legacy 下也可用 |
 | ←、→ | 按 rune 移动 |
 | Ctrl+←、Ctrl+→、Alt+←、Alt+→ | 按空白分词移动到前一个或后一个词边界 |
-| ↑、↓ | 按可视行移动，尽量保持列号 |
+| ↑、↓ | 按可视行移动，尽量保持列号；在首/末行继续按则浏览 history |
+| Ctrl+P、Ctrl+N、PageUp、PageDown | history 上一条/下一条 |
 | Home、End、Ctrl+A、Ctrl+E | 到当前逻辑行首或行尾 |
 | Ctrl+Home、Ctrl+End | 到整个缓冲区开头或结尾 |
 | 小键盘方向键 | NumLock 关闭时发的是普通方向键；NumLock 打开时按小键盘规则插入数字 |
-| Backspace、Delete | 删除前一个或后一个 rune，跨行时合并行 |
+| Backspace、Delete、Ctrl+H | 删除前一个或后一个 rune，跨行时合并行 |
 | Ctrl+K | 删到逻辑行尾 |
 | Ctrl+U | 删到逻辑行首 |
 | Ctrl+W | 删除前一个空白分隔的词。`a/b` 算一个词 |
+| Tab | 没有配置 completer 时插入一个制表符 |
+| Ctrl+L | 用当前尺寸重绘编辑块 |
 | Ctrl+C | 缓冲区非空时清空。缓冲区为空时退出 `ap-tui` |
+| Ctrl+D | 缓冲区非空时删除光标下的字符。缓冲区为空时退出 `ap-tui` |
 | Esc | 清空缓冲区 |
 
 输入层还有下面的规则：
 
-- Enter 只在 trim 后非空时提交。提交内容保留原始空白和 Ctrl+Enter 换行。
-- bracketed paste 的内容原样插入。`\r` 删除，`\n` 保留，不当作按键。
-- 整段粘贴只触发一次重绘。超过 1 MiB 时截断并插入 `[input truncated]` 提示。
+- Enter 在 trim 后为空时 `lineedit` 返回空行，`ap-tui` 忽略并重新提示。提交内容保留原始空白和多行换行。
+- bracketed paste 的内容原样插入；CRLF 和孤立 CR 归一成 `\n`，不当作按键。超过 8 MiB 时只保留前 8 MiB 并标记 `truncated`，`ap-tui` 不额外提示。
+- 粘贴内容里的 C0 控制字符（`\n`、`\t` 除外）会被丢弃，避免 ESC 注入终端。
 - legacy 模式下孤立的 ESC 用约 20ms 超时消歧。粘贴终止符被截断时，用 150ms 超时把已收到的内容落地。
-- 长行按显示宽度硬折行。CJK 和全角字符占 2 列，组合字符占 0 列。逻辑行内的 `\n` 强制换行。
-- 首行前缀是 `› `，续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示。编辑块不进入滚动区。
+- 长行按显示宽度硬折行。CJK、emoji ZWJ、区域旗帜和组合字符使用 grapheme 宽度；tab 按 8 列制表位展开。逻辑行内的 `\n` 强制换行。
+- raw 模式下 OPOST 关闭，编辑块内部用 `\r\n`；turn 期间离开 raw，流式输出使用普通 `\n`。
 
 ### Kitty keyboard protocol
 
-`ap-tui` 只用 kitty keyboard protocol 扩展按键信息，不实现 win32-input-mode。完整外部规格见 [refs/keyboard-protocol.rst](refs/keyboard-protocol.rst)。
+`lineedit` 只用 kitty keyboard protocol 扩展按键信息，不实现 win32-input-mode。完整外部规格见 [refs/keyboard-protocol.rst](refs/keyboard-protocol.rst)，实现细节见 [lineedit.md](lineedit.md)。
 
-首次进入 raw 时发送 `CSI > 1 u`，打开 disambiguate 位并压栈；再发送 `CSI ? u` 查询，120ms 内收到 `CSI ? <flags> u` 且 flags 包含 1 才算支持。退出 raw 时发送 `CSI < u` 弹栈。探测失败时留在 raw：方向键、Home、End、Delete 和 legacy 控制字节仍可用，但拿不到 Ctrl+Enter，启动时提示一次 `terminal does not report kitty keyboard protocol: Ctrl+Enter unavailable`。
+进入 raw 时发送 `CSI > 1 u`，打开 disambiguate 位并压栈；退出 raw 时发送 `CSI < u` 弹栈。不发送 `CSI ? u` 查询，也不做 120ms 探测：支持 kitty 的终端发 `CSI u`，不支持的终端继续发 legacy 字节，解码器同时接受两者。legacy 下 Ctrl+Enter/Shift+Enter 不可用；把 Alt 编码为 ESC 前缀的终端可以用 Alt+Enter 插入换行。
 
-探测成功后，编辑框需要解析的按键编码只有下面几类。
+解码器需要解析的按键编码只有下面几类。
 
 | 编码 | 含义 |
 | --- | --- |
@@ -154,7 +160,7 @@ stdin 和 stdout 都是 TTY 时，每轮进入 raw mode，用自绘的多行编�
 | `CSI <code> ; <mods> ~` | Delete、Home、End、Insert、PgUp/PgDn 等 |
 | `\r`、`0x7f`/`0x08`、`\t` | Enter、Backspace、Tab 的兼容编码 |
 
-`<mods>` 是 `1 + 位掩码`：shift(1)、alt(2)、ctrl(4)、super(8)、hyper(16)、meta(32)、caps_lock(64)、num_lock(128)。编辑框只使用 shift/alt/ctrl；super/hyper/meta 和锁键位必须接受并忽略，否则 NumLock/CapsLock 打开时方向键、Ctrl+C 和 Ctrl+Enter 会被整键丢弃。参数里用 `:` 分隔的 alternate key、event type、text 子字段对编辑框没有意义，解析时跳过；空字段按默认值处理。
+`<mods>` 是 `1 + 位掩码`：shift(1)、alt(2)、ctrl(4)、super(8)、hyper(16)、meta(32)、caps_lock(64)、num_lock(128)。编辑器只映射 shift/alt/ctrl；caps_lock/num_lock 接受并忽略；super/hyper/meta 整键按 `Unsupported` 丢弃，不能退化成无修饰插入。参数里用 `:` 分隔的 alternate key、event type、text 子字段对编辑器没有意义，解析时跳过；空字段按默认值处理。
 
 - 方向键和 Home/End 的修饰键按 `CSI 1;<modifier>` 解码，Delete/Home/End 的 `CSI <code>;<modifier> ~` 形式用同一套 modifier 解码。Shift+方向键没有选中语义，按无修饰处理；Ctrl/Alt 参与按词移动和缓冲区首尾跳转。
 - 数字小键盘：NumLock 打开且终端处于 application keypad 模式时，数字和 `.` `-` `+` `,` `/` `*` `=`、Enter 走 SS3 序列，按对应字符和提交处理；kitty 打开 disambiguate 后，非文本的小键盘按键改用 PUA 功能键码（`CSI 57414u` = 小键盘 Enter，`CSI 57417-57420u` = 小键盘方向键，`CSI 57423/57424/57426u` = Home/End/Delete），按主键盘对应键处理。NumLock 关闭时的小键盘方向键、Home、End、Delete 与主键盘一致，Insert、PgUp、PgDn 和 Begin 忽略。未识别的 PUA 功能键码丢弃，不能当正文插入。
@@ -199,11 +205,8 @@ odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 
 测试覆盖下面几类行为。
 
-- 按键解码：Kitty、legacy、分片转义序列、粘贴、非法 UTF-8、超时 flush。
-- 编辑模型：插入删除、跨行、↑↓ 保列、Ctrl 键、1 MiB 上限。
-- 折行排版：CJK 双宽、空行、折行点、滚动窗口。
-- 渲染：实时流、历史重放、工具输出截断、错误与 turn 结束。
-- session：project hash、最近根 session、transcript 重放和 blob 解析。
+- `lineedit`：decoder（Kitty/legacy/分片/粘贴/非法 UTF-8/超时）、编辑模型、grapheme 折行、渲染、history、completion、mask/hints、异步 `feed`。
+- `ap-tui`：实时流、历史重放、工具输出截断、错误与 turn 结束、session 解析、`prompt_gap`。
 
 真实终端行为（Windows Terminal、Ghostty 等）靠手动验收。
 
@@ -211,13 +214,11 @@ odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 
 当前实现有下面的限制。
 
-- 终端 reflow（窗口缩放、重新布局已画内容）可能让编辑块错位。编辑块在下一次按键重绘时按新尺寸重新布局，空闲时不主动重绘。
-- emoji 的 ZWJ 序列和变体选择符按 1 列处理，光标可能视觉偏移。
-- 粘贴内容中的控制字符（例如 ESC）会原样进入缓冲区并显示。
+- 终端 reflow（窗口缩放、重新布局已画内容）可能让编辑块错位。`lineedit` 在每次重绘时重新取尺寸；空闲时不主动重绘。
 - turn 运行期间不读 stdin。这期间的按键由终端留在输入缓冲里，turn 结束后会被当成下一条提示词。
 - turn 运行期间 Ctrl+C 是内核 `SIGINT`，会同时终止 `ap-tui` 和 `ap`。`ap-tui` 不会回到输入框。
 - 不显示 reasoning，也没有 token 或 usage 状态行。
-- 输入框没有方向键 history、选中、撤销、鼠标和输入法预编辑支持。
+- 输入框没有持久化 history、选中、撤销、鼠标和补全菜单。`ap-tui` 未配置 completer，Tab 插入制表符。
 
 ## 相关文档
 

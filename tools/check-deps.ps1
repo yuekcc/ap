@@ -19,15 +19,25 @@ function Fail-Check($message) {
 }
 
 function Test-ImportRules {
-    foreach ($dir in @("ap-web", "ap-tui")) {
-        Get-ChildItem "$dir/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
-            $file = $_.FullName
-            Get-Content $file | ForEach-Object {
-                if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
-                    $path = $Matches[1]
-                    if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core/client$|\.\./ap-core/protocol$)') {
-                        Fail-Check ('{0}: 前端不允许 import "{1}"（只允许 ap-core/client、ap-core/protocol）' -f $file, $path)
-                    }
+    Get-ChildItem "ap-web/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core/client$|\.\./ap-core/protocol$)') {
+                    Fail-Check ('{0}: ap-web 不允许 import "{1}"（只允许 ap-core/client、ap-core/protocol）' -f $file, $path)
+                }
+            }
+        }
+    }
+
+    Get-ChildItem "ap-tui/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core/client$|\.\./ap-core/protocol$|\.\./lineedit$)') {
+                    Fail-Check ('{0}: ap-tui 不允许 import "{1}"（只允许 ap-core/client、ap-core/protocol、lineedit）' -f $file, $path)
                 }
             }
         }
@@ -88,6 +98,18 @@ function Test-ImportRules {
                 $path = $Matches[1]
                 if ($path -notmatch '^(core:|base:|vendor:|\.\./ap-core$|\.\./ap-core/platform$)') {
                     Fail-Check ('{0}: magi 不允许 import "{1}"（只允许 apcore、platform）' -f $file, $path)
+                }
+            }
+        }
+    }
+
+    Get-ChildItem "lineedit/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:)') {
+                    Fail-Check ('{0}: lineedit 不允许 import 本地包 "{1}"（只允许 core:/base:/vendor:）' -f $file, $path)
                 }
             }
         }
@@ -183,6 +205,15 @@ if ($SelfTest) {
         exit 1
     }
 
+    $probe = "ap-web/__check_deps_probe.odin"
+    Set-Content -Path $probe -Value "package apweb`n`nimport `"../lineedit`"" -Encoding utf8
+    $ok = Test-ImportRules-Bool
+    Remove-Item $probe -Force
+    if ($ok) {
+        Write-Host "check-deps: self-test 失败：ap-web import lineedit 没有被检出" -ForegroundColor Red
+        exit 1
+    }
+
     $probe = "cmd/ap-web/__check_deps_probe.odin"
     Set-Content -Path $probe -Value "package main`n`nimport `"../../ap-core/engine`"" -Encoding utf8
     $ok = Test-ImportRules-Bool
@@ -207,6 +238,15 @@ if ($SelfTest) {
     Remove-Item $probe -Force
     if ($ok) {
         Write-Host "check-deps: self-test 失败：engine 反向 import ap-cli/tools 没有被检出" -ForegroundColor Red
+        exit 1
+    }
+
+    $probe = "lineedit/__check_deps_probe.odin"
+    Set-Content -Path $probe -Value "package lineedit`n`nimport `"../ap-core`"" -Encoding utf8
+    $ok = Test-ImportRules-Bool
+    Remove-Item $probe -Force
+    if ($ok) {
+        Write-Host "check-deps: self-test 失败：lineedit 依赖本地包没有被检出" -ForegroundColor Red
         exit 1
     }
     Write-Host "check-deps: self-test 通过"

@@ -1,151 +1,102 @@
 package aptui
 
-import "core:bufio"
+import lineedit "../lineedit"
+
+import "core:os"
 import "core:strings"
 
-PASTE_FLUSH_MS :: 150
-ESC_TIMEOUT_MS :: 20
-
-// Input 把两条输入路径收在一起：raw 编辑框（term != nil）与 pipe/测试用的 bufio 回退。
+// Input 把行编辑交给 lineedit。raw 只在每条 prompt 期间打开：
+// turn 运行期间恢复 cooked mode，Ctrl+C 仍然是内核 SIGINT。
 Input :: struct {
-	term:      ^Term,
-	reader:    bufio.Reader,
+	editor:    lineedit.Line_Editor,
 	stdin_tty: bool,
+	inited:    bool,
 }
 
-// 一轮 turn 的输出之后先空一行，再画下一条提示符；只在本轮真的跑过 ap 时生效。
-// read_prompt 在 term_enter 之后调用，所以 raw 分支要把 \r 带进换行里。
+input_init :: proc(input: ^Input) -> bool {
+	input^ = {}
+	input.stdin_tty = os.is_tty(os.stdin)
+	input.inited = lineedit.line_editor_init_file(&input.editor, os.stdin, os.stdout)
+	return input.inited
+}
+
+input_destroy :: proc(input: ^Input) {
+	if input.inited {
+		lineedit.line_editor_destroy(&input.editor)
+		input.inited = false
+	}
+}
+
+// 一轮 turn 之后先空一行，再画下一条提示符；只在本轮真的跑过 ap 时生效。
+// raw 下 OPOST 被关闭，不能经 renderer 写裸 \n。
 write_turn_gap :: proc(app: ^App, input: ^Input) {
 	if !app.prompt_gap {
 		return
 	}
 	app.prompt_gap = false
-	if input.term != nil {
-		// raw 下 OPOST 被关闭，不能经 renderer 写裸 \n。
+
+	if input.inited && input.editor.raw {
 		if !app.renderer.at_line_start {
-			term_write(input.term, "\r\n")
+			lineedit.line_editor_write_string(&input.editor, "\r\n")
 		}
-		term_write(input.term, "\r\n")
+		lineedit.line_editor_write_string(&input.editor, "\r\n")
 		app.renderer.at_line_start = true
 		return
 	}
+
 	ensure_line_start(&app.renderer)
 	write_text(&app.renderer, "\n")
 }
 
 read_prompt :: proc(app: ^App, input: ^Input) -> (text: string, eof: bool) {
+	if input.inited {
+		// 每轮 prompt 前进入 raw；begin/read_line 也会自动进入，这里是幂等的。
+		_ = lineedit.line_editor_enter_raw(&input.editor)
+	}
 	write_turn_gap(app, input)
-	if input.term != nil {
-		return read_prompt_raw(app, input.term)
+
+	if input.inited && input.editor.raw {
+		// 上一段输出不一定停在行首；raw 下补 \r\n 后再画 prompt。
+		if !app.renderer.at_line_start {
+			lineedit.line_editor_write_string(&input.editor, "\r\n")
+		}
+		app.renderer.at_line_start = false
+
+		prompt := "› "
+		if app.renderer.color {
+			prompt = BOLD + CYAN + "› " + RESET
+		}
+
+		line, status := lineedit.line_editor_read_line(&input.editor, prompt)
+		switch status {
+		case .Ok:
+			text = strings.clone(line, context.temp_allocator)
+			delete(line)
+			app.renderer.at_line_start = true
+			lineedit.line_editor_leave_raw(&input.editor)
+			return text, false
+		case .Cancel, .Eof, .Error:
+			app.renderer.at_line_start = true
+			lineedit.line_editor_leave_raw(&input.editor)
+			return "", true
+		}
 	}
 
+	// 非 tty：lineedit 的 pipe 模式不画提示符，由 renderer 补。
 	write_prompt(app)
-	line, at_eof := read_line(&input.reader)
-	// TTY 下回车已经由终端换行；管道输入没有回显，需要自己补一个换行。
-	if input.stdin_tty {
-		app.renderer.at_line_start = true
-	} else {
-		ensure_line_start(&app.renderer)
-	}
-	return line, at_eof
-}
-
-read_prompt_raw :: proc(app: ^App, term: ^Term) -> (text: string, eof: bool) {
-	ed: Editor
-	editor_init(&ed)
-	defer editor_destroy(&ed)
-
-	decoder: Decoder
-	defer decoder_destroy(&decoder)
-
-	view := Editor_View {
-		out   = app.renderer.out,
-		color = app.renderer.color,
-	}
-
-	// raw 下 OPOST 被关闭，换行必须自带 \r。
-	if !app.renderer.at_line_start {
-		term_write(term, "\r\n")
-	}
-	app.renderer.at_line_start = false
-
-	cols, rows := term_size(term)
-	editor_view_draw(&view, &ed, cols, rows)
-
-	prefix_width := editor_prefix_width()
-	buf: [4096]u8
-	submitted := false
-
-	for !submitted {
-		timeout := -1
-		if decoder.mode == .Paste {
-			// 终止符被截断时，不能把已收到的粘贴内容永远挂住。
-			timeout = PASTE_FLUSH_MS
-		} else if !term.kitty && decoder_incomplete(&decoder) {
-			timeout = ESC_TIMEOUT_MS
-		}
-
-		n, timed_out, at_eof := term_read_chunk(term, buf[:], timeout)
-		if at_eof {
-			editor_view_abort(&view)
+	line, status := lineedit.line_editor_read_line(&input.editor, "")
+	switch status {
+	case .Ok:
+		text = strings.clone(line, context.temp_allocator)
+		delete(line)
+		if input.stdin_tty {
 			app.renderer.at_line_start = true
-			return "", true
-		}
-
-		events: [dynamic]Event
-		if timed_out {
-			events = decode_timeout(&decoder)
 		} else {
-			events = decode_feed(&decoder, buf[:n])
+			ensure_line_start(&app.renderer)
 		}
-
-		quit := false
-		for ev in events {
-			switch evt in ev {
-			case Key:
-				switch editor_apply_key(&ed, evt, cols, prefix_width) {
-				case .Submit:
-					submitted = true
-				case .Quit:
-					quit = true
-				case .None:
-				}
-			case Paste:
-				editor_insert_text(&ed, evt.text)
-			case Unsupported:
-			}
-			if submitted || quit {
-				break
-			}
-		}
-		had_events := len(events) > 0
-		events_destroy(&events)
-
-		if quit {
-			editor_view_abort(&view)
-			app.renderer.at_line_start = true
-			return "", true
-		}
-		if submitted {
-			break
-		}
-		// 分片粘贴在终止符到达前不产生事件，也就不会反复重绘。
-		if !had_events {
-			continue
-		}
-
-		// 每次重绘重新取尺寸；窗口缩放后按新宽度布局。
-		cols, rows = term_size(term)
-		prefix_width = editor_prefix_width()
-		editor_view_draw(&view, &ed, cols, rows)
+		return text, false
+	case .Cancel, .Eof, .Error:
+		return "", true
 	}
-
-	// 提交：先把最后一次按键后的缓冲区完整画出来，再移动到块底下一行。
-	cols, rows = term_size(term)
-	editor_view_draw(&view, &ed, cols, rows)
-	// trim 只用于判断是否为空；提交内容保留原样（包括 Ctrl+Enter 换行与行尾空格）。
-	text = strings.clone(editor_text(&ed), context.temp_allocator)
-	editor_view_finish(&view)
-	app.renderer.at_line_start = true
-	return text, false
+	return "", true
 }

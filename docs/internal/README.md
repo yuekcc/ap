@@ -110,6 +110,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [subagents.md](subagents.md) | agent 定义、启动协议、结果契约 | 规格 |
 | [skills.md](skills.md) | 技能发现、`SKILL.md` 格式、提示词注入 | 规格 |
 | [tui.md](tui.md) | `ap-tui` 的进程模型、渲染、输入与命令 | 规格 |
+| [lineedit.md](lineedit.md) | 独立行编辑器：decoder、editor、layout、render、history、transport | 规格 |
 | [web.md](web.md) | `ap-web` 的 HTTP/SSE、并发与前端 | 规格 |
 | [integration.md](integration.md) | 新前端接入 ap 的进程契约与 turn 生命周期 | 规格 |
 | [magi.md](magi.md) | 三角色投票、一票否决、输入输出与失败语义 | 规格 |

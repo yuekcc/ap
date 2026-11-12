@@ -1,29 +1,26 @@
-package aptui
-
-import "core:strings"
-import "core:unicode/utf8"
+package lineedit
 
 // 输入层把任意字节分片解码成事件。状态全部放在 Decoder 里，允许 CSI 只到一半、
 // 粘贴跨 chunk、多字节 UTF-8 被切开。
 
+import "core:strings"
+import "core:unicode/utf8"
+
 Key_Kind :: enum {
 	Rune,
-	Backspace,
+	Tab,
 	Enter,
-	Ctrl_Enter,
+	Backspace,
 	Delete,
+	Insert,
 	Left,
 	Right,
 	Up,
 	Down,
 	Home,
 	End,
-	Ctrl_A,
-	Ctrl_E,
-	Ctrl_K,
-	Ctrl_U,
-	Ctrl_W,
-	Ctrl_C,
+	Page_Up,
+	Page_Down,
 	Escape,
 	Ignore,
 }
@@ -36,6 +33,8 @@ Key_Mod :: enum {
 
 Key_Mods :: bit_set[Key_Mod]
 
+// Rune 上的 Ctrl/Alt 是有意义的：编辑器把 Ctrl+A 这类组合映射成动作，
+// 而不是在解码层硬编码成 Ctrl_A 之类的专用键。这样 kitty 和 legacy 可以共用事件模型。
 Key :: struct {
 	kind: Key_Kind,
 	r:    rune,
@@ -43,7 +42,8 @@ Key :: struct {
 }
 
 Paste :: struct {
-	text: string,
+	text:      string,
+	truncated: bool,
 }
 
 Unsupported :: struct {}
@@ -59,26 +59,47 @@ Decoder_Mode :: enum {
 	Escape,
 	Csi,
 	Ss3,
-	Osc,
-	Osc_Escape,
+	String,
+	String_Escape,
 	Paste,
 }
 
-Paste_Terminator :: "\x1b[201~"
+PASTE_TERMINATOR :: "\x1b[201~"
+MAX_PASTE_BYTES  :: 8 << 20
 
 Decoder :: struct {
-	mode:      Decoder_Mode,
-	seq:       [64]u8,
-	seq_len:   int,
-	utf8_buf:  [4]u8,
-	utf8_len:  int,
-	utf8_need: int,
-	paste:     [dynamic]u8,
+	mode:           Decoder_Mode,
+	seq:            [64]u8,
+	seq_len:        int,
+	utf8_buf:       [4]u8,
+	utf8_len:       int,
+	utf8_need:      int,
+	alt_pending:    bool,
+	paste:          [dynamic]u8,
+	paste_match:    int,
+	paste_overflow: bool,
+}
+
+decoder_init :: proc(d: ^Decoder) {
+	d^ = {}
+	d.paste = make([dynamic]u8, 0, 256)
 }
 
 decoder_destroy :: proc(d: ^Decoder) {
 	delete(d.paste)
 	d^ = {}
+}
+
+// 新一轮 read_line 前清掉上一轮可能残留的半截序列/粘贴。
+decoder_reset :: proc(d: ^Decoder) {
+	d.mode = .Ground
+	d.seq_len = 0
+	d.utf8_len = 0
+	d.utf8_need = 0
+	d.alt_pending = false
+	clear(&d.paste)
+	d.paste_match = 0
+	d.paste_overflow = false
 }
 
 decode_feed :: proc(d: ^Decoder, data: []u8) -> [dynamic]Event {
@@ -89,33 +110,40 @@ decode_feed :: proc(d: ^Decoder, data: []u8) -> [dynamic]Event {
 	return events
 }
 
-// 超时：legacy 下孤立的 ESC（或残缺序列）必须在 poll 超时后落地；
-// 粘贴终止符迟迟不到时也不能把已收到的文本吞掉。
+// 超时用于落地 legacy 下孤立的 ESC、残缺的 CSI，以及迟迟等不到终止符的粘贴。
 decode_timeout :: proc(d: ^Decoder) -> [dynamic]Event {
 	events: [dynamic]Event
 	switch d.mode {
 	case .Paste:
+		flush_paste_match(d)
 		emit_paste(d, &events)
 	case .Escape:
 		emit_key(&events, .Escape)
 		reset_sequence(d)
-	case .Csi, .Ss3, .Osc, .Osc_Escape:
+	case .Csi, .Ss3:
 		// 残缺的转义序列一律丢弃，绝不把转义字节插进缓冲区。
 		emit_key(&events, .Ignore)
 		reset_sequence(d)
+	case .String, .String_Escape:
+		emit_unsupported(&events)
+		reset_sequence(d)
 	case .Ground:
+		if d.utf8_len > 0 {
+			d.utf8_len = 0
+			d.utf8_need = 0
+			d.alt_pending = false
+			emit_key(&events, .Ignore)
+		}
 	}
 	return events
 }
 
+decoder_state :: proc(d: ^Decoder) -> Decoder_Mode {
+	return d.mode
+}
+
 decoder_incomplete :: proc(d: ^Decoder) -> bool {
-	switch d.mode {
-	case .Escape, .Csi, .Ss3, .Osc, .Osc_Escape:
-		return true
-	case .Ground, .Paste:
-		return false
-	}
-	return false
+	return d.mode != .Ground || d.utf8_len > 0
 }
 
 events_destroy :: proc(events: ^[dynamic]Event) {
@@ -138,21 +166,18 @@ emit_key :: proc(events: ^[dynamic]Event, kind: Key_Kind, r: rune = 0, mods: Key
 	append(events, Event(Key{kind = kind, r = r, mods = mods}))
 }
 
-emit_unsupported :: proc(events: ^[dynamic]Event) {
-	append(events, Event(Unsupported{}))
+// legacy 的 Alt 是 ESC 前缀；真正落地时才把 Alt 加到按键上。
+ground_emit_key :: proc(d: ^Decoder, events: ^[dynamic]Event, kind: Key_Kind, r: rune = 0, mods: Key_Mods = {}) {
+	m := mods
+	if d.alt_pending {
+		m |= {.Alt}
+		d.alt_pending = false
+	}
+	emit_key(events, kind, r, m)
 }
 
-emit_paste :: proc(d: ^Decoder, events: ^[dynamic]Event) {
-	text := ""
-	if len(d.paste) > 0 {
-		cloned, err := strings.clone_from_bytes(d.paste[:], context.allocator)
-		if err == nil {
-			text = cloned
-		}
-	}
-	append(events, Event(Paste{text = text}))
-	clear(&d.paste)
-	reset_sequence(d)
+emit_unsupported :: proc(events: ^[dynamic]Event) {
+	append(events, Event(Unsupported{}))
 }
 
 decode_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
@@ -160,22 +185,7 @@ decode_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
 	case .Ground:
 		ground_byte(d, b, events)
 	case .Escape:
-		switch b {
-		case '[':
-			append_seq(d, b)
-			d.mode = .Csi
-		case 'O':
-			append_seq(d, b)
-			d.mode = .Ss3
-		case ']':
-			append_seq(d, b)
-			d.mode = .Osc
-		case:
-			// 不是 CSI/SS3/OSC：把 ESC 当作 Esc，后面的字节按普通输入重新处理。
-			emit_key(events, .Escape)
-			reset_sequence(d)
-			ground_byte(d, b, events)
-		}
+		escape_byte(d, b, events)
 	case .Csi:
 		if !append_seq(d, b) {
 			emit_unsupported(events)
@@ -194,22 +204,45 @@ decode_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
 		if is_final_byte(b) {
 			handle_ss3(d, events)
 		}
-	case .Osc:
+	case .String:
 		if b == 0x07 {
 			emit_unsupported(events)
 			reset_sequence(d)
 		} else if b == 0x1b {
-			d.mode = .Osc_Escape
+			d.mode = .String_Escape
 		}
-	case .Osc_Escape:
+	case .String_Escape:
 		if b == '\\' {
 			emit_unsupported(events)
 			reset_sequence(d)
 		} else {
-			d.mode = .Osc
+			d.mode = .String
 		}
 	case .Paste:
 		paste_byte(d, b, events)
+	}
+}
+
+escape_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
+	switch b {
+	case '[':
+		d.mode = .Csi
+		d.seq_len = 0
+	case 'O':
+		d.mode = .Ss3
+		d.seq_len = 0
+	case ']', 'P', '^', '_':
+		// OSC / DCS / PM / APC：内容不参与编辑，整段吃掉。
+		d.mode = .String
+	case 0x1b:
+		// 连续两个 ESC：第一个作为 Esc 落地，第二个继续开启新序列。
+		emit_key(events, .Escape)
+		d.seq_len = 0
+	case:
+		// legacy 的 Alt 前缀。后面的字节可能是控制键、ASCII 或 UTF-8 首字节。
+		d.alt_pending = true
+		d.mode = .Ground
+		ground_byte(d, b, events)
 	}
 }
 
@@ -226,96 +259,78 @@ is_final_byte :: proc(b: u8) -> bool {
 	return b >= 0x40 && b <= 0x7e
 }
 
-paste_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
-	// 粘贴归一：删 \r，保留 \n。
-	if b == '\r' {
-		return
-	}
-	append(&d.paste, b)
-	term := Paste_Terminator
-	if b == '~' && len(d.paste) >= len(term) {
-		n := len(d.paste)
-		if string(d.paste[n - len(term):]) == term {
-			remove_last(&d.paste, len(term))
-			emit_paste(d, events)
-		}
-	}
-}
-
-remove_last :: proc(s: ^[dynamic]u8, n: int) {
-	if n >= len(s^) {
-		clear(s)
-		return
-	}
-	resize(s, len(s^) - n)
-}
-
 ground_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
+	// 先把未完成的 UTF-8 处理掉：续字节继续累积，非续字节丢弃残缺序列后
+	// 重新处理当前字节（可能是 ASCII、ESC 或新的 UTF-8 首字节）。
+	if d.utf8_len > 0 {
+		if b >= 0x80 && b <= 0xbf {
+			d.utf8_buf[d.utf8_len] = b
+			d.utf8_len += 1
+			if d.utf8_len < d.utf8_need {
+				return
+			}
+			n := d.utf8_len
+			r, size := utf8.decode_rune_in_bytes(d.utf8_buf[:n])
+			d.utf8_len = 0
+			d.utf8_need = 0
+			if r == utf8.RUNE_ERROR && size != n {
+				d.alt_pending = false
+				emit_key(events, .Ignore)
+			} else {
+				ground_emit_key(d, events, .Rune, r)
+			}
+			return
+		}
+
+		d.utf8_len = 0
+		d.utf8_need = 0
+		d.alt_pending = false
+		emit_key(events, .Ignore)
+	}
+
 	if b == 0x1b {
-		d.seq_len = 0
-		append_seq(d, b)
 		d.mode = .Escape
+		d.seq_len = 0
 		return
 	}
+
 	if b < 0x80 {
 		switch b {
 		case 0x7f, 0x08:
-			emit_key(events, .Backspace)
-		case 0x0d, 0x0a:
-			emit_key(events, .Enter)
-		case 0x03:
-			emit_key(events, .Ctrl_C)
-		case 0x01:
-			emit_key(events, .Ctrl_A)
-		case 0x05:
-			emit_key(events, .Ctrl_E)
-		case 0x0b:
-			emit_key(events, .Ctrl_K)
-		case 0x15:
-			emit_key(events, .Ctrl_U)
-		case 0x17:
-			emit_key(events, .Ctrl_W)
+			ground_emit_key(d, events, .Backspace)
+		case 0x09:
+			ground_emit_key(d, events, .Tab)
+		case 0x0a, 0x0d:
+			ground_emit_key(d, events, .Enter)
+		case 0x00:
+			// Ctrl+Space / NUL。
+			ground_emit_key(d, events, .Rune, ' ', {.Ctrl})
+		case 0x01 ..= 0x07, 0x0b, 0x0c, 0x0e ..= 0x1a:
+			ground_emit_key(d, events, .Rune, rune(int('a') + int(b) - 1), {.Ctrl})
+		case 0x1c:
+			ground_emit_key(d, events, .Rune, '\\', {.Ctrl})
+		case 0x1d:
+			ground_emit_key(d, events, .Rune, ']', {.Ctrl})
+		case 0x1e:
+			ground_emit_key(d, events, .Rune, '^', {.Ctrl})
+		case 0x1f:
+			ground_emit_key(d, events, .Rune, '_', {.Ctrl})
 		case:
-			if b < 0x20 {
-				emit_key(events, .Ignore)
-			} else {
-				emit_key(events, .Rune, rune(b))
-			}
+			ground_emit_key(d, events, .Rune, rune(b))
 		}
 		return
 	}
 
-	// 多字节 UTF-8：非法序列整体丢弃，绝不插入缓冲区。
-	if d.utf8_len == 0 {
-		need := utf8_sequence_length(b)
-		if need == 0 {
-			emit_key(events, .Ignore)
-			return
-		}
-		d.utf8_need = need
-		d.utf8_buf[0] = b
-		d.utf8_len = 1
-		return
-	}
-	if b < 0x80 || b > 0xbf {
-		d.utf8_len = 0
-		d.utf8_need = 0
-		ground_byte(d, b, events)
-		return
-	}
-	d.utf8_buf[d.utf8_len] = b
-	d.utf8_len += 1
-	if d.utf8_len < d.utf8_need {
-		return
-	}
-	r, size := utf8.decode_rune_in_bytes(d.utf8_buf[:d.utf8_len])
-	if r == utf8.RUNE_ERROR && size != d.utf8_len {
+	// 新的多字节 UTF-8 序列。非法起始字节整体丢弃，绝不插入缓冲区。
+	need := utf8_sequence_length(b)
+	if need == 0 {
+		d.alt_pending = false
 		emit_key(events, .Ignore)
-	} else {
-		emit_key(events, .Rune, r)
+		return
 	}
-	d.utf8_len = 0
-	d.utf8_need = 0
+	d.utf8_need = need
+	d.utf8_buf[0] = b
+	d.utf8_len = 1
 }
 
 utf8_sequence_length :: proc(b: u8) -> int {
@@ -395,9 +410,8 @@ push_param :: proc(p: ^Csi_Params, value: int, have_digit: bool, push: bool) -> 
 }
 
 handle_csi :: proc(d: ^Decoder, events: ^[dynamic]Event) {
-	// d.seq = ESC '[' <body> <final>
 	final := d.seq[d.seq_len - 1]
-	body := d.seq[2:d.seq_len - 1]
+	body := d.seq[:d.seq_len - 1]
 	p := parse_csi_params(body)
 	reset_sequence(d)
 
@@ -431,11 +445,17 @@ handle_csi :: proc(d: ^Decoder, events: ^[dynamic]Event) {
 		} else {
 			emit_key(events, .Ignore)
 		}
+	case 'Z':
+		// backtab。legacy 下这是 Shift+Tab 的标准编码。
+		emit_key(events, .Tab, 0, {.Shift})
 	case 'E':
-		// 小键盘 5（NumLock 关闭）的 Begin 键，输入框没有对应动作。
+		// 小键盘 5（NumLock 关闭）的 Begin 键。
 		emit_key(events, .Ignore)
 	case '~':
 		handle_csi_tilde(d, &p, events)
+	case 'P' ..= 'S':
+		// F1-F4；编辑器暂不使用，保持可诊断。
+		emit_unsupported(events)
 	case:
 		emit_unsupported(events)
 	}
@@ -460,46 +480,25 @@ handle_csi_u :: proc(p: ^Csi_Params, events: ^[dynamic]Event) {
 	if kitty_functional_key(code, mods, events) {
 		return
 	}
-	if .Ctrl in mods {
-		switch code {
-		case 'a', 'A':
-			emit_key(events, .Ctrl_A)
-		case 'e', 'E':
-			emit_key(events, .Ctrl_E)
-		case 'k', 'K':
-			emit_key(events, .Ctrl_K)
-		case 'u', 'U':
-			emit_key(events, .Ctrl_U)
-		case 'w', 'W':
-			emit_key(events, .Ctrl_W)
-		case 'c', 'C':
-			emit_key(events, .Ctrl_C)
-		case 13:
-			emit_key(events, .Ctrl_Enter)
-		case:
-			emit_unsupported(events)
-		}
-		return
-	}
 
 	switch code {
 	case 13:
 		emit_key(events, .Enter, 0, mods)
 	case 27:
-		emit_key(events, .Escape)
+		emit_key(events, .Escape, 0, mods)
 	case 127, 8:
-		emit_key(events, .Backspace)
-	case:
-		if code >= 0x20 && code <= 0x10ffff {
-			// PUA 是 kitty 的功能键号段；未识别的功能键不能当正文插入。
-			if code >= 0xe000 && code <= 0xf8ff {
-				emit_unsupported(events)
-			} else {
-				emit_key(events, .Rune, rune(code), mods)
-			}
-		} else {
+		emit_key(events, .Backspace, 0, mods)
+	case 9:
+		emit_key(events, .Tab, 0, mods)
+	case 32 ..= 0x10ffff:
+		// PUA 是 kitty 的功能键号段；未识别的功能键不能当正文插入。
+		if code >= 0xe000 && code <= 0xf8ff {
 			emit_unsupported(events)
+		} else {
+			emit_key(events, .Rune, rune(code), mods)
 		}
+	case:
+		emit_unsupported(events)
 	}
 }
 
@@ -520,12 +519,7 @@ kitty_functional_key :: proc(code: int, mods: Key_Mods, events: ^[dynamic]Event)
 	case 57413:
 		emit_key(events, .Rune, '+', mods)
 	case 57414:
-		// 小键盘 Enter。带 Ctrl 时和主键盘一致，插入换行。
-		if .Ctrl in mods {
-			emit_key(events, .Ctrl_Enter)
-		} else {
-			emit_key(events, .Enter, 0, mods)
-		}
+		emit_key(events, .Enter, 0, mods)
 	case 57415:
 		emit_key(events, .Rune, '=', mods)
 	case 57416:
@@ -538,14 +532,20 @@ kitty_functional_key :: proc(code: int, mods: Key_Mods, events: ^[dynamic]Event)
 		emit_key(events, .Up, 0, mods)
 	case 57420:
 		emit_key(events, .Down, 0, mods)
+	case 57421:
+		emit_key(events, .Page_Up, 0, mods)
+	case 57422:
+		emit_key(events, .Page_Down, 0, mods)
 	case 57423:
 		emit_key(events, .Home, 0, mods)
 	case 57424:
 		emit_key(events, .End, 0, mods)
+	case 57425:
+		emit_key(events, .Insert, 0, mods)
 	case 57426:
 		emit_key(events, .Delete, 0, mods)
-	case 57421, 57422, 57425, 57427:
-		// KP_PAGE_UP / KP_PAGE_DOWN / KP_INSERT / KP_BEGIN：输入框没有对应动作。
+	case 57427:
+		// KP_BEGIN：输入框没有对应动作。
 		emit_key(events, .Ignore)
 	case:
 		return false
@@ -563,7 +563,7 @@ arrow :: proc(p: ^Csi_Params, events: ^[dynamic]Event, kind: Key_Kind) {
 }
 
 // 方向键和 Home/End 的修饰键编码：CSI A（无参数）、CSI 1 A、CSI 1;1 A 是无修饰；
-// 第二个参数是 modifier code。修饰位含义见 decode_modifier。
+// 第二个参数是 modifier code。
 csi_mods :: proc(p: ^Csi_Params) -> (mods: Key_Mods, ok: bool) {
 	switch p.count {
 	case 0:
@@ -583,7 +583,8 @@ csi_mods :: proc(p: ^Csi_Params) -> (mods: Key_Mods, ok: bool) {
 // modifier code 是 1 + 位掩码。kitty 定义了 8 位：shift(1)、alt(2)、ctrl(4)、
 // super(8)、hyper(16)、meta(32)、caps_lock(64)、num_lock(128)。锁键位在
 // NumLock/CapsLock 打开时出现在非文本按键上，必须接受但不能影响编辑语义。
-KITTY_MODIFIER_MASK :: 0xff
+// Super/Hyper/Meta 不在编辑器支持范围内：宁可丢掉，也不能当成无修饰键插入。
+KITTY_MODIFIER_SUPPORTED :: 1 | 2 | 4 | 64 | 128
 
 decode_modifier :: proc(code: int) -> (mods: Key_Mods, ok: bool) {
 	// 空字段（CSI ...;u）表示使用默认值 1，等价于无修饰。
@@ -591,7 +592,10 @@ decode_modifier :: proc(code: int) -> (mods: Key_Mods, ok: bool) {
 		return {}, true
 	}
 	bits := code - 1
-	if bits < 0 || bits > KITTY_MODIFIER_MASK {
+	if bits < 0 || bits > 0xff {
+		return {}, false
+	}
+	if bits & ~int(KITTY_MODIFIER_SUPPORTED) != 0 {
 		return {}, false
 	}
 	if bits & 1 != 0 {
@@ -628,16 +632,22 @@ handle_csi_tilde :: proc(d: ^Decoder, p: ^Csi_Params, events: ^[dynamic]Event) {
 		emit_key(events, .End, 0, mods)
 	case 3:
 		emit_key(events, .Delete, 0, mods)
-	case 2, 5, 6:
-		// Insert / PgUp / PgDn（也是小键盘 NumLock 关闭时的 0、9、3），输入框没有对应动作。
+	case 2:
+		emit_key(events, .Insert, 0, mods)
+	case 5:
+		emit_key(events, .Page_Up, 0, mods)
+	case 6:
+		emit_key(events, .Page_Down, 0, mods)
+	case 200:
+		d.mode = .Paste
+		clear(&d.paste)
+		d.paste_match = 0
+		d.paste_overflow = false
+	case 201:
+		// 粘贴终止符出现在粘贴模式之外：忽略。
 		emit_key(events, .Ignore)
 	case 57427:
 		// kitty 的 KP_BEGIN 另一种编码：CSI 57427 ~。
-		emit_key(events, .Ignore)
-	case 200:
-		d.mode = .Paste
-	case 201:
-		// 粘贴终止符出现在粘贴模式之外：忽略。
 		emit_key(events, .Ignore)
 	case:
 		emit_unsupported(events)
@@ -683,4 +693,90 @@ handle_ss3 :: proc(d: ^Decoder, events: ^[dynamic]Event) {
 	case:
 		emit_unsupported(events)
 	}
+}
+
+// 粘贴终止符可能跨 chunk，而且部分匹配失败时要把它当正文补回缓冲区。
+paste_byte :: proc(d: ^Decoder, b: u8, events: ^[dynamic]Event) {
+	term := PASTE_TERMINATOR
+	for {
+		if d.paste_match < len(term) && b == term[d.paste_match] {
+			d.paste_match += 1
+			if d.paste_match == len(term) {
+				// 完整终止符本身不属于粘贴内容，先清掉匹配计数再落地。
+				d.paste_match = 0
+				emit_paste(d, events)
+			}
+			return
+		}
+
+		if d.paste_match > 0 {
+			append_paste_bytes(d, term[:d.paste_match])
+			d.paste_match = 0
+			continue
+		}
+
+		append_paste_byte(d, b)
+		return
+	}
+}
+
+append_paste_byte :: proc(d: ^Decoder, b: u8) {
+	if len(d.paste) >= MAX_PASTE_BYTES {
+		d.paste_overflow = true
+		return
+	}
+	append(&d.paste, b)
+}
+
+append_paste_bytes :: proc(d: ^Decoder, bytes: string) {
+	for i in 0 ..< len(bytes) {
+		append_paste_byte(d, bytes[i])
+	}
+}
+
+flush_paste_match :: proc(d: ^Decoder) {
+	if d.paste_match > 0 {
+		term := PASTE_TERMINATOR
+		append_paste_bytes(d, term[:d.paste_match])
+		d.paste_match = 0
+	}
+}
+
+emit_paste :: proc(d: ^Decoder, events: ^[dynamic]Event) {
+	flush_paste_match(d)
+
+	text := ""
+	if len(d.paste) > 0 {
+		// 统一换行：CRLF 和孤立 CR 都变成 LF，编辑器内部只认 \n。
+		out := make([dynamic]u8, 0, len(d.paste))
+		i := 0
+		for i < len(d.paste) {
+			b := d.paste[i]
+			if b == '\r' {
+				append(&out, '\n')
+				if i + 1 < len(d.paste) && d.paste[i + 1] == '\n' {
+					i += 2
+				} else {
+					i += 1
+				}
+			} else if b == 0x7f || (b < 0x20 && b != '\n' && b != '\t') {
+				// 丢弃 ESC/BEL 等 C0 控制字符，避免重绘时注入终端转义序列。
+				i += 1
+			} else {
+				append(&out, b)
+				i += 1
+			}
+		}
+		cloned, err := strings.clone_from_bytes(out[:], context.allocator)
+		if err == nil {
+			text = cloned
+		}
+		delete(out)
+	}
+
+	append(events, Event(Paste{text = text, truncated = d.paste_overflow}))
+	clear(&d.paste)
+	d.paste_match = 0
+	d.paste_overflow = false
+	reset_sequence(d)
 }

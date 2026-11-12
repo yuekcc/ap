@@ -55,24 +55,28 @@
 | 按键 | 行为 |
 | --- | --- |
 | Enter | 提交。缓冲区只有空白时不提交 |
-| Ctrl+Enter | 插入换行。需要终端支持 Kitty keyboard protocol |
+| Ctrl+Enter、Shift+Enter、Alt+Enter | 插入换行。Ctrl/Shift+Enter 需要 Kitty keyboard protocol；Alt+Enter 在把 Alt 编码为 ESC 前缀的终端上可用 |
 | ←、→ | 按字符移动 |
 | Ctrl+←、Ctrl+→、Alt+←、Alt+→ | 按词移动 |
-| ↑、↓ | 按可视行移动 |
+| ↑、↓ | 按可视行移动；在首/末行继续按浏览 history |
+| Ctrl+P、Ctrl+N、PageUp、PageDown | history 上一条/下一条 |
 | Home、End、Ctrl+A、Ctrl+E | 到当前逻辑行首或行尾 |
 | Ctrl+Home、Ctrl+End | 到整个输入内容开头或结尾 |
-| Backspace、Delete | 删除前一个或后一个字符 |
+| Backspace、Delete、Ctrl+H | 删除前一个或后一个字符 |
 | Ctrl+K | 删到行尾 |
 | Ctrl+U | 删到行首 |
 | Ctrl+W | 删除前一个词 |
+| Tab | 插入制表符（当前没有补全器） |
+| Ctrl+L | 按当前窗口尺寸重绘输入框 |
 | Ctrl+C | 缓冲区非空时清空；为空时退出 |
+| Ctrl+D | 缓冲区非空时删除光标下的字符；为空时退出 |
 | Esc | 清空缓冲区 |
 
-终端不支持 Kitty keyboard protocol 时，Ctrl+Enter 不可用，启动时会提示一次。
+终端支持 Kitty keyboard protocol 时，Ctrl+Enter 和 Shift+Enter 可以插入换行；不支持时可用 Alt+Enter（终端把 Alt 编码为 ESC 前缀时）。
 
 数字小键盘可以直接输入数字和运算符，小键盘 Enter 同样提交。NumLock 关闭时，小键盘的方向键、Home、End、Delete 与主键盘上的对应键一致。
 
-粘贴内容会原样插入。整段粘贴超过 1 MiB 时截断并插入 `[input truncated]`。
+粘贴内容会插入输入框；CRLF 和孤立 CR 归一成换行，C0 控制字符（换行和制表符除外）会被丢弃。超过 8 MiB 的粘贴只保留前 8 MiB，当前界面不额外提示。
 
 ## 四个命令
 
@@ -104,9 +108,8 @@
 - 运行中按 Ctrl+C 是内核信号，会同时终止 `ap-tui` 和 `ap`，不会回到输入框。
 - 不显示 reasoning，也没有 token 或 usage 状态行。
 - 不显示工具输出，需要看结果时去 web 界面或 transcript。
-- 输入框没有方向键 history、选中、撤销、鼠标和输入法预编辑。
+- 输入框没有持久化 history、选中、撤销、鼠标和补全菜单。history 只在当前进程内保留。
 - 终端缩放可能导致编辑块错位。下一次按键重绘时会按新尺寸重新布局。
-- emoji 的 ZWJ 序列和变体选择符按 1 列处理，光标可能视觉偏移。
 
 ## 什么时候用它
 

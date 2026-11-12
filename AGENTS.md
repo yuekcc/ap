@@ -34,6 +34,7 @@ odin test ap-core/engine -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEM
 odin test ap-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 测试不调用真实 LLM，也不依赖外网。需要 HTTP 或 agent 时使用本地替身，例如 `ap-web/testdata/fake_agent/`。
@@ -54,8 +55,9 @@ odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 | `ap-core/platform` | 路径、project/session、blob、JSON/文本、进程树、取消 token | 不 import 任何本地包 |
 | `ap-core/protocol` | 事件 schema 与 wire 常量、宽松解析、行分帧、usage | 只依赖 `core:` |
 | `ap-core/client` | 前端 kit：spawn、逐行泵、取消、只读 session | 不 import engine 或 `apcore` |
-| `ap-tui`、`ap-web` | 前端库，提供 `run` | 本地包只允许 `ap-core/client` 和 `ap-core/protocol`，另可用 `core:`/`vendor:`；不互相 import |
+| `ap-tui`、`ap-web` | 前端库，提供 `run` | 本地包只允许 `ap-core/client`、`ap-core/protocol`；`ap-tui` 另可用 `lineedit`；不互相 import |
 | `magi` | 三角色投票 CLI：参数、输入、提示词、并行 session、一票否决 | 不直接 import `ap-core/engine`、`ap-cli` 或前端；不执行工具 |
+| `lineedit` | 独立行编辑器：decoder、editor、layout、render、history、transport | 不 import 任何 ap 本地包；只允许 `core:`/`base:`/`vendor:` |
 
 改 import 后先跑 `tools/check-deps.sh`。不要用别名、条件编译或注释绕过检查器；需要放宽边界时，先改规格和检查器。
 
@@ -93,6 +95,7 @@ odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 | 恢复或 fork | `ap-core/engine/session.odin`、`transcript.odin` | `docs/react-loop-and-session.md`、崩溃恢复测试 |
 | SDK 门面 | `ap-core/sdk.odin` | `sdk_test.odin`、`docs/architecture.md` |
 | TUI | `ap-tui/` | `docs/tui.md`、`tui_test.odin` |
+| 行编辑器 | `lineedit/` | `lineedit/*_test.odin`、`docs/internal/lineedit.md` |
 | Web 后端 | `ap-web/server.odin`、`api.odin`、`sse.odin`、`runner.odin` | `docs/web.md`、对应 `*_test.odin` |
 | Web 前端 | `ap-web/frontend/` | 重新生成 `ap-web/dist/`，跑 `npm --prefix ap-web test`；不要手改 `dist/` |
 | MAGI 决策 | `magi/`、`cmd/magi-cli/` | `docs/magi.md`、`docs/README.md`、README 的 MAGI 段落 |

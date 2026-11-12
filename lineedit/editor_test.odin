@@ -1,6 +1,5 @@
-package aptui
+package lineedit
 
-import "core:strings"
 import "core:testing"
 
 editor_with :: proc(text: string) -> Editor {
@@ -56,6 +55,17 @@ test_editor_multibyte_rune :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_editor_insert_rune :: proc(t: ^testing.T) {
+	e: Editor
+	editor_init(&e)
+	defer editor_destroy(&e)
+	truncated := editor_insert_rune(&e, '中')
+	testing.expect(t, !truncated)
+	testing.expect_value(t, editor_text(&e), "中")
+	testing.expect_value(t, e.cursor, 3)
+}
+
+@(test)
 test_editor_left_right_across_newline :: proc(t: ^testing.T) {
 	e := editor_with("a\nb")
 	defer editor_destroy(&e)
@@ -88,6 +98,17 @@ test_editor_home_end :: proc(t: ^testing.T) {
 	testing.expect_value(t, e.cursor, 0)
 	editor_end(&e)
 	testing.expect_value(t, e.cursor, 3)
+}
+
+@(test)
+test_editor_buffer_start_end :: proc(t: ^testing.T) {
+	e := editor_with("abc\ndef")
+	defer editor_destroy(&e)
+	e.cursor = 5
+	editor_buffer_start(&e)
+	testing.expect_value(t, e.cursor, 0)
+	editor_buffer_end(&e)
+	testing.expect_value(t, e.cursor, 7)
 }
 
 @(test)
@@ -137,6 +158,54 @@ test_editor_delete_word :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_editor_word_motion :: proc(t: ^testing.T) {
+	e := editor_with("foo bar baz")
+	defer editor_destroy(&e)
+	e.cursor = 0
+	editor_word_right(&e)
+	testing.expect_value(t, e.cursor, 3)
+	editor_word_right(&e)
+	testing.expect_value(t, e.cursor, 7)
+	editor_word_right(&e)
+	testing.expect_value(t, e.cursor, 11)
+	editor_word_left(&e)
+	testing.expect_value(t, e.cursor, 8)
+	editor_word_left(&e)
+	testing.expect_value(t, e.cursor, 4)
+	editor_word_left(&e)
+	testing.expect_value(t, e.cursor, 0)
+}
+
+@(test)
+test_editor_crlf_normalized :: proc(t: ^testing.T) {
+	e: Editor
+	editor_init(&e)
+	defer editor_destroy(&e)
+	editor_insert_text(&e, "a\r\nb\rc")
+	testing.expect_value(t, editor_text(&e), "a\nb\nc")
+}
+
+@(test)
+test_editor_max_len :: proc(t: ^testing.T) {
+	e: Editor
+	editor_init(&e, 5)
+	defer editor_destroy(&e)
+	truncated := editor_insert_text(&e, "abcdef")
+	testing.expect(t, truncated)
+	testing.expect_value(t, editor_text(&e), "abcde")
+	testing.expect_value(t, e.cursor, 5)
+
+	e2: Editor
+	editor_init(&e2, 4)
+	defer editor_destroy(&e2)
+	// 4 字节只能放下一个 3 字节汉字，不能切在 rune 中间。
+	truncated = editor_insert_text(&e2, "中中")
+	testing.expect(t, truncated)
+	testing.expect_value(t, editor_text(&e2), "中")
+	testing.expect_value(t, e2.cursor, 3)
+}
+
+@(test)
 test_editor_vertical_keeps_column :: proc(t: ^testing.T) {
 	e := editor_with("abcdef\nabcdefgh\nxy")
 	defer editor_destroy(&e)
@@ -159,126 +228,50 @@ test_editor_vertical_keeps_column :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_editor_vertical_from_end :: proc(t: ^testing.T) {
-	e := editor_with("abcdef\nabcdefgh\nxy")
+test_editor_vertical_wrap :: proc(t: ^testing.T) {
+	e := editor_with("abcdefgh")
 	defer editor_destroy(&e)
-	e.cursor = 18
-	testing.expect(t, editor_up(&e, 80, 0))
-	testing.expect_value(t, e.cursor, 9)
-	testing.expect(t, editor_up(&e, 80, 0))
+
+	// cols=4 时折成两行：abcd / efgh。
+	editor_set_cursor(&e, 2)
+	testing.expect(t, editor_down(&e, 4, 0))
+	testing.expect_value(t, e.cursor, 6)
+	testing.expect(t, editor_up(&e, 4, 0))
 	testing.expect_value(t, e.cursor, 2)
+
+	// 横向移动会清掉 desired_col，不要继续沿用旧列。
+	editor_set_cursor(&e, 3)
+	testing.expect(t, editor_down(&e, 4, 0))
+	testing.expect_value(t, e.cursor, 7)
+	editor_left(&e) // 回到第 2 列，同时清掉 desired_col
+	testing.expect(t, editor_up(&e, 4, 0))
+	testing.expect_value(t, e.cursor, 2) // 跟随当前第 2 列，而不是之前的第 3 列
 }
 
 @(test)
-test_editor_apply_key :: proc(t: ^testing.T) {
-	e := editor_with("abc")
-	defer editor_destroy(&e)
-	action := editor_apply_key(&e, Key{kind = .Enter}, 80, 0)
-	testing.expect_value(t, action, Editor_Action.Submit)
-	testing.expect_value(t, editor_text(&e), "abc")
-
-	e2 := editor_with("   ")
-	defer editor_destroy(&e2)
-	action = editor_apply_key(&e2, Key{kind = .Enter}, 80, 0)
-	testing.expect_value(t, action, Editor_Action.None)
-	testing.expect_value(t, editor_text(&e2), "")
-
-	e3 := editor_with("x")
-	defer editor_destroy(&e3)
-	action = editor_apply_key(&e3, Key{kind = .Ctrl_C}, 80, 0)
-	testing.expect_value(t, action, Editor_Action.None)
-	testing.expect_value(t, editor_text(&e3), "")
-	action = editor_apply_key(&e3, Key{kind = .Ctrl_C}, 80, 0)
-	testing.expect_value(t, action, Editor_Action.Quit)
-
-	e4 := editor_with("a")
-	defer editor_destroy(&e4)
-	action = editor_apply_key(&e4, Key{kind = .Ctrl_Enter}, 80, 0)
-	testing.expect_value(t, action, Editor_Action.None)
-	testing.expect_value(t, editor_text(&e4), "a\n")
+test_editor_offset_for_column_cjk :: proc(t: ^testing.T) {
+	text := "中中"
+	buf := transmute([]u8)text
+	// 第 3 列落在第一个汉字之后（宽度 2），下一个汉字会让列号变成 4。
+	offset, col := editor_offset_for_column(buf, Row{start = 0, len = len(buf)}, 3)
+	testing.expect_value(t, offset, 3)
+	testing.expect_value(t, col, 2)
 }
 
 @(test)
-test_editor_typed_input_limit :: proc(t: ^testing.T) {
-	e := editor_with("")
+test_editor_boundaries :: proc(t: ^testing.T) {
+	e: Editor
+	editor_init(&e)
 	defer editor_destroy(&e)
-
-	huge := strings.repeat("a", MAX_INPUT)
-	defer delete(huge)
-	editor_insert_text(&e, huge)
-	testing.expect_value(t, len(e.buffer), MAX_INPUT)
-
-	// 普通按键同样受上限约束。
-	editor_insert_rune(&e, 'x')
-	testing.expect_value(t, len(e.buffer), MAX_INPUT)
-}
-
-@(test)
-test_editor_paste_normalizes_crlf :: proc(t: ^testing.T) {
-	e := editor_with("")
-	defer editor_destroy(&e)
-	truncated := editor_insert_text(&e, "a\r\nb\rc")
-	testing.expect(t, !truncated)
-	testing.expect_value(t, editor_text(&e), "a\nbc")
-}
-
-@(test)
-test_editor_input_limit :: proc(t: ^testing.T) {
-	e := editor_with("")
-	defer editor_destroy(&e)
-
-	huge := strings.repeat("a", MAX_INPUT + 100)
-	defer delete(huge)
-	truncated := editor_insert_text(&e, huge)
-	testing.expect(t, truncated)
-	testing.expect(t, len(e.buffer) <= MAX_INPUT)
-	testing.expect(t, strings.contains(editor_text(&e), "[input truncated]"))
-
-	// 已经满了以后继续插不进去。
-	before := len(e.buffer)
-	truncated = editor_insert_text(&e, "more")
-	testing.expect(t, truncated)
-	testing.expect_value(t, len(e.buffer), before)
-}
-
-@(test)
-test_editor_word_movement :: proc(t: ^testing.T) {
-	e := editor_with("git status --short")
-	defer editor_destroy(&e)
-
-	editor_word_left(&e)
-	testing.expect_value(t, e.cursor, 11)
-	editor_word_left(&e)
-	testing.expect_value(t, e.cursor, 4)
-	editor_word_left(&e)
+	editor_backspace(&e)
+	editor_delete(&e)
+	editor_left(&e)
+	editor_right(&e)
+	editor_home(&e)
+	editor_end(&e)
+	editor_kill_to_end(&e)
+	editor_kill_to_start(&e)
+	editor_delete_word(&e)
+	testing.expect_value(t, editor_text(&e), "")
 	testing.expect_value(t, e.cursor, 0)
-
-	editor_word_right(&e)
-	testing.expect_value(t, e.cursor, 4)
-	editor_word_right(&e)
-	testing.expect_value(t, e.cursor, 11)
-	editor_word_right(&e)
-	testing.expect_value(t, e.cursor, 18)
-}
-
-@(test)
-test_editor_apply_modified_arrows :: proc(t: ^testing.T) {
-	e := editor_with("one two\nthree")
-	defer editor_destroy(&e)
-
-	editor_apply_key(&e, Key{kind = .Left, mods = {.Ctrl}}, 80, 0)
-	testing.expect_value(t, e.cursor, 8)
-	editor_apply_key(&e, Key{kind = .Left, mods = {.Alt}}, 80, 0)
-	testing.expect_value(t, e.cursor, 4)
-	editor_apply_key(&e, Key{kind = .Right, mods = {.Ctrl}}, 80, 0)
-	testing.expect_value(t, e.cursor, 8)
-
-	editor_apply_key(&e, Key{kind = .Home, mods = {.Ctrl}}, 80, 0)
-	testing.expect_value(t, e.cursor, 0)
-	editor_apply_key(&e, Key{kind = .End, mods = {.Ctrl}}, 80, 0)
-	testing.expect_value(t, e.cursor, 13)
-
-	// Shift+← 没有选中语义，按普通 ← 处理。
-	editor_apply_key(&e, Key{kind = .Left, mods = {.Shift}}, 80, 0)
-	testing.expect_value(t, e.cursor, 12)
 }

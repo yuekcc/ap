@@ -1,13 +1,13 @@
 #+build darwin
-package aptui
+package lineedit
 
 import "core:c"
 import "core:os"
 import "core:sys/darwin"
 
-term_platform_size :: proc(t: ^Term) -> (cols, rows: int) {
+file_platform_size :: proc(ft: ^File_Transport) -> (cols, rows: int) {
 	ws: Winsize
-	res := darwin.syscall_ioctl(c.int(os.fd(t.input)), darwin.TIOCGWINSZ, &ws)
+	res := darwin.syscall_ioctl(c.int(os.fd(ft.input)), darwin.TIOCGWINSZ, &ws)
 	if res != 0 || ws.col == 0 {
 		return 0, 0
 	}
