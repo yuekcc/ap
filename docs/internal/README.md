@@ -121,6 +121,10 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
 | [TODO.md](TODO.md) | docs 重写计划与验收清单 | 工作清单 |
 
+`refs/` 放外部协议原文，不是 ap 自己的规格，也不属于上面三类状态：
+
+- [refs/keyboard-protocol.rst](refs/keyboard-protocol.rst)：kitty keyboard protocol 原文，`ap-tui` 按键编解码的依据。ap 侧的使用方式见 [tui.md](tui.md#kitty-keyboard-protocol)。
+
 ## 与 Claude Code 的关系
 
 ap 借鉴了 Claude Code 的循环骨架、只追加 transcript、技能清单、子代理和结构化输出。没有采纳审批与 hooks，因为它们与全自动执行冲突。没有采纳 TodoWrite 和 plan mode，因为它们需要交互界面。上下文压缩没有采纳：省略只作用在工具结果上，assistant 文本与 user 提示词永不改写，真的不够用就 handoff 到新 session，决策理由见 [proposals/context-budget-and-handoff.md](proposals/context-budget-and-handoff.md)。MCP 与插件系统留到核心循环稳定之后。完整的非目标清单见仓库根目录的 [README.md](../README.md)。

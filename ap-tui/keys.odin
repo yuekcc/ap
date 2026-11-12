@@ -457,6 +457,9 @@ handle_csi_u :: proc(p: ^Csi_Params, events: ^[dynamic]Event) {
 		mods = decoded
 	}
 
+	if kitty_functional_key(code, mods, events) {
+		return
+	}
 	if .Ctrl in mods {
 		switch code {
 		case 'a', 'A':
@@ -488,11 +491,66 @@ handle_csi_u :: proc(p: ^Csi_Params, events: ^[dynamic]Event) {
 		emit_key(events, .Backspace)
 	case:
 		if code >= 0x20 && code <= 0x10ffff {
-			emit_key(events, .Rune, rune(code), mods)
+			// PUA 是 kitty 的功能键号段；未识别的功能键不能当正文插入。
+			if code >= 0xe000 && code <= 0xf8ff {
+				emit_unsupported(events)
+			} else {
+				emit_key(events, .Rune, rune(code), mods)
+			}
 		} else {
 			emit_unsupported(events)
 		}
 	}
+}
+
+// kitty 打开 disambiguate 后，非文本的小键盘按键改用 PUA 功能键码（57399-57427）。
+// 返回 false 表示不是本表内的键。
+kitty_functional_key :: proc(code: int, mods: Key_Mods, events: ^[dynamic]Event) -> bool {
+	switch code {
+	case 57399 ..= 57408:
+		emit_key(events, .Rune, rune(int('0') + (code - 57399)), mods)
+	case 57409:
+		emit_key(events, .Rune, '.', mods)
+	case 57410:
+		emit_key(events, .Rune, '/', mods)
+	case 57411:
+		emit_key(events, .Rune, '*', mods)
+	case 57412:
+		emit_key(events, .Rune, '-', mods)
+	case 57413:
+		emit_key(events, .Rune, '+', mods)
+	case 57414:
+		// 小键盘 Enter。带 Ctrl 时和主键盘一致，插入换行。
+		if .Ctrl in mods {
+			emit_key(events, .Ctrl_Enter)
+		} else {
+			emit_key(events, .Enter, 0, mods)
+		}
+	case 57415:
+		emit_key(events, .Rune, '=', mods)
+	case 57416:
+		emit_key(events, .Rune, ',', mods)
+	case 57417:
+		emit_key(events, .Left, 0, mods)
+	case 57418:
+		emit_key(events, .Right, 0, mods)
+	case 57419:
+		emit_key(events, .Up, 0, mods)
+	case 57420:
+		emit_key(events, .Down, 0, mods)
+	case 57423:
+		emit_key(events, .Home, 0, mods)
+	case 57424:
+		emit_key(events, .End, 0, mods)
+	case 57426:
+		emit_key(events, .Delete, 0, mods)
+	case 57421, 57422, 57425, 57427:
+		// KP_PAGE_UP / KP_PAGE_DOWN / KP_INSERT / KP_BEGIN：输入框没有对应动作。
+		emit_key(events, .Ignore)
+	case:
+		return false
+	}
+	return true
 }
 
 arrow :: proc(p: ^Csi_Params, events: ^[dynamic]Event, kind: Key_Kind) {
@@ -505,7 +563,7 @@ arrow :: proc(p: ^Csi_Params, events: ^[dynamic]Event, kind: Key_Kind) {
 }
 
 // 方向键和 Home/End 的修饰键编码：CSI A（无参数）、CSI 1 A、CSI 1;1 A 是无修饰；
-// 第二个参数是 modifier code，1 + shift(1) + alt(2) + ctrl(4)。
+// 第二个参数是 modifier code。修饰位含义见 decode_modifier。
 csi_mods :: proc(p: ^Csi_Params) -> (mods: Key_Mods, ok: bool) {
 	switch p.count {
 	case 0:
@@ -522,10 +580,18 @@ csi_mods :: proc(p: ^Csi_Params) -> (mods: Key_Mods, ok: bool) {
 	return decode_modifier(p.nums[1])
 }
 
-// modifier code 是 1 + shift(1) + alt(2) + ctrl(4)。
+// modifier code 是 1 + 位掩码。kitty 定义了 8 位：shift(1)、alt(2)、ctrl(4)、
+// super(8)、hyper(16)、meta(32)、caps_lock(64)、num_lock(128)。锁键位在
+// NumLock/CapsLock 打开时出现在非文本按键上，必须接受但不能影响编辑语义。
+KITTY_MODIFIER_MASK :: 0xff
+
 decode_modifier :: proc(code: int) -> (mods: Key_Mods, ok: bool) {
+	// 空字段（CSI ...;u）表示使用默认值 1，等价于无修饰。
+	if code == 0 {
+		return {}, true
+	}
 	bits := code - 1
-	if bits < 0 || bits > 7 {
+	if bits < 0 || bits > KITTY_MODIFIER_MASK {
 		return {}, false
 	}
 	if bits & 1 != 0 {
@@ -546,23 +612,27 @@ handle_csi_tilde :: proc(d: ^Decoder, p: ^Csi_Params, events: ^[dynamic]Event) {
 		return
 	}
 	code := p.nums[0]
-	mod := 1
+	mods: Key_Mods
 	if p.count >= 2 {
-		mod = p.nums[1]
-	}
-	if mod != 1 {
-		emit_key(events, .Ignore)
-		return
+		decoded, ok := decode_modifier(p.nums[1])
+		if !ok {
+			emit_unsupported(events)
+			return
+		}
+		mods = decoded
 	}
 	switch code {
 	case 1, 7:
-		emit_key(events, .Home)
+		emit_key(events, .Home, 0, mods)
 	case 4, 8:
-		emit_key(events, .End)
+		emit_key(events, .End, 0, mods)
 	case 3:
-		emit_key(events, .Delete)
+		emit_key(events, .Delete, 0, mods)
 	case 2, 5, 6:
 		// Insert / PgUp / PgDn（也是小键盘 NumLock 关闭时的 0、9、3），输入框没有对应动作。
+		emit_key(events, .Ignore)
+	case 57427:
+		// kitty 的 KP_BEGIN 另一种编码：CSI 57427 ~。
 		emit_key(events, .Ignore)
 	case 200:
 		d.mode = .Paste

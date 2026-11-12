@@ -41,10 +41,11 @@
 - `cancelled [scope]`：已取消。
 - `turn ended: <reason>`：本轮不是正常结束。
 
-一次工具调用只占一行，状态直接追加在调用行末尾：
+一次工具调用占两行：第一行是工具名和参数，第二行缩进两格显示状态。
 
 ```text
-◆ bash (command=npm test) ✓ 4210ms exit 0
+◆ bash (command=npm test)
+  ✓ 4210ms exit 0
 ```
 
 工具输出不在终端渲染，只保留命令行、耗时和结果状态。完整结果在 transcript 里，需要时用 [浏览器界面](11-web.md) 查看。

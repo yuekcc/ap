@@ -44,6 +44,7 @@ test_decode_basic_keys :: proc(t: ^testing.T) {
 		{"legacy enter", []string{"\r"}, []Key_Kind{.Enter}},
 		{"ctrl+enter", []string{"\x1b[13;5u"}, []Key_Kind{.Ctrl_Enter}},
 		{"kitty esc", []string{"\x1b[27u"}, []Key_Kind{.Escape}},
+		{"kitty empty modifier", []string{"\x1b[97;u"}, []Key_Kind{.Rune}},
 		{"backspace 0x7f", []string{"\x7f"}, []Key_Kind{.Backspace}},
 		{"backspace kitty", []string{"\x1b[127u"}, []Key_Kind{.Backspace}},
 		{"arrow csi", []string{"\x1b[A\x1b[B\x1b[C\x1b[D"}, []Key_Kind{.Up, .Down, .Right, .Left}},
@@ -322,4 +323,128 @@ test_decode_kitty_modifiers :: proc(t: ^testing.T) {
 	testing.expect_value(t, rune_key.kind, Key_Kind.Rune)
 	testing.expect_value(t, rune_key.r, 'a')
 	testing.expect_value(t, rune_key.mods, Key_Mods{.Shift})
+}
+
+// kitty 的 modifier 位：shift 1、alt 2、ctrl 4、super 8、hyper 16、meta 32、
+// caps_lock 64、num_lock 128，编码值是 1 + 位。NumLock/CapsLock 默认打开很常见，
+// 非文本按键会带上 64/128；这些位不能参与编辑框语义，也不能让整个按键被丢弃。
+@(test)
+test_decode_kitty_lock_modifiers :: proc(t: ^testing.T) {
+	events := collect_events([]string{
+		"\x1b[1;129D", // Left + num_lock
+		"\x1b[1;193A", // Up + caps_lock + num_lock
+		"\x1b[1;133C", // Right + ctrl + num_lock
+		"\x1b[1;130F", // End + shift + num_lock
+		"\x1b[99;133u", // ctrl+c + num_lock
+		"\x1b[13;133u", // ctrl+enter + num_lock
+		"\x1b[97;130u", // shift+a + num_lock
+		"\x1b[3;129~", // Delete + num_lock
+		"\x1b[1;129~", // Home + num_lock
+		"\x1b[4;193~", // End + caps_lock + num_lock
+		"\x1b[3;5~", // ctrl+Delete
+	})
+	defer events_destroy(&events)
+	cases := []struct {
+		kind: Key_Kind,
+		r:    rune,
+		mods: Key_Mods,
+	} {
+		{.Left, 0, {}},
+		{.Up, 0, {}},
+		{.Right, 0, {.Ctrl}},
+		{.End, 0, {.Shift}},
+		{.Ctrl_C, 0, {}},
+		{.Ctrl_Enter, 0, {}},
+		{.Rune, 'a', {.Shift}},
+		{.Delete, 0, {}},
+		{.Home, 0, {}},
+		{.End, 0, {}},
+		{.Delete, 0, {.Ctrl}},
+	}
+	testing.expect_value(t, len(events), len(cases))
+	for c, i in cases {
+		if i >= len(events) {
+			break
+		}
+		key, ok := events[i].(Key)
+		if !ok {
+			testing.expectf(t, false, "event %d is not a Key", i)
+			continue
+		}
+		testing.expectf(
+			t,
+			key.kind == c.kind && key.r == c.r && key.mods == c.mods,
+			"event %d: got %v %q %v, want %v %q %v",
+			i,
+			key.kind,
+			key.r,
+			key.mods,
+			c.kind,
+			c.r,
+			c.mods,
+		)
+	}
+}
+
+// kitty 打开 disambiguate 后，小键盘的非文本按键改用 PUA 功能键码，不再走 SS3。
+@(test)
+test_decode_kitty_keypad :: proc(t: ^testing.T) {
+	events := collect_events([]string{
+		"\x1b[57414u", // KP_ENTER
+		"\x1b[57417u", // KP_LEFT
+		"\x1b[57418u", // KP_RIGHT
+		"\x1b[57419u", // KP_UP
+		"\x1b[57420u", // KP_DOWN
+		"\x1b[57423u", // KP_HOME
+		"\x1b[57424u", // KP_END
+		"\x1b[57426u", // KP_DELETE
+		"\x1b[57427u", // KP_BEGIN
+		"\x1b[57399u", // KP_0
+		"\x1b[57413u", // KP_ADD
+		"\x1b[57417;5u", // Ctrl+KP_LEFT
+		"\x1b[57414;5u", // Ctrl+KP_ENTER
+	})
+	defer events_destroy(&events)
+	want := []struct {
+		kind: Key_Kind,
+		r:    rune,
+		mods: Key_Mods,
+	} {
+		{.Enter, 0, {}},
+		{.Left, 0, {}},
+		{.Right, 0, {}},
+		{.Up, 0, {}},
+		{.Down, 0, {}},
+		{.Home, 0, {}},
+		{.End, 0, {}},
+		{.Delete, 0, {}},
+		{.Ignore, 0, {}},
+		{.Rune, '0', {}},
+		{.Rune, '+', {}},
+		{.Left, 0, {.Ctrl}},
+		{.Ctrl_Enter, 0, {}},
+	}
+	testing.expect_value(t, len(events), len(want))
+	for w, i in want {
+		if i >= len(events) {
+			break
+		}
+		key, ok := events[i].(Key)
+		if !ok {
+			testing.expectf(t, false, "event %d is not a Key", i)
+			continue
+		}
+		testing.expectf(
+			t,
+			key.kind == w.kind && key.r == w.r && key.mods == w.mods,
+			"event %d: got %v %q %v, want %v %q %v",
+			i,
+			key.kind,
+			key.r,
+			key.mods,
+			w.kind,
+			w.r,
+			w.mods,
+		)
+	}
 }

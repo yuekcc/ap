@@ -78,7 +78,7 @@ ap-tui [options]
 2. 逐行解析 v1 transcript。
 3. `user_message` 用 `› ` 前缀显示。
 4. `message_end` 的 `text` 块显示为 assistant 文本。
-5. `tool_execution_start` 画一行工具调用，`tool_execution_end` 在同一行补上状态；工具结果本身不重放。
+5. `tool_execution_start` 画一行工具调用，`tool_execution_end` 另起一行缩进两格补上状态；工具结果本身不重放。
 6. `error`、`cancel` 和异常的 `turn_end` 按实时规则显示。
 7. `message_update` 在历史模式忽略，因为最终文本已经在 `message_end` 里；`tool_execution_update` 在两种模式下都不渲染。
 
@@ -97,7 +97,7 @@ ap-tui [options]
 - 用户消息和输入框使用 `› ` 前缀。非 TTY 回退路径打印 `> `。
 - assistant 文本使用 `● ` 前缀。文本 delta 实时输出。
 - 工具调用使用 `◆ ` 前缀，后接工具名和参数。参数压成单行并截到约 240 字节。
-- 工具结束把 `✓` 或 `✗`、耗时、退出码追加到调用行末尾，失败时再附错误信息。错误压成单行并截到 200 字节。一次工具调用只占一行。
+- 工具结束另起一行并缩进两格，写 `✓` 或 `✗`、耗时、退出码，失败时再附错误信息。错误压成单行并截到 200 字节。一次工具调用占调用行和状态行两行。状态行不随参数行一起折行，避免长参数被终端硬折行后状态落在行首。
 - 工具输出不渲染：`tool_execution_update` 增量被忽略，`tool_execution_end` 的结果（含图片）也不展示。完整结果留在 transcript，由 web 界面和 `ap` 恢复使用。
 - `message_end` 只在没有收到过文本 delta 时补全文，避免重复。
 - `error` 中 `retryable=true` 显示为黄色警告，否则显示为红色错误，并带上 `scope`。
@@ -135,13 +135,29 @@ stdin 和 stdout 都是 TTY 时，每轮进入 raw mode，用自绘的多行编�
 - Enter 只在 trim 后非空时提交。提交内容保留原始空白和 Ctrl+Enter 换行。
 - bracketed paste 的内容原样插入。`\r` 删除，`\n` 保留，不当作按键。
 - 整段粘贴只触发一次重绘。超过 1 MiB 时截断并插入 `[input truncated]` 提示。
-- 首次进入 raw 时发送 `CSI > 1 u` push Kitty flags，再发送 `CSI ? u` 探测。120ms 内收到 `CSI ? <flags> u` 且 flags 包含 1 才算支持。
-- 探测失败时留在 raw。方向键、Home、End、Delete 和 legacy 控制字节仍可用，但拿不到 Ctrl+Enter。启动时提示一次 `terminal does not report kitty keyboard protocol: Ctrl+Enter unavailable`。
 - legacy 模式下孤立的 ESC 用约 20ms 超时消歧。粘贴终止符被截断时，用 150ms 超时把已收到的内容落地。
-- 方向键和 Home/End 的修饰键按 `CSI 1;<modifier>` 解码。Shift+方向键没有选中语义，按无修饰处理；Ctrl/Alt 参与按词移动和缓冲区首尾跳转。
-- 数字小键盘：NumLock 打开且终端处于 application keypad 模式时，数字和 `.` `-` `+` `,` `/` `*` `=`、Enter 走 SS3 序列，按对应字符和提交处理；NumLock 关闭时的小键盘方向键、Home、End、Delete 与主键盘一致，Insert、PgUp、PgDn 和 Begin 忽略。
 - 长行按显示宽度硬折行。CJK 和全角字符占 2 列，组合字符占 0 列。逻辑行内的 `\n` 强制换行。
 - 首行前缀是 `› `，续行缩进两格。超过屏幕高度时保留光标所在行，裁掉的内容用首行 `  …` 提示。编辑块不进入滚动区。
+
+### Kitty keyboard protocol
+
+`ap-tui` 只用 kitty keyboard protocol 扩展按键信息，不实现 win32-input-mode。完整外部规格见 [refs/keyboard-protocol.rst](refs/keyboard-protocol.rst)。
+
+首次进入 raw 时发送 `CSI > 1 u`，打开 disambiguate 位并压栈；再发送 `CSI ? u` 查询，120ms 内收到 `CSI ? <flags> u` 且 flags 包含 1 才算支持。退出 raw 时发送 `CSI < u` 弹栈。探测失败时留在 raw：方向键、Home、End、Delete 和 legacy 控制字节仍可用，但拿不到 Ctrl+Enter，启动时提示一次 `terminal does not report kitty keyboard protocol: Ctrl+Enter unavailable`。
+
+探测成功后，编辑框需要解析的按键编码只有下面几类。
+
+| 编码 | 含义 |
+| --- | --- |
+| `CSI <code> ; <mods> u` | 非文本键。`code` 是 Unicode 码点，或 PUA（57344-63743）里的功能键码 |
+| `CSI 1 ; <mods> [ABCDEFHPQS]` | 方向键、Home、End 等；无修饰时省略 `1;` |
+| `CSI <code> ; <mods> ~` | Delete、Home、End、Insert、PgUp/PgDn 等 |
+| `\r`、`0x7f`/`0x08`、`\t` | Enter、Backspace、Tab 的兼容编码 |
+
+`<mods>` 是 `1 + 位掩码`：shift(1)、alt(2)、ctrl(4)、super(8)、hyper(16)、meta(32)、caps_lock(64)、num_lock(128)。编辑框只使用 shift/alt/ctrl；super/hyper/meta 和锁键位必须接受并忽略，否则 NumLock/CapsLock 打开时方向键、Ctrl+C 和 Ctrl+Enter 会被整键丢弃。参数里用 `:` 分隔的 alternate key、event type、text 子字段对编辑框没有意义，解析时跳过；空字段按默认值处理。
+
+- 方向键和 Home/End 的修饰键按 `CSI 1;<modifier>` 解码，Delete/Home/End 的 `CSI <code>;<modifier> ~` 形式用同一套 modifier 解码。Shift+方向键没有选中语义，按无修饰处理；Ctrl/Alt 参与按词移动和缓冲区首尾跳转。
+- 数字小键盘：NumLock 打开且终端处于 application keypad 模式时，数字和 `.` `-` `+` `,` `/` `*` `=`、Enter 走 SS3 序列，按对应字符和提交处理；kitty 打开 disambiguate 后，非文本的小键盘按键改用 PUA 功能键码（`CSI 57414u` = 小键盘 Enter，`CSI 57417-57420u` = 小键盘方向键，`CSI 57423/57424/57426u` = Home/End/Delete），按主键盘对应键处理。NumLock 关闭时的小键盘方向键、Home、End、Delete 与主键盘一致，Insert、PgUp、PgDn 和 Begin 忽略。未识别的 PUA 功能键码丢弃，不能当正文插入。
 
 ## 交互命令
 

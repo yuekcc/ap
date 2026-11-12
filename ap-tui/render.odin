@@ -94,7 +94,7 @@ finish_assistant :: proc(r: ^Renderer) {
 	}
 }
 
-// 工具调用只占一行：调用行在 start 时写出，结束状态追加在同一行。
+// 工具调用占两行：start 时写调用行，end 时另起一行缩进两格写状态。
 tool_start :: proc(r: ^Renderer, name, args: string) {
 	finish_assistant(r)
 	ensure_line_start(r)
@@ -113,12 +113,9 @@ tool_end :: proc(r: ^Renderer, ok: bool, err: string, duration_ms: Maybe(int), e
 		return
 	}
 
-	// 调用行被别的输出（如 --verbose 的 stderr）打断时，状态单独缩进成行。
-	if r.at_line_start {
-		paint(r, DIM, "  ")
-	} else {
-		paint(r, DIM, " ")
-	}
+	// 状态固定另起一行并缩进两格，避免长参数行被终端硬折行后状态落在行首。
+	ensure_line_start(r)
+	paint(r, DIM, "  ")
 	if ok {
 		paint(r, GREEN, "✓")
 	} else {

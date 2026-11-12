@@ -95,8 +95,8 @@ test_render_live_stream :: proc(t: ^testing.T) {
 		.Live,
 	)
 	testing.expect(t, strings.contains(out, "● hello world"))
-	// 工具调用压成一行：命令行 + 耗时 + 状态，不展示输出内容。
-	testing.expect(t, strings.contains(out, "◆ read_file (file_path=ap/main.odin) ✓ 12ms\n"))
+	// 工具调用占两行：参数行 + 缩进两格的状态行，不展示输出内容。
+	testing.expect(t, strings.contains(out, "◆ read_file (file_path=ap/main.odin)\n  ✓ 12ms\n"))
 	testing.expect(t, !strings.contains(out, "file body"))
 	// 文本增量已经展示过，message_end 不应重复整段文本。
 	testing.expect_value(t, strings.count(out, "hello world"), 1)
@@ -117,7 +117,7 @@ test_render_history :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, strings.contains(out, "› do it"))
 	testing.expect(t, strings.contains(out, "● working"))
-	testing.expect(t, strings.contains(out, "◆ bash (command=ls) ✗ 3ms boom\n"))
+	testing.expect(t, strings.contains(out, "◆ bash (command=ls)\n  ✗ 3ms boom\n"))
 	testing.expect(t, strings.contains(out, "turn ended: max_steps"))
 }
 
@@ -131,10 +131,10 @@ test_render_tool_error_is_single_line :: proc(t: ^testing.T) {
 		},
 		.Live,
 	)
-	testing.expect(t, strings.contains(out, "◆ bash (command=false) ✗ exit 1 line one line two\n"))
+	testing.expect(t, strings.contains(out, "◆ bash (command=false)\n  ✗ exit 1 line one line two\n"))
 }
 
-// 工具运行期间插入的 note（如 --verbose 的 stderr）会打断调用行：状态退化成缩进行。
+// 工具运行期间插入的 note（如 --verbose 的 stderr）不会让状态行多出空行。
 @(test)
 test_render_tool_end_after_note :: proc(t: ^testing.T) {
 	dir := test_temp_dir("tool_note")
