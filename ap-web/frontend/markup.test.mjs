@@ -152,6 +152,44 @@ test("侧栏折叠入口在标题行左侧，窄屏下侧栏始终展开", async
 	);
 });
 
+test("对话标题行居中，两侧分别是折叠入口与环境状态", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	const topbarStart = html.indexOf('<header class="topbar">');
+	const topbarEnd = html.indexOf("</header>", topbarStart);
+	assert.ok(topbarStart >= 0 && topbarEnd > topbarStart, "index.html must have a topbar");
+	const topbar = html.slice(topbarStart, topbarEnd);
+
+	const sideIndex = topbar.indexOf('class="topbar__side"');
+	const headingIndex = topbar.indexOf('class="topbar__heading"');
+	const rightIndex = topbar.indexOf('class="topbar__right"');
+	assert.ok(
+		sideIndex >= 0 && headingIndex > sideIndex && rightIndex > headingIndex,
+		"顶栏按左中右三栏排列",
+	);
+	assert.ok(
+		topbar.slice(sideIndex, headingIndex).includes('@click="toggleSidebar()"'),
+		"折叠入口在左栏",
+	);
+	assert.ok(
+		topbar.slice(headingIndex, rightIndex).includes("$store.ap.currentTitle"),
+		"标题在中栏",
+	);
+	assert.ok(
+		topbar.slice(rightIndex).includes("$store.ap.statusLabel"),
+		"环境与状态在右栏",
+	);
+
+	const topbarRule = css.slice(css.indexOf(".topbar {"), css.indexOf(".topbar__side"));
+	assert.ok(
+		topbarRule.includes("grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)"),
+		"两侧等宽的 1fr 把标题推到正中",
+	);
+	const headingRule = css.slice(css.indexOf(".topbar__heading {"), css.indexOf(".topbar__title {"));
+	assert.ok(headingRule.includes("justify-content: center"), "标题组自身居中");
+});
+
 test("顶栏右侧是在工作目录打开文件管理器与终端的两个按钮", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const css = await readFile(stylesPath, "utf8");

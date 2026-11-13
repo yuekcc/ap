@@ -562,8 +562,10 @@ body {
 /* 标题栏                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/* 顶栏三列：左侧折叠入口、中间标题、右侧环境与状态。两侧等宽的 1fr 把标题钉在正中。 */
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   height: 52px;
@@ -572,11 +574,20 @@ body {
   background: var(--bg);
 }
 
+.topbar__side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .topbar__heading {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   min-width: 0;
+  max-width: 40vw;
 }
 
 /* 侧栏折叠入口贴在标题行最左侧，和标题刷新按钮同一档视觉重量。 */
@@ -655,8 +666,9 @@ body {
 .topbar__right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  margin-left: auto;
+  min-width: 0;
 }
 
 /* token 用量：数字用等宽字形，位数变化时不抖动。 */
@@ -1494,6 +1506,7 @@ body {
   .topbar {
     height: 46px;
     padding: 0 16px;
+    gap: 8px;
   }
 
   .messages {
