@@ -46,6 +46,10 @@ export function createStore() {
 		title: "",
 		usage: null,
 		draft: "",
+		// 侧栏折叠是纯 UI 偏好，不参与 transcript 视图；持久化在 app.js。
+		sidebarCollapsed: false,
+		// 消息区是否贴着底部；决定「回到底部」按钮是否露出。
+		atBottom: true,
 
 		get currentTitle() {
 			if (!this.sessionId) return "新会话";
@@ -129,6 +133,8 @@ export function createStore() {
 
 		reset(sessionId = null) {
 			view = createState({ sessionId });
+			// 换 session 后消息区会被重新滚到底，按钮先收起。
+			this.atBottom = true;
 			publish();
 		},
 
@@ -156,9 +162,19 @@ export function createStore() {
 		},
 
 		handleEvent(event) {
-			view = applyEvent(view, event, "live");
-			if (event?.type === "session_title") {
-				this.setSessionTitle(view.sessionId, event.title);
+			this.handleEvents([event]);
+		},
+
+		// SSE 的 delta 可能每几毫秒一条；成批应用后只 publish 一次，
+		// 避免同一段 Markdown 每个 token 都重渲染一遍整条消息。
+		handleEvents(events) {
+			const list = asArray(events);
+			if (list.length === 0) return;
+			for (const event of list) {
+				view = applyEvent(view, event, "live");
+				if (event?.type === "session_title") {
+					this.setSessionTitle(view.sessionId, event.title);
+				}
 			}
 			publish();
 		},
@@ -274,6 +290,14 @@ export function createStore() {
 
 		setDraft(text) {
 			this.draft = text;
+		},
+
+		setSidebarCollapsed(collapsed) {
+			this.sidebarCollapsed = Boolean(collapsed);
+		},
+
+		setAtBottom(atBottom) {
+			this.atBottom = Boolean(atBottom);
 		},
 	});
 

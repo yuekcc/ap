@@ -75,7 +75,7 @@ test("顶部是工作空间标签，侧栏承载新对话与当前空间的对�
 		"the + button opens a new workspace",
 	);
 
-	const asideStart = html.indexOf('<aside class="sidebar">');
+	const asideStart = html.indexOf('<aside class="sidebar"');
 	const asideEnd = html.indexOf("</aside>");
 	assert.ok(asideStart >= 0 && asideEnd > asideStart, "index.html must have a sidebar");
 
@@ -112,6 +112,44 @@ test("顶部是工作空间标签，侧栏承载新对话与当前空间的对�
 		"session actions must stay usable while another session is running",
 	);
 	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the sidebar");
+});
+
+test("侧栏折叠入口在标题行左侧，窄屏下侧栏始终展开", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	const topbarStart = html.indexOf('<header class="topbar">');
+	const topbarEnd = html.indexOf("</header>", topbarStart);
+	assert.ok(topbarStart >= 0 && topbarEnd > topbarStart, "index.html must have a topbar");
+	const topbar = html.slice(topbarStart, topbarEnd);
+
+	const toggleIndex = topbar.indexOf('@click="toggleSidebar()"');
+	const titleIndex = topbar.indexOf('class="topbar__title"');
+	assert.ok(toggleIndex >= 0, "顶栏承载侧栏折叠入口");
+	assert.ok(titleIndex > toggleIndex, "折叠入口在标题左侧");
+
+	assert.ok(topbar.includes('aria-controls="session-sidebar"'), "折叠入口指向侧栏");
+	assert.ok(
+		html.includes('<aside class="sidebar" id="session-sidebar">'),
+		"侧栏暴露折叠入口控制的 id",
+	);
+	assert.ok(
+		html.includes("'app--sidebar-collapsed': $store.ap.sidebarCollapsed"),
+		"折叠状态由 store 驱动",
+	);
+
+	assert.ok(css.includes(".topbar__sidebar-btn"), "折叠入口有自己的样式");
+	assert.ok(
+		css.includes(".app--sidebar-collapsed .app__body"),
+		"折叠后左栏收成 0 宽",
+	);
+
+	const narrowStart = css.indexOf("@media (max-width: 820px)");
+	assert.ok(narrowStart > 0, "styles.css keeps the narrow layout query");
+	assert.ok(
+		css.slice(narrowStart).includes(".topbar__sidebar-btn"),
+		"窄屏是横向对话条，折叠入口要隐藏",
+	);
 });
 
 test("顶栏右侧是在工作目录打开文件管理器与终端的两个按钮", async () => {
@@ -312,4 +350,50 @@ test("顶栏标题旁有刷新按钮，运行中不可点", async () => {
 		"refresh button is disabled while a turn or another refresh is running",
 	);
 	assert.ok(css.includes(".topbar__title-btn"), "refresh button has its own style");
+});
+
+test("消息区翻上去时露出「回到底部」，旧消息延迟渲染", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	const threadIndex = html.indexOf('<div class="thread">');
+	const mainIndex = html.indexOf('class="messages"', threadIndex);
+	const buttonIndex = html.indexOf('class="scroll-bottom"', threadIndex);
+	const threadEnd = html.indexOf("</div>", buttonIndex);
+	assert.ok(threadIndex >= 0 && mainIndex > threadIndex, "消息区包在 thread 容器里");
+	assert.ok(buttonIndex > mainIndex, "回到底部按钮在消息区之后");
+	assert.ok(threadEnd > buttonIndex, "回到底部按钮和消息区同一个容器");
+
+	assert.ok(html.includes('@scroll.passive="onMessagesScroll()"'), "滚动位置按帧读取");
+	assert.ok(html.includes(":aria-busy="), "运行中把消息区标成 busy");
+	assert.ok(html.includes('data-icon="arrow-down"'), "回到底部按钮用向下的箭头");
+
+	const button = html.slice(buttonIndex, html.indexOf("</button>", buttonIndex));
+	assert.ok(button.includes("scrollToBottom()"), "按钮滚动到最新消息");
+	assert.ok(button.includes("$store.ap.atBottom"), "贴底时按钮收起");
+	assert.ok(button.includes('aria-label="回到底部"'), "按钮有可读的名字");
+
+	assert.ok(css.includes(".scroll-bottom"), "回到底部按钮有自己的样式");
+	assert.ok(
+		css.includes(".event:nth-last-child(n + 8)") && css.includes("content-visibility: auto"),
+		"离开底部的旧消息延迟渲染",
+	);
+	assert.ok(css.includes("contain-intrinsic-size"), "延迟渲染要带占位高度，否则滚动会跳");
+	assert.ok(css.includes("scrollbar-gutter: stable"), "滚动条出现时内容不横跳");
+});
+
+test("当前工作空间与当前会话带 aria-current，动态错误用 alert 播报", async () => {
+	const html = await readFile(indexPath, "utf8");
+	assert.ok(
+		html.includes(':aria-current="isActiveProject(project) ? \'true\' : null"'),
+		"工作空间标签标出当前位置",
+	);
+	assert.ok(
+		html.includes(':aria-current="session.session_id === $store.ap.sessionId ? \'true\' : null"'),
+		"会话条目标出当前会话",
+	);
+	assert.ok(
+		html.includes(':role="item.tone === \'error\' ? \'alert\' : null"'),
+		"错误提示立刻被读屏播报，普通提示不打断",
+	);
 });

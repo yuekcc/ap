@@ -11,7 +11,7 @@
 </head>
 <body x-data="apApp" x-init="init()" x-cloak>
 
-<div class="app">
+<div class="app" :class="{ 'app--sidebar-collapsed': $store.ap.sidebarCollapsed }">
   <header class="titlebar">
     <div class="brand">
       <span class="brand__mark" aria-hidden="true">ap</span>
@@ -23,6 +23,7 @@
           class="workspace-tab"
           type="button"
           :class="{ 'is-active': isActiveProject(project) }"
+          :aria-current="isActiveProject(project) ? 'true' : null"
           :title="project.cwd"
           :disabled="$store.ap.loading"
           @click="switchWorkspace(project)"
@@ -69,7 +70,7 @@
   </header>
 
   <div class="app__body">
-    <aside class="sidebar">
+    <aside class="sidebar" id="session-sidebar">
       <button
         class="new-session"
         type="button"
@@ -103,6 +104,7 @@
                 class="session"
                 type="button"
                 :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
+                :aria-current="session.session_id === $store.ap.sessionId ? 'true' : null"
                 :disabled="$store.ap.loading"
                 :title="session.session_id"
                 @click="selectSession(session)"
@@ -121,6 +123,17 @@
     <div class="workspace">
       <header class="topbar">
         <div class="topbar__heading">
+          <button
+            class="topbar__sidebar-btn"
+            type="button"
+            @click="toggleSidebar()"
+            :aria-expanded="!$store.ap.sidebarCollapsed"
+            aria-controls="session-sidebar"
+            :title="$store.ap.sidebarCollapsed ? '展开对话记录' : '收起对话记录'"
+            :aria-label="$store.ap.sidebarCollapsed ? '展开对话记录' : '收起对话记录'"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" data-icon="layout-sidebar-inset" aria-hidden="true"></svg>
+          </button>
           <h1 class="topbar__title" x-text="$store.ap.currentTitle"></h1>
           <button
             class="topbar__title-btn"
@@ -146,59 +159,82 @@
         </div>
       </header>
 
-      <main class="messages" x-ref="messages">
-        <div class="messages__empty" x-show="$store.ap.items.length === 0">
-          <span class="messages__empty-mark" aria-hidden="true">a</span>
-          <p class="messages__empty-title">今天要做什么？</p>
-          <p class="messages__empty-hint" x-show="$store.ap.loading">正在载入会话…</p>
-          <p class="messages__empty-hint" x-show="!$store.ap.loading">输入提示词，ap 会在当前工作目录里开始一轮。</p>
-        </div>
-
-        <template x-for="item in $store.ap.items" :key="item.key">
-          <div class="event">
-            <template x-if="item.kind === 'user'">
-              <article class="msg msg--user">
-                <p class="msg__text" x-text="item.text"></p>
-              </article>
-            </template>
-
-            <template x-if="item.kind === 'assistant'">
-              <article class="msg msg--assistant">
-                <div
-                  class="msg__text msg__text--markdown markdown-body"
-                  :class="{ 'is-streaming': !item.ended }"
-                  x-html="renderMarkdown(item.text)"
-                ></div>
-              </article>
-            </template>
-
-            <template x-if="item.kind === 'tool'">
-              <details class="tool" :data-status="item.status">
-                <summary class="tool__head" :title="item.args || item.name">
-                  <span class="tool__dot" aria-hidden="true"></span>
-                  <span class="tool__name" x-text="item.name"></span>
-                  <span class="tool__args" x-show="item.args" x-text="item.args"></span>
-                  <span class="tool__meta" x-show="item.durationMs !== null" x-text="formatDuration(item.durationMs)"></span>
-                  <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
-                  <svg class="tool__chevron" viewBox="0 0 16 16" fill="currentColor" data-icon="chevron-right" aria-hidden="true"></svg>
-                </summary>
-                <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
-                <p class="tool__error" x-show="item.error" x-text="item.error"></p>
-                <p class="tool__note" x-show="item.truncated">… 已截断，完整内容在 transcript</p>
-              </details>
-            </template>
-
-            <template x-if="item.kind === 'notice'">
-              <p class="notice" :data-tone="item.tone" x-text="item.text"></p>
-            </template>
+      <div class="thread">
+        <main
+          class="messages"
+          x-ref="messages"
+          @scroll.passive="onMessagesScroll()"
+          :aria-busy="$store.ap.running ? 'true' : null"
+        >
+          <div class="messages__empty" x-show="$store.ap.items.length === 0">
+            <span class="messages__empty-mark" aria-hidden="true">a</span>
+            <p class="messages__empty-title">今天要做什么？</p>
+            <p class="messages__empty-hint" x-show="$store.ap.loading">正在载入会话…</p>
+            <p class="messages__empty-hint" x-show="!$store.ap.loading">输入提示词，ap 会在当前工作目录里开始一轮。</p>
           </div>
-        </template>
 
-        <div class="thinking" x-show="$store.ap.thinking" aria-live="polite">
-          <span class="thinking__dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          <span>思考中</span>
-        </div>
-      </main>
+          <template x-for="item in $store.ap.items" :key="item.key">
+            <div class="event">
+              <template x-if="item.kind === 'user'">
+                <article class="msg msg--user">
+                  <p class="msg__text" x-text="item.text"></p>
+                </article>
+              </template>
+
+              <template x-if="item.kind === 'assistant'">
+                <article class="msg msg--assistant">
+                  <div
+                    class="msg__text msg__text--markdown markdown-body"
+                    :class="{ 'is-streaming': !item.ended }"
+                    x-html="renderMarkdown(item.text)"
+                  ></div>
+                </article>
+              </template>
+
+              <template x-if="item.kind === 'tool'">
+                <details class="tool" :data-status="item.status">
+                  <summary class="tool__head" :title="item.args || item.name">
+                    <span class="tool__dot" aria-hidden="true"></span>
+                    <span class="tool__name" x-text="item.name"></span>
+                    <span class="tool__args" x-show="item.args" x-text="item.args"></span>
+                    <span class="tool__meta" x-show="item.durationMs !== null" x-text="formatDuration(item.durationMs)"></span>
+                    <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
+                    <svg class="tool__chevron" viewBox="0 0 16 16" fill="currentColor" data-icon="chevron-right" aria-hidden="true"></svg>
+                  </summary>
+                  <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
+                  <p class="tool__error" x-show="item.error" x-text="item.error"></p>
+                  <p class="tool__note" x-show="item.truncated">… 已截断，完整内容在 transcript</p>
+                </details>
+              </template>
+
+              <template x-if="item.kind === 'notice'">
+                <p
+                  class="notice"
+                  :data-tone="item.tone"
+                  :role="item.tone === 'error' ? 'alert' : null"
+                  x-text="item.text"
+                ></p>
+              </template>
+            </div>
+          </template>
+
+          <div class="thinking" x-show="$store.ap.thinking" aria-live="polite">
+            <span class="thinking__dots" aria-hidden="true"><span></span><span></span><span></span></span>
+            <span>思考中</span>
+          </div>
+        </main>
+
+        <button
+          class="scroll-bottom"
+          type="button"
+          x-show="!$store.ap.atBottom"
+          @click="scrollToBottom()"
+          aria-label="回到底部"
+          title="回到底部"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-down" aria-hidden="true"></svg>
+        </button>
+      </div>
 
       <footer class="composer">
         <div class="composer__box">

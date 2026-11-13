@@ -15,6 +15,14 @@ import {
 import { createEventStream } from "./sse.js";
 
 const SESSION_STORAGE_KEY = "ap-web:session";
+// 侧栏折叠是跨标签页的界面偏好，存 localStorage 而不是 sessionStorage。
+const SIDEBAR_STORAGE_KEY = "ap-web:sidebar-collapsed";
+// 离底部多近算「贴底」：留一点余量，滚轮多走一格不至于立刻弹按钮。
+const BOTTOM_GAP_PX = 32;
+
+function prefersReducedMotion() {
+	return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 export function registerApp(Alpine) {
 	Alpine.data("apApp", () => ({
@@ -25,6 +33,11 @@ export function registerApp(Alpine) {
 		turnSessionId: null,
 		// 标题请求在飞：只用于禁用按钮，不牵扯全局 loading。
 		titlePending: false,
+		// SSE 增量先入队，按帧合并后一次性应用（见 queueEvent）。
+		pendingEvents: [],
+		flushHandle: 0,
+		// 滚动事件按帧节流，避免每个 scroll 都读一次 scrollHeight。
+		scrollHandle: 0,
 
 		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
 		renderMarkdown,
@@ -38,13 +51,109 @@ export function registerApp(Alpine) {
 			// 思考动画出现/消失会改变消息区高度，贴底时才跟一次。
 			this.$watch("$store.ap.thinking", () => this.$nextTick(() => this.autoScroll()));
 			this.$watch("$store.ap.sessionId", () => this.$nextTick(() => this.autoScroll()));
-			this.$watch("$store.ap.sessionKey", () => this.persistSession());
+			this.$watch("$store.ap.sessionKey", () => {
+				this.persistSession();
+				// 换了 session 就把还没应用的增量扔掉，别把它们画到新会话里。
+				this.dropEvents();
+			});
 			this.$watch("$store.ap.sessionId", () => this.persistSession());
 			this.$watch("$store.ap.projectCwd", () => this.persistSession());
+			this.$watch("$store.ap.currentTitle", (title) => this.syncDocumentTitle(title));
+			// 切到后台时 rAF 会停，先把队列冲掉，之后的事件走定时器合批。
+			document.addEventListener("visibilitychange", () => {
+				if (document.hidden) this.flushEvents();
+			});
 
 			const store = this.$store.ap;
+			this.restoreSidebar();
 			store.reset(null);
 			this.boot();
+		},
+
+		// 侧栏折叠只改布局，不影响当前会话；宽度变化后贴底才需要重新跟随。
+		toggleSidebar() {
+			const collapsed = !this.$store.ap.sidebarCollapsed;
+			this.$store.ap.setSidebarCollapsed(collapsed);
+			try {
+				localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? "1" : "0");
+			} catch {
+				// 隐私模式/禁用存储：本次仍然生效，只是不记忆。
+			}
+			this.$nextTick(() => this.autoScroll());
+		},
+
+		restoreSidebar() {
+			try {
+				this.$store.ap.setSidebarCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1");
+			} catch {
+				this.$store.ap.setSidebarCollapsed(false);
+			}
+		},
+
+		// 标签页标题跟着会话标题走，多开几个标签页时能区分。
+		syncDocumentTitle(title) {
+			document.title = title && title !== "新会话" ? `${title} · ap` : "ap";
+		},
+
+		// 一条 turn 里 delta 的到达频率远高于屏幕刷新率；先入队，下一帧一次性
+		// 交给 store 合并成一次渲染。后台标签页不跑 rAF，改用定时器，避免队列无限长。
+		queueEvent(event) {
+			this.pendingEvents.push(event);
+			if (this.flushHandle) return;
+			this.flushHandle = document.hidden
+				? setTimeout(() => this.flushEvents(), 250)
+				: requestAnimationFrame(() => this.flushEvents());
+		},
+
+		flushEvents() {
+			this.cancelFlush();
+			const events = this.pendingEvents;
+			this.pendingEvents = [];
+			if (events.length > 0) this.$store.ap.handleEvents(events);
+		},
+
+		dropEvents() {
+			this.cancelFlush();
+			this.pendingEvents = [];
+		},
+
+		cancelFlush() {
+			if (!this.flushHandle) return;
+			cancelAnimationFrame(this.flushHandle);
+			clearTimeout(this.flushHandle);
+			this.flushHandle = 0;
+		},
+
+		// 消息区离底部超过这个距离就露出「回到底部」按钮。
+		onMessagesScroll() {
+			if (this.scrollHandle) return;
+			this.scrollHandle = requestAnimationFrame(() => {
+				this.scrollHandle = 0;
+				const element = this.$refs.messages;
+				if (!element) return;
+				const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+				this.$store.ap.setAtBottom(distance <= BOTTOM_GAP_PX);
+			});
+		},
+
+		scrollToBottom() {
+			const element = this.$refs.messages;
+			if (!element) return;
+			if (prefersReducedMotion()) {
+				element.scrollTop = element.scrollHeight;
+				return;
+			}
+			element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+			// 滚动过程中翻上来的旧消息会从占位高度换成真实高度，平滑滚动的目标
+			// 高度因此会变短；滚完再贴一次底，按钮才真的收起。
+			const stick = () => {
+				element.scrollTop = element.scrollHeight;
+			};
+			if ("onscrollend" in window) {
+				element.addEventListener("scrollend", stick, { once: true });
+			} else {
+				setTimeout(stick, 400);
+			}
 		},
 
 		// 本标签页的 session 只影响自己；不同标签页各自独立。
@@ -258,15 +367,18 @@ export function registerApp(Alpine) {
 				getLastSeq: () => this.$store.ap.lastSeq,
 				onEvent: (event) => {
 					if (this.$store.ap.sessionKey !== key) return;
-					this.$store.ap.handleEvent(event);
+					this.queueEvent(event);
 				},
 				onTurnDone: (payload) => {
 					if (this.$store.ap.sessionKey !== key) return;
+					// turn_done 必须排在本轮所有增量之后应用。
+					this.flushEvents();
 					this.$store.ap.handleTurnDone(payload);
 					this.afterTurnDone();
 				},
 				onState: (state) => {
 					if (this.$store.ap.sessionKey !== key) return;
+					this.flushEvents();
 					this.$store.ap.setConnection(state);
 					if (state !== "open") return;
 					if (this.wasOpen) {
@@ -281,6 +393,7 @@ export function registerApp(Alpine) {
 		},
 
 		disconnect() {
+			this.dropEvents();
 			if (this.stream) {
 				this.stream.close();
 				this.stream = null;

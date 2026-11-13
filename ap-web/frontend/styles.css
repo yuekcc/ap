@@ -353,6 +353,20 @@ body {
   min-height: 0;
 }
 
+/* 折叠后左栏整列收成 0，对话记录不可见也不参与布局；窄屏是横向对话条，
+   始终展开，所以折叠只在两栏布局下生效。 */
+@media (min-width: 821px) {
+  .app--sidebar-collapsed .app__body {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  .app--sidebar-collapsed .sidebar {
+    padding: 0;
+    border-right: 0;
+    visibility: hidden;
+  }
+}
+
 /* ------------------------------------------------------------------------- */
 /* 会话侧栏                                                                  */
 /* ------------------------------------------------------------------------- */
@@ -428,6 +442,7 @@ body {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--separator) transparent;
 }
@@ -564,6 +579,38 @@ body {
   min-width: 0;
 }
 
+/* 侧栏折叠入口贴在标题行最左侧，和标题刷新按钮同一档视觉重量。 */
+.topbar__sidebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), color 0.12s var(--ease-out);
+}
+
+.topbar__sidebar-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.topbar__sidebar-btn:hover {
+  background: var(--fill);
+  color: var(--fg);
+}
+
+.topbar__sidebar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .topbar__title {
   min-width: 0;
   overflow: hidden;
@@ -672,24 +719,39 @@ body {
 /* 消息区                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/* 消息区 + 浮在右下角的「回到底部」；按钮相对这块定位，不跟着内容滚。 */
+.thread {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
 .messages {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+  /* 始终预留滚动条宽度，流式输出刚撑出滚动条时内容不会横向跳一下。 */
+  scrollbar-gutter: stable;
   padding: 26px 28px 36px;
   scrollbar-width: thin;
   scrollbar-color: var(--separator) transparent;
+}
+
+/* 条目间距用 margin 而不是 flex gap：flex 容器里 content-visibility 的
+   contain-intrinsic-size 不生效（跳过的子项会被算成 0 高），滚动位置会乱跳。 */
+.messages > * + * {
+  margin-top: 18px;
 }
 
 .messages__empty {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  margin: auto;
+  min-height: 100%;
   padding: 40px 16px;
   text-align: center;
 }
@@ -729,6 +791,49 @@ body {
   width: 100%;
   max-width: var(--maxw);
   margin-inline: auto;
+}
+
+/* 翻上去的旧消息不再参与布局和绘制，长会话里每次流式增量都便宜得多；
+   末尾几条（用户多半正在看的那段）保持正常渲染。 */
+.event:nth-last-child(n + 8) {
+  content-visibility: auto;
+  contain-intrinsic-size: none auto 160px;
+}
+
+/* 往上翻看历史时浮在消息区底部中央，一键回到最新；位置钉在消息区里，
+   不跟着内容滚，也不会被输入区盖住。 */
+.scroll-bottom {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--separator);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), color 0.12s var(--ease-out);
+}
+
+.scroll-bottom svg {
+  width: 16px;
+  height: 16px;
+}
+
+.scroll-bottom:hover {
+  background: var(--fill-2);
+  color: var(--fg);
+}
+
+.scroll-bottom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .msg {
@@ -1316,6 +1421,11 @@ body {
     display: none;
   }
 
+  /* 窄屏侧栏是横向对话条，不参与折叠，折叠入口一并隐藏。 */
+  .topbar__sidebar-btn {
+    display: none;
+  }
+
   .app__body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
@@ -1388,7 +1498,14 @@ body {
 
   .messages {
     padding: 16px 16px 24px;
-    gap: 16px;
+  }
+
+  .messages > * + * {
+    margin-top: 16px;
+  }
+
+  .scroll-bottom {
+    bottom: 8px;
   }
 
   .composer {
