@@ -6,7 +6,12 @@
 // sessionStorage 记住本标签页的 {key, id, cwd}，刷新后优先按真实 id + cwd 恢复。
 import { api, eventsUrl } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
-import { projectName as projectDisplayName, sessionMeta, sessionTitle } from "./render.js";
+import {
+	formatDuration,
+	projectName as projectDisplayName,
+	sessionMeta,
+	sessionTitle,
+} from "./render.js";
 import { createEventStream } from "./sse.js";
 
 const SESSION_STORAGE_KEY = "ap-web:session";
@@ -20,9 +25,14 @@ export function registerApp(Alpine) {
 		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
 		renderMarkdown,
 
+		// 工具卡片头部的耗时，例如 42ms / 1.2s。
+		formatDuration,
+
 		init() {
 			// 消息区只在用户本来就在底部时自动跟随，避免打断向上翻看。
 			this.$watch("$store.ap.items", () => this.autoScroll());
+			// 思考动画出现/消失会改变消息区高度，贴底时才跟一次。
+			this.$watch("$store.ap.thinking", () => this.$nextTick(() => this.autoScroll()));
 			this.$watch("$store.ap.sessionId", () => this.$nextTick(() => this.autoScroll()));
 			this.$watch("$store.ap.sessionKey", () => this.persistSession());
 			this.$watch("$store.ap.sessionId", () => this.persistSession());

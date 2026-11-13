@@ -2,10 +2,11 @@
 // store.js 只负责把结果同步进 Alpine reactive 对象，测试可以直接喂事件断言。
 //
 // 关键规则（docs/web.md「前端」）：
-// - message_update 按 delta.text 逐段累积；reasoning 不展示。
+// - message_update 按 delta.text 逐段累积；reasoning 不展示，只驱动「思考中」状态。
 // - message_end 只在没有收到过 text delta 时补全文（history 模式则总是取全文）。
 // - tool_execution_start 建卡；update 追加流式输出（不截断）；end 标 ✓/✗、
-//   耗时/退出码，非流式结果按 200 行 / 20000 字节截断并标记。
+//   耗时/退出码，非流式结果按 200 行 / 20000 字节截断并标记。卡片默认折叠，
+//   头部是唯一常驻的「关键行」。
 // - transcript 事件按 seq 去重；流式事件没有 seq，靠 message ended 状态防重放。
 
 export const MAX_PREVIEW_LINES = 200;
@@ -54,6 +55,15 @@ export function previewContent(text) {
 
 export function singleLine(text) {
 	return String(text ?? "").replace(/[\n\r\t]+/g, " ").trim();
+}
+
+// 工具卡片头部的耗时：1s 以内保留毫秒，以上换成一位小数的秒，避免长串数字撑开头部。
+export function formatDuration(ms) {
+	if (ms === null || ms === undefined || ms === "") return "";
+	const value = Number(ms);
+	if (!Number.isFinite(value) || value < 0) return "";
+	if (value < 1000) return `${Math.round(value)}ms`;
+	return `${(value / 1000).toFixed(1)}s`;
 }
 
 function formatArgValue(value) {
@@ -214,6 +224,7 @@ export function createState(overrides = {}) {
 		sessionId: null,
 		turn: 0,
 		running: false,
+		thinking: false,
 		turnEndedNotice: false,
 		...overrides,
 	};
@@ -301,7 +312,9 @@ export function appendNotice(state, text, tone = "muted") {
 
 function applyMessageUpdate(state, event) {
 	const text = typeof event?.delta?.text === "string" ? event.delta.text : "";
-	if (!text) return state; // reasoning / tool_call delta 在 phase 1 不展示。
+	// reasoning 文本不展示，但它是「模型在想」的唯一增量信号。
+	const reasoning = typeof event?.delta?.reasoning === "string" ? event.delta.reasoning : "";
+	if (!text) return reasoning ? { ...state, thinking: true } : state;
 
 	const messageId = event.message_id || "";
 	const index = messageIndex(state, messageId);
@@ -314,7 +327,11 @@ function applyMessageUpdate(state, event) {
 	} else {
 		next = addMessage(state, messageId, text, false);
 	}
-	return { ...next, hadDelta: { ...state.hadDelta, [messageId]: true } };
+	return {
+		...next,
+		thinking: false, // 已经有可见文本，思考阶段结束。
+		hadDelta: { ...state.hadDelta, [messageId]: true },
+	};
 }
 
 function applyMessageEnd(state, event, mode) {
@@ -334,6 +351,7 @@ function applyMessageEnd(state, event, mode) {
 		next = addMessage(state, messageId, text, true);
 	}
 
+	next = { ...next, thinking: false };
 	if (messageId in next.hadDelta) {
 		const hadDeltaNext = { ...next.hadDelta };
 		delete hadDeltaNext[messageId];
@@ -346,7 +364,7 @@ function applyToolStart(state, event) {
 	const toolId = event.tool_call_id || "";
 	const index = state.tools[toolId];
 	if (typeof index === "number") return state; // 同一 tool_call_id 重放，跳过。
-	return addTool(state, toolId, event.name, toolArgsText(event));
+	return { ...addTool(state, toolId, event.name, toolArgsText(event)), thinking: false };
 }
 
 function applyToolUpdate(state, event) {
@@ -365,7 +383,7 @@ function applyToolUpdate(state, event) {
 	return replaceItem(next, index, { ...item, streamed: item.streamed + chunk });
 }
 
-function applyToolEnd(state, event) {
+function applyToolEnd(state, event, mode) {
 	const toolId = event.tool_call_id || "";
 	let next = state;
 	if (typeof state.tools[toolId] !== "number") {
@@ -388,15 +406,20 @@ function applyToolEnd(state, event) {
 		truncated = preview.truncated || usedPreview;
 	}
 
-	return replaceItem(next, index, {
-		...item,
-		status: event.ok === true ? "ok" : "error",
-		durationMs: typeof event.duration_ms === "number" ? event.duration_ms : null,
-		exitCode: typeof event.exit_code === "number" ? event.exit_code : null,
-		error: typeof event.error === "string" ? event.error : "",
-		result,
-		truncated,
-	});
+	const thinking = mode === "live";
+	return {
+		...replaceItem(next, index, {
+			...item,
+			status: event.ok === true ? "ok" : "error",
+			durationMs: typeof event.duration_ms === "number" ? event.duration_ms : null,
+			exitCode: typeof event.exit_code === "number" ? event.exit_code : null,
+			error: typeof event.error === "string" ? event.error : "",
+			result,
+			truncated,
+		}),
+		// 工具结果回到模型后，下一个 step 又要重新思考。
+		thinking,
+	};
 }
 
 function errorNotice(event) {
@@ -444,7 +467,7 @@ export function applyEvent(state, event, mode = "live") {
 		case "tool_execution_update":
 			return mode === "live" ? applyToolUpdate(state, event) : state;
 		case "tool_execution_end":
-			return applyToolEnd(state, event);
+			return applyToolEnd(state, event, mode);
 		case "error":
 			return addNotice(
 				state,
@@ -458,10 +481,12 @@ export function applyEvent(state, event, mode = "live") {
 			return {
 				...state,
 				running: true,
+				// turn 一开始模型就在想（首批 token 可能迟迟不来），动画从这里起。
+				thinking: true,
 				turn: typeof event.turn === "number" ? event.turn : state.turn,
 			};
 		case "turn_end":
-			return applyTurnEnd(state, event);
+			return { ...applyTurnEnd(state, event), thinking: false };
 		case "session_start":
 			return event.session_id
 				? { ...state, sessionId: event.session_id }
@@ -479,7 +504,7 @@ export function ingestHistory(state, events) {
 }
 
 export function applyTurnDone(state, payload = {}) {
-	let next = { ...state, running: false, turnEndedNotice: false };
+	let next = { ...state, running: false, thinking: false, turnEndedNotice: false };
 	const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
 	const reason = typeof payload.stop_reason === "string" ? payload.stop_reason : "";
 

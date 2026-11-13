@@ -140,18 +140,21 @@
             </template>
 
             <template x-if="item.kind === 'tool'">
-              <article class="tool" :data-status="item.status">
-                <header class="tool__head">
+              <details class="tool" :data-status="item.status">
+                <summary class="tool__head" :title="item.args || item.name">
                   <span class="tool__dot" aria-hidden="true"></span>
                   <span class="tool__name" x-text="item.name"></span>
                   <span class="tool__args" x-show="item.args" x-text="item.args"></span>
-                  <span class="tool__meta" x-show="item.durationMs !== null" x-text="item.durationMs + 'ms'"></span>
+                  <span class="tool__meta" x-show="item.durationMs !== null" x-text="formatDuration(item.durationMs)"></span>
                   <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
-                </header>
+                  <svg class="tool__chevron" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </summary>
                 <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
                 <p class="tool__error" x-show="item.error" x-text="item.error"></p>
                 <p class="tool__note" x-show="item.truncated">… 已截断，完整内容在 transcript</p>
-              </article>
+              </details>
             </template>
 
             <template x-if="item.kind === 'notice'">
@@ -159,6 +162,11 @@
             </template>
           </div>
         </template>
+
+        <div class="thinking" x-show="$store.ap.thinking" aria-live="polite">
+          <span class="thinking__dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>思考中</span>
+        </div>
       </main>
 
       <footer class="composer">

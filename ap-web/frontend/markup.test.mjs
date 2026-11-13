@@ -175,4 +175,28 @@ test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐�
 	assert.ok(css.includes("prefers-reduced-motion: reduce"), "motion must respect reduced-motion");
 });
 
+test("工具卡片默认折叠，头部只留关键行与耗时；思考中在主区域居中显示动画", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	assert.ok(html.includes('<details class="tool"'), "tool card must be a collapsible details");
+	assert.ok(!html.includes('<details class="tool" open'), "tool card stays collapsed by default");
+	assert.ok(
+		html.includes("formatDuration(item.durationMs)"),
+		"collapsed head shows the formatted duration",
+	);
+	assert.ok(html.includes('class="tool__chevron"'), "collapsed head hints at the expand affordance");
+	assert.ok(
+		html.includes('class="thinking"') && html.includes("$store.ap.thinking"),
+		"thinking animation hinges on the thinking flag",
+	);
+
+	const thinking = html.indexOf('<div class="thinking"');
+	const mainEnd = html.indexOf("</main>");
+	assert.ok(thinking > 0 && thinking < mainEnd, "thinking animation lives inside the message area");
+	assert.ok(css.includes(".thinking__dots"), "thinking animation has its own dots");
+	assert.ok(css.includes("@keyframes thinking-dot"), "thinking dots animate");
+	assert.ok(css.includes(".tool[open] .tool__chevron"), "the chevron flips when the card opens");
+});
+
 

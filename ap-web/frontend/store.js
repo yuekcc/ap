@@ -32,6 +32,7 @@ export function createStore() {
 		turn: 0,
 		lastSeq: 0,
 		running: false,
+		thinking: false,
 		loading: false,
 		picking: false,
 		cancelling: false,
@@ -164,13 +165,18 @@ export function createStore() {
 		syncCurrent(current = {}) {
 			if (current.session_id) view = { ...view, sessionId: current.session_id };
 			if (typeof current.cwd === "string" && current.cwd) this.setProjectCwd(current.cwd);
-			if (typeof current.running === "boolean") view = { ...view, running: current.running };
+			// 刷新页面时可能正卡在模型思考中，还没等到任何增量：先按运行态亮起动画，
+			// 后续文本/工具事件会把它关掉。
+			if (typeof current.running === "boolean") {
+				view = { ...view, running: current.running, thinking: current.running };
+			}
 			if (typeof current.turn === "number") view = { ...view, turn: current.turn };
 			publish();
 		},
 
 		setRunning(running) {
-			view = { ...view, running: Boolean(running) };
+			const value = Boolean(running);
+			view = { ...view, running: value, thinking: value };
 			publish();
 		},
 
@@ -225,6 +231,7 @@ export function createStore() {
 		store.turn = view.turn;
 		store.lastSeq = view.lastSeq;
 		store.running = view.running;
+		store.thinking = view.running && view.thinking === true;
 	}
 
 	return store;

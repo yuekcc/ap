@@ -800,6 +800,19 @@ body {
   font-size: 11.5px;
   letter-spacing: 0;
   color: var(--fg-2);
+  /* 卡片默认折叠，整行就是展开/收起的开关。 */
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.tool__head::-webkit-details-marker {
+  display: none;
+}
+
+.tool__head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .tool__dot {
@@ -844,6 +857,18 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.tool__chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-3);
+  transition: transform 0.12s var(--ease-out);
+}
+
+.tool[open] .tool__chevron {
+  transform: rotate(90deg);
+}
+
 .tool__output {
   max-height: 20rem;
   overflow: auto;
@@ -874,6 +899,59 @@ body {
   margin: 0 13px 10px;
   color: var(--fg-3);
   font-size: 10.5px;
+}
+
+/* ------------------------------------------------------------------------- */
+/* 思考中                                                                    */
+/* ------------------------------------------------------------------------- */
+
+/* 模型在想（还没吐出可见文本）时，在消息流末尾居中的呼吸点。 */
+.thinking {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.thinking__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.thinking__dots > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+
+.thinking__dots > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking__dots > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes thinking-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
 }
 
 /* ------------------------------------------------------------------------- */

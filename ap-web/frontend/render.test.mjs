@@ -8,6 +8,7 @@ import {
 	applyTurnDone,
 	createState,
 	formatArgs,
+	formatDuration,
 	groupSessionsByDay,
 	ingestHistory,
 	previewContent,
@@ -84,6 +85,16 @@ test("formatArgs 对齐 ap-tui：键排序、字符串不加引号、整体限 2
 	);
 	const long = formatArgs({ text: "x".repeat(400) });
 	assert.equal(new TextEncoder().encode(long).length, 240);
+});
+
+test("formatDuration：1 秒内给毫秒，超过给一位小数的秒", () => {
+	assert.equal(formatDuration(0), "0ms");
+	assert.equal(formatDuration(42), "42ms");
+	assert.equal(formatDuration(999), "999ms");
+	assert.equal(formatDuration(1000), "1.0s");
+	assert.equal(formatDuration(1234), "1.2s");
+	assert.equal(formatDuration(null), "");
+	assert.equal(formatDuration(-1), "");
 });
 
 test("truncateUtf8 不切开多字节字符", () => {
@@ -304,6 +315,56 @@ test("工具卡片：失败时标 ✗ 并保留 error", () => {
 	assert.equal(tool.status, "error");
 	assert.equal(tool.error, "boom");
 	assert.equal(tool.exitCode, 2);
+});
+
+test("思考中：turn_start 亮起，可见文本与工具执行期间熄灭，工具结束后再亮", () => {
+	let state = createState();
+	state = applyEvent(state, ev("turn_start", { seq: 1, turn: 1 }));
+	assert.equal(state.thinking, true);
+
+	// reasoning 增量不展示，但代表模型还在想。
+	state = applyEvent(
+		state,
+		ev("message_update", { message_id: "m1", delta: { reasoning: "想一想" } }),
+	);
+	assert.equal(state.thinking, true);
+
+	state = applyEvent(state, ev("message_update", { message_id: "m1", delta: { text: "答" } }));
+	assert.equal(state.thinking, false);
+
+	state = applyEvent(
+		state,
+		ev("message_end", { seq: 2, message_id: "m1", content: [{ type: "text", text: "答" }] }),
+	);
+	state = applyEvent(
+		state,
+		ev("tool_execution_start", { seq: 3, tool_call_id: "c9", name: "bash" }),
+	);
+	assert.equal(state.thinking, false);
+
+	state = applyEvent(
+		state,
+		ev("tool_execution_end", { seq: 4, tool_call_id: "c9", ok: true, content: "done" }),
+	);
+	assert.equal(state.thinking, true);
+
+	state = applyEvent(state, ev("turn_end", { seq: 5, stop_reason: "stop" }));
+	assert.equal(state.thinking, false);
+});
+
+test("思考中：history 重放不点亮动画，turn_done 也会收掉", () => {
+	const state = ingestHistory(createState(), [
+		ev("turn_start", { seq: 1, turn: 1 }),
+		ev("tool_execution_start", { seq: 2, tool_call_id: "c8", name: "bash" }),
+		ev("tool_execution_end", { seq: 3, tool_call_id: "c8", ok: true, content: "x" }),
+	]);
+	assert.equal(state.thinking, false);
+
+	const done = applyTurnDone(
+		{ ...createState(), running: true, thinking: true },
+		{ exit_code: 0, stop_reason: "stop" },
+	);
+	assert.equal(done.thinking, false);
 });
 
 test("seq 去重：重复 transcript 事件直接跳过", () => {
