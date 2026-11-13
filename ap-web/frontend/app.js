@@ -21,6 +21,8 @@ export function registerApp(Alpine) {
 		stream: null,
 		wasOpen: false,
 		resyncing: false,
+		// 发起本轮时的 session id：turn 结束时 id 变了说明发生了交接。
+		turnSessionId: null,
 
 		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
 		renderMarkdown,
@@ -342,6 +344,7 @@ export function registerApp(Alpine) {
 			store.addUser(prompt);
 			store.setRunning(true);
 			store.setError("");
+			this.turnSessionId = store.sessionId;
 			await this.$nextTick();
 			this.autoScroll(true);
 
@@ -361,6 +364,42 @@ export function registerApp(Alpine) {
 				store.setRunning(false);
 				store.setDraft(prompt);
 				this.fail("发送失败", error);
+			}
+		},
+
+		// 手动交接：让 ap 生成交接文档并创建新 session。输入框里的文字作为
+		// 新 session 的聚焦提示词（为空则只交接，不跑 turn）。
+		async sendHandoff() {
+			const store = this.$store.ap;
+			if (store.running || store.loading) return;
+			const key = store.sessionKey;
+			if (!key || !store.sessionId) {
+				store.notice("当前会话还没有产生对话，无法交接", "warning");
+				return;
+			}
+			const focus = store.draft.trim();
+			this.turnSessionId = store.sessionId;
+			store.setDraft("");
+			store.setRunning(true);
+			store.setError("");
+			store.notice(focus ? "正在交接并继续…" : "正在生成交接文档…", "muted");
+			try {
+				await api.startTurn({
+					prompt: focus,
+					handoff: true,
+					session_key: key,
+					cwd: store.projectCwd ?? "",
+				});
+			} catch (error) {
+				if (store.sessionKey !== key) return;
+				if (error?.status === 409 && error?.code === "turn_running") {
+					store.setRunning(true);
+					store.notice("该会话已有 turn 正在运行", "warning");
+					return;
+				}
+				store.setRunning(false);
+				store.setDraft(focus);
+				this.fail("交接失败", error);
 			}
 		},
 
@@ -395,6 +434,19 @@ export function registerApp(Alpine) {
 				store.syncCurrent(current ?? {});
 			} catch {
 				// turn 已经结束，current 读失败不影响画面。
+			}
+			// 交接会换一个新 session：重放它的 transcript，而不是把新旧混在一起。
+			const sessionId = store.sessionId;
+			if (this.turnSessionId && sessionId && sessionId !== this.turnSessionId) {
+				const cwd = store.projectCwd;
+				store.reset(sessionId);
+				try {
+					if (cwd) await this.loadHistory(sessionId, cwd);
+				} catch (error) {
+					this.fail("载入交接后的会话失败", error);
+				}
+				store.notice(`已交接，当前会话 ${sessionId}`, "muted");
+				this.turnSessionId = sessionId;
 			}
 			await this.$nextTick();
 			this.autoScroll();
@@ -445,6 +497,30 @@ export function registerApp(Alpine) {
 		// 顶部「+」：打开系统目录选择框，在选中的目录开一个新工作空间。
 		openWorkspace() {
 			return this.pickDirectory();
+		},
+
+		// 顶栏右侧两个按钮：在本机打开当前工作目录的文件管理器 / 终端。
+		// 只是让服务端起一个外部进程，不改变任何 session 或 cwd。
+		openWorkdirFiles() {
+			return this.openWorkdir("files");
+		},
+
+		openWorkdirTerminal() {
+			return this.openWorkdir("terminal");
+		},
+
+		async openWorkdir(target) {
+			const cwd = this.$store.ap.projectCwd || this.defaultCwd();
+			if (!cwd) return;
+			try {
+				if (target === "terminal") {
+					await api.openTerminal(cwd);
+				} else {
+					await api.openFiles(cwd);
+				}
+			} catch (error) {
+				this.fail(target === "terminal" ? "打开终端失败" : "打开文件管理器失败", error);
+			}
 		},
 
 		async resumeSession(sessionId, cwd) {

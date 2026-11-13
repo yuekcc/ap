@@ -67,6 +67,9 @@ test_cli_handoff_session_seeds_user_message :: proc(t: ^testing.T) {
 	json.unmarshal_string(events[0].line, &start)
 	testing.expect_value(t, start.model, "fresh-model")
 	testing.expect(t, strings.contains(start.content, "fresh prompt"))
+	// stream-json 要先看到新 session 的 session_start，才能跟上交接后的 id。
+	testing.expect(t, strings.contains(opened.initial_line, `"type":"session_start"`))
+	testing.expect(t, strings.contains(opened.initial_line, opened.session.session_id))
 
 	testing.expect_value(t, events[1].type, protocol.EVENT_USER_MESSAGE)
 	user: protocol.User_Message_Event

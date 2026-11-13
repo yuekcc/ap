@@ -225,6 +225,9 @@ App :: struct {
 	// 可注入的目录选择实现：nil 时用 native_pick_directory，测试注入假 picker。
 	pick:        Pick_Fn,
 	pick_user:   rawptr,
+	// 可注入的「打开文件管理器/终端」实现：nil 时用 open_workdir。
+	open:        Open_Fn,
+	open_user:   rawptr,
 	heartbeat:   Heartbeat_State,
 }
 

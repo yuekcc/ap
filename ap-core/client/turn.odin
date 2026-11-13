@@ -17,6 +17,9 @@ Turn_Options :: struct {
 	cwd:         string, // ap 的工作目录，通常是 project.root
 	session_id:  string, // 为空时本轮让 ap 新建 session，之后从 session_start 捕获
 	fork_session: bool,
+	// 手动交接：让 ap 生成交接文档并创建新 session。prompt 作为聚焦提示词
+	// （可为空）走命令行，进程不再从 stdin 读提示。
+	handoff:     bool,
 	model:       Maybe(string),
 	agent:       Maybe(string),
 	max_steps:   Maybe(int),
@@ -168,7 +171,7 @@ turn_run :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callbac
 		return
 	}
 
-	command := build_agent_command(options)
+	command := build_agent_command(options, prompt)
 	defer delete(command)
 
 	stdin_r, stdin_w, e1 := os.pipe()
@@ -229,8 +232,12 @@ turn_run :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callbac
 	os.close(stderr_w)
 
 	// 提示词走 stdin；关写端就是 --print0 的 EOF 信号。
-	if !platform.write_all(stdin_w, transmute([]byte)prompt) {
-		append_stderr_line(&state.stderr_log, "cannot write prompt to agent stdin")
+	// --handoff 的聚焦提示词已经进了命令行，此时不写 stdin：ap 不读它，
+	// 大提示词会把管道写满。
+	if !options.handoff {
+		if !platform.write_all(stdin_w, transmute([]byte)prompt) {
+			append_stderr_line(&state.stderr_log, "cannot write prompt to agent stdin")
+		}
 	}
 	os.close(stdin_w)
 

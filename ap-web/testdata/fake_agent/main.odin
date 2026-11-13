@@ -25,6 +25,24 @@ main :: proc() {
 	}
 	text := string(prompt[:])
 
+	// 交接走命令行参数（不带 --print0），stdin 只有 EOF；按参数分场景。
+	handoff := false
+	for arg in os.args {
+		if strings.has_prefix(arg, "--handoff") {
+			handoff = true
+		}
+	}
+	if handoff {
+		emit(`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_handoff_src","parent_session_id":null}`)
+		emit(`{"v":1,"seq":1,"ts":2,"type":"handoff","reason":"manual","content":"doc","usage":{"input_tokens":5,"output_tokens":3,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":8},"source_events":2}`)
+		emit(`{"v":1,"seq":2,"ts":3,"type":"session_end","reason":"exit","usage":{"input_tokens":5,"output_tokens":3,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":8}}`)
+		// 新 session 的 session_start 必须带新 id，消费方据此切换。
+		emit(`{"v":1,"seq":0,"ts":4,"type":"session_start","session_id":"ses_handoff_new","parent_session_id":null}`)
+		emit(`{"v":1,"seq":1,"ts":5,"type":"user_message","content":"## 上一会话交接\n来源 session: ses_handoff_src\n\ndoc"}`)
+		emit(`{"v":1,"seq":2,"ts":6,"type":"session_end","reason":"exit","usage":{"input_tokens":5,"output_tokens":3,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":8}}`)
+		os.exit(0)
+	}
+
 	switch {
 	case strings.contains(text, "[scenario:stderr]"):
 		fmt.eprintln("fake: boom")

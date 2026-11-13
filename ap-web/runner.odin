@@ -23,11 +23,16 @@ Turn_Request :: struct {
 	agent:       Maybe(string),
 	max_steps:   Maybe(int),
 	max_tokens:  Maybe(int),
+	// 手动交接：让 ap 生成交接文档并创建新 session。prompt 作为聚焦提示词，
+	// 可以为空；此时 session 必须已经有真实的 session id。
+	handoff:     bool,
 }
 
 Runner_Start :: enum {
 	Started,
 	Busy, // 该 session 已有 turn 在跑（API 映射 409 turn_running）
+	// handoff 要求 session 已经落盘（CLI 的 --handoff 必须配合 -s）
+	No_Session,
 	Shutting_Down, // 服务正在退出，不再接受新 turn
 	Failed, // 线程创建失败等内部错误
 }
@@ -329,6 +334,9 @@ runner_start_turn :: proc(
 	if rt.running {
 		return .Busy, "", "a turn is already running in this session"
 	}
+	if request.handoff && len(rt.session_id) == 0 {
+		return .No_Session, "", "handoff requires a session that already has a transcript"
+	}
 	runner_reap_thread_locked(rt)
 	rt.running = true
 	rt.turn = nil
@@ -359,6 +367,7 @@ runner_start_turn :: proc(
 			max_steps = max_steps,
 			max_tokens = max_tokens,
 			cancel = &rt.cancel,
+			handoff = request.handoff,
 			// 结果在 turn 线程分配、在 runner 线程释放：所有权交给 heap，不依赖线程 context。
 			allocator = runtime.heap_allocator(),
 		},
@@ -512,6 +521,12 @@ runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: stri
 	case protocol.EVENT_TURN_START, protocol.EVENT_TURN_END:
 		if ev.turn > 0 {
 			runner_set_turn(app, job.key, ev.turn)
+		}
+	case protocol.EVENT_HANDOFF:
+		// 没有聚焦提示词的交接不产生 turn_end，stop_reason 只能从事件本身取；
+		// 有聚焦提示词时新 session 的 turn_end 会随后覆盖它。
+		if len(job.stop_reason) == 0 {
+			job.stop_reason = strings.clone(protocol.STOP_REASON_HANDOFF, runtime.heap_allocator())
 		}
 	case protocol.EVENT_SESSION_END:
 		if len(ev.reason) > 0 {

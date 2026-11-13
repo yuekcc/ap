@@ -204,7 +204,7 @@ test_build_agent_command_minimal :: proc(t: ^testing.T) {
 		config_dir = "C:/cfg",
 		cwd        = "C:/proj",
 	}
-	command := build_agent_command(&options)
+	command := build_agent_command(&options, "")
 	defer delete(command)
 
 	expect_command(t, command[:], {"C:/bin/ap.exe", "--print0", "--output-format", "stream-json", "--config-dir", "C:/cfg"})
@@ -224,7 +224,7 @@ test_build_agent_command_forwards_options :: proc(t: ^testing.T) {
 		max_tokens   = 1000,
 		verbose      = true,
 	}
-	command := build_agent_command(&options)
+	command := build_agent_command(&options, "")
 	defer delete(command)
 
 	expect_command(
@@ -250,6 +250,32 @@ test_build_agent_command_forwards_options :: proc(t: ^testing.T) {
 			"C:/cfg",
 			"--verbose",
 		},
+	)
+}
+
+// handoff：聚焦提示词走 --handoff=<文本>；不能再带 --print0（CLI 拒绝两者同时出现）。
+@(test)
+test_build_agent_command_handoff :: proc(t: ^testing.T) {
+	options := Turn_Options {
+		agent_bin  = "C:/bin/ap.exe",
+		session_id = "ses_1",
+		config_dir = "C:/cfg",
+		handoff    = true,
+	}
+	command := build_agent_command(&options, "-keep going")
+	defer delete(command)
+	expect_command(
+		t,
+		command[:],
+		{"C:/bin/ap.exe", "--handoff=-keep going", "--output-format", "stream-json", "-s", "ses_1", "--config-dir", "C:/cfg"},
+	)
+
+	empty := build_agent_command(&options, "")
+	defer delete(empty)
+	expect_command(
+		t,
+		empty[:],
+		{"C:/bin/ap.exe", "--handoff", "--output-format", "stream-json", "-s", "ses_1", "--config-dir", "C:/cfg"},
 	)
 }
 

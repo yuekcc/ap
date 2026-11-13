@@ -23,6 +23,9 @@
 - 多 session 并发：不同 project、不同标签页可以同时跑 turn；同一 session 仍单飞，重复提交返回 409 `turn_running`
 - 单轮取消按 session 生效；SSE 按 `session_key` 过滤，只收到本标签页的事件
 - 工作目录选择：Windows 调用原生 `IFileDialog`，确认后在该目录打开一个新 session；不再中断其他目录的运行中 turn
+- 顶栏两个按钮：在当前工作目录打开文件管理器（Windows `explorer`、macOS `open`、Linux `xdg-open`）和终端（Windows `wt.exe`、macOS `Terminal`、Linux 常见终端模拟器）
+- 输入框下方的「交接」按钮：生成交接文档并创建新 session，输入框文字作为新 session 的首个提示词；交接后页面自动切到新 session
+- 工作区顶栏显示当前 session 的累计 token 用量，悬停查看输入、输出、缓存与推理明细
 - 默认只监听 `127.0.0.1`；非回环监听会打印安全警告
 - 前端 `dist/` 已提交，只改 Odin 代码时无需安装 Node
 
@@ -120,11 +123,13 @@ Session:
 | GET | `/api/history?session_id=<id>&cwd=<dir>` | – | `{events: [...]}` | 从该 project 的 transcript 重放历史，解析 blob 引用 |
 | GET | `/api/cwd` | – | `{cwd}` | 默认工作目录（启动目录 / `--cwd`），不随会话切换变化 |
 | POST | `/api/cwd/pick` | – | `{cwd}` | 弹出目录选择框；取消 409，Unix 501；只返回路径，不改变任何运行态 |
-| POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409，不同 session/project 可并发 |
+| POST | `/api/cwd/reveal` | `{cwd?}` | `{cwd}` | 在本机文件管理器打开该目录（缺省用默认 project）；不改变运行态 |
+| POST | `/api/cwd/terminal` | `{cwd?}` | `{cwd}` | 在本机终端打开该目录（缺省用默认 project）；启动失败 500 `open_failed` |
+| POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?, handoff?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409，不同 session/project 可并发。`handoff: true` 时等价于 `ap --handoff`：`prompt` 变成新 session 的首个提示词（可为空，空表示只交接），聚焦提示词上限 8KB |
 | DELETE | `/api/turn?session_key=<key>` | – | `202 {cancelled}` | 取消该 session 的 turn（终止进程树） |
 | GET | `/api/events?session_key=<key>` | – | SSE 流 | 只订阅该 session；不带参数订阅全部 |
 
-其他常见状态码：prompt 为空 400、prompt 超过 1MB 413、同一 session 已有 turn 409、`cwd` 不存在 400 `invalid_cwd`、关停中启动 turn 503、方法不匹配 405、未知端点 404。
+其他常见状态码：prompt 为空 400、prompt 超过 1MB 413、同一 session 已有 turn 409、handoff 时 session 还没落盘 409 `handoff_unavailable`、`cwd` 不存在 400 `invalid_cwd`、关停中启动 turn 503、方法不匹配 405、未知端点 404。
 
 ### SSE
 
@@ -145,6 +150,7 @@ Session:
 - 侧栏按 `cwd` 分组；点击组内 session 会切换当前 project，并载入对应 transcript。
 - 组标题右侧的 `+` 在该目录新建 session，顶部「新会话」在当前 project 新建。
 - Windows 上页面里的「选择目录」调用服务器端原生对话框；确认后前端把该路径作为新 project 打开，并在其中分配一个新 slot。服务器不再修改进程级 cwd，也不会清空其他 session。
+- 顶栏右侧的文件管理器 / 终端按钮通过 `POST /api/cwd/reveal`、`POST /api/cwd/terminal` 让服务器在该 session 的 `cwd` 里拉起外部程序，同样不影响运行中的 turn。
 - Unix 没有统一的目录对话框，`POST /api/cwd/pick` 返回 501，前端隐藏入口。
 - ap-web 重启后回到启动目录；各 project 的 transcript 仍留在 `$AP_CONFIG/projects/<hash>` 下，可通过侧栏继续打开。
 
@@ -177,15 +183,18 @@ ap-web/
 ├── runner.odin          # session registry、按 session 分飞、取消、stderr 缓存、turn_done
 ├── assets.odin          # 内置 dist/ + ETag + 磁盘模式
 ├── pickdir.odin         # Windows IFileDialog 目录选择
+├── opendir.odin         # 在工作目录打开文件管理器 / 终端
 ├── net_windows.odin     # Windows socket / 监听 / DPI / 关停信号
 ├── net_unix.odin        # Unix socket / 监听 / 关停信号
-├── index.html           # Alpine 模板
+├── index.html           # Alpine 模板（图标是 <svg data-icon="…"> 占位）
 ├── frontend/            # 前端源码（api/sse/store/render/markdown/app）
 ├── dist/                # esbuild 产物，提交进仓库
 └── build.mjs            # esbuild 构建脚本
 ```
 
-前端使用 Alpine.js、原生 `fetch`/`EventSource`、`markdown-exit` 和 `github-markdown-css`，由 esbuild 打包成单个 IIFE；不依赖 CDN。
+前端使用 Alpine.js、原生 `fetch`/`EventSource`、`markdown-exit`、`github-markdown-css` 和 `bootstrap-icons`，由 esbuild 打包成单个 IIFE；不依赖 CDN。`bootstrap-icons` 只是构建期依赖（`devDependencies`），不会进 bundle。
+
+`index.html` 里的图标写成空的 `<svg … data-icon="folder2"></svg>`（值就是 `bootstrap-icons/icons/` 下的文件名），`build.mjs` 在构建时把对应 SVG 的内层路径内联进 `dist/index.html`。因此运行时不请求图标字体或 sprite，图标也不额外落成 dist 文件；名字写错时构建直接失败。`ap`、`a` 这类文字标记不算图标，仍是文本。
 
 ## 测试
 
@@ -207,4 +216,4 @@ npm --prefix ap-web test
 - 同一 session 同一时刻只允许一个 turn；不同 session（不同标签页）可以并发，`Last-Event-ID` 断点续传、diff 渲染、session fork/删除等属于后续阶段。
 - Windows 取消是整棵进程树强制终止，transcript 可能停在中间事件；Unix 走 SIGTERM，收尾事件更完整。
 
-更详细的设计、协议语义和取舍见 [docs/web.md](../docs/web.md)；ap 本身的构建、配置与使用见仓库根目录的 [README.md](../README.md)。
+更详细的设计、协议语义和取舍见 [docs/11-web.md](../docs/11-web.md)；ap 本身的构建、配置与使用见仓库根目录的 [README.md](../README.md)。

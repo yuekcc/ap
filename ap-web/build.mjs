@@ -1,9 +1,9 @@
 // ap-web 前端构建：frontend/main.js -> dist/app.js（含 Alpine，bundle + minify），
-// 从同一个 bundle 抽出 dist/styles.css，并把 index.html 拷进 dist/。
+// 从同一个 bundle 抽出 dist/styles.css，并把 index.html 写进 dist/（图标在这一步内联）。
 // dist/ 是提交进仓库的产物，Odin 侧 #load_directory("dist") 在编译期直接读它。
 import { build, context } from "esbuild";
-import { copyFile, mkdir, rename, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,9 +11,38 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, "dist");
 const watch = process.argv.includes("--watch");
 
+// index.html 里的图标写成空的 <svg ... data-icon="NAME"></svg>（NAME 是
+// bootstrap-icons 的文件名），构建时把对应 SVG 的内层路径塞进去：图标随 dist
+// 一起编进二进制，运行时不请求字体或 sprite，也不依赖 CDN。
+const ICON_TAG_RE = /<svg\b[^>]*\bdata-icon="([^"]+)"[^>]*><\/svg>/g;
+const iconCache = new Map();
+
+function iconInner(name) {
+	const cached = iconCache.get(name);
+	if (cached !== undefined) return cached;
+	const file = path.join(root, "node_modules", "bootstrap-icons", "icons", `${name}.svg`);
+	if (!existsSync(file)) {
+		throw new Error(`找不到图标 ${name}：${path.relative(root, file)} 不存在（bootstrap-icons 是否已安装？）`);
+	}
+	const raw = readFileSync(file, "utf8");
+	const start = raw.indexOf(">");
+	const end = raw.lastIndexOf("</svg>");
+	if (start < 0 || end <= start) throw new Error(`${name}.svg 不是预期的 SVG 结构`);
+	const inner = raw.slice(start + 1, end).trim();
+	iconCache.set(name, inner);
+	return inner;
+}
+
+function inlineIcons(html) {
+	return html.replace(ICON_TAG_RE, (tag, name) =>
+		tag.replace("></svg>", `>${iconInner(name)}</svg>`),
+	);
+}
+
 async function copyIndex() {
 	await mkdir(dist, { recursive: true });
-	await copyFile(path.join(root, "index.html"), path.join(dist, "index.html"));
+	const source = await readFile(path.join(root, "index.html"), "utf8");
+	await writeFile(path.join(dist, "index.html"), inlineIcons(source));
 }
 
 // esbuild 把 main.js import 的 CSS 抽成 app.css（旧版本命名可能是 app.js.css），

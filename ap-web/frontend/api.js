@@ -31,7 +31,8 @@ export function cwdPath(path, cwd) {
 
 // 导出的纯函数便于单元测试；session_key/cwd 只在非空时进入请求体。
 export function turnBody(payload) {
-	const body = { prompt: payload.prompt };
+	const body = { prompt: payload.prompt ?? "" };
+	if (payload.handoff) body.handoff = true;
 	if (payload.session_key) body.session_key = payload.session_key;
 	if (payload.cwd) body.cwd = payload.cwd;
 	for (const key of TURN_OPTION_KEYS) {
@@ -105,6 +106,11 @@ export const api = {
 		),
 	cwd: () => request("/api/cwd"),
 	pickCwd: () => request("/api/cwd/pick", { method: "POST" }),
+	// 打开外部程序：cwd 为空时由服务端回落到默认 project。
+	openFiles: (cwd) =>
+		request("/api/cwd/reveal", { method: "POST", body: cwd ? { cwd } : undefined }),
+	openTerminal: (cwd) =>
+		request("/api/cwd/terminal", { method: "POST", body: cwd ? { cwd } : undefined }),
 	startTurn: (payload) => request("/api/turn", { method: "POST", body: turnBody(payload) }),
 	cancelTurn: (sessionKey) =>
 		request(sessionPath("/api/turn", sessionKey), { method: "DELETE" }),

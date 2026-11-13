@@ -79,10 +79,25 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error) {
 }
 
 // 提示词走 stdin，stdout 输出 stream-json。服务端白名单映射，不拼接 shell。
-build_agent_command :: proc(options: ^Turn_Options, allocator := context.allocator) -> [dynamic]string {
+// handoff 模式反过来：聚焦提示词走 --handoff 参数，并且不能带 --print0
+// （CLI 明确拒绝这两者同时出现）。
+build_agent_command :: proc(
+	options: ^Turn_Options,
+	prompt: string,
+	allocator := context.allocator,
+) -> [dynamic]string {
 	cmd := make([dynamic]string, 0, 16, allocator)
 	append(&cmd, options.agent_bin)
-	append(&cmd, "--print0")
+	if options.handoff {
+		// 用 --handoff=<文本> 的内联形式：以 - 开头的提示词也能安全传入。
+		if len(prompt) > 0 {
+			append(&cmd, fmt.tprintf("--handoff=%s", prompt))
+		} else {
+			append(&cmd, "--handoff")
+		}
+	} else {
+		append(&cmd, "--print0")
+	}
 	append(&cmd, "--output-format", "stream-json")
 	if len(options.session_id) > 0 {
 		append(&cmd, "-s", options.session_id)

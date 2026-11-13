@@ -303,6 +303,7 @@ run :: proc(args: []string) -> int {
 		}
 		// 新 session 只承载交接文档，不跑 turn。仍然要写 session_end，
 		// 否则下次恢复会误判成异常退出。
+		write_handoff_start(&out, handoff)
 		handoff_end, close_err := apcore.session_close(
 			&handoff.session,
 			{reason = protocol.SESSION_END_EXIT},
@@ -341,7 +342,19 @@ run :: proc(args: []string) -> int {
 
 // 一次交接创建出的新 session。close 在调用方跑完它的首个 turn 之后执行。
 Handoff_Session :: struct {
-	session: apcore.Session,
+	session:      apcore.Session,
+	// session_open 产出的 stream-json 首行；必须在它的 session_end 之前写出。
+	initial_line: string,
+}
+
+// stream-json 的消费者（例如 ap-web 的 runner）靠新 session 的 session_start
+// 把标签页切到交接后的 session；text/json 不需要这一行。
+write_handoff_start :: proc(out: ^Output_State, handoff: Handoff_Session) {
+	if out.format != .Stream_Json || len(handoff.initial_line) == 0 {
+		return
+	}
+	write_stdout(transmute([]byte)handoff.initial_line)
+	write_stdout(transmute([]byte)string("\n"))
 }
 
 // 新 session 走正常的 new session 路径：重新组装 system prompt，用当前工具集、
@@ -372,6 +385,7 @@ open_handoff_session :: proc(
 		return out, err
 	}
 	out.session = session
+	out.initial_line = info.initial_line
 	return out, apcore.ok_error()
 }
 
@@ -417,6 +431,7 @@ run_manual_handoff :: proc(
 		apcore.log_error("%s", oerr.message)
 		return exit_code_for(oerr.kind)
 	}
+	write_handoff_start(out, opened)
 
 	payload: Maybe(Final_Handoff) = Final_Handoff {
 		reason     = apcore.HANDOFF_REASON_MANUAL,

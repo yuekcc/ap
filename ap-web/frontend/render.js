@@ -57,6 +57,67 @@ export function singleLine(text) {
 	return String(text ?? "").replace(/[\n\r\t]+/g, " ").trim();
 }
 
+// ---- token 用量 ----
+// usage 的字段可能为 null（provider 没给），不能用 0 冒充缺失；累加时按
+// 「两边都缺才算缺」处理，展示时再退回 input+output。
+
+const USAGE_KEYS = [
+	"input_tokens",
+	"output_tokens",
+	"cached_tokens",
+	"reasoning_tokens",
+	"total_tokens",
+];
+
+function tokenField(value) {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function usageFrom(raw) {
+	if (!raw || typeof raw !== "object") return null;
+	const usage = {};
+	let has = false;
+	for (const key of USAGE_KEYS) {
+		usage[key] = tokenField(raw[key]);
+		has = has || usage[key] !== null;
+	}
+	return has ? usage : null;
+}
+
+export function usageAdd(left, right) {
+	const a = left ?? {};
+	const b = right ?? {};
+	const usage = {};
+	let has = false;
+	for (const key of USAGE_KEYS) {
+		const x = tokenField(a[key]);
+		const y = tokenField(b[key]);
+		usage[key] = x === null && y === null ? null : (x ?? 0) + (y ?? 0);
+		has = has || usage[key] !== null;
+	}
+	return has ? usage : null;
+}
+
+// 累计用量的总数：优先 provider 给的 total，缺了才用 input+output 兜底。
+export function usageTotal(usage) {
+	if (!usage) return null;
+	const total = tokenField(usage.total_tokens);
+	if (total !== null) return total;
+	const input = tokenField(usage.input_tokens);
+	const output = tokenField(usage.output_tokens);
+	if (input === null && output === null) return null;
+	return (input ?? 0) + (output ?? 0);
+}
+
+// 顶栏 chip 的紧凑写法：1.2k / 3.4M，避免长数字挤掉模型名。
+export function formatTokenCount(value) {
+	const count = tokenField(value);
+	if (count === null) return "";
+	if (count < 1000) return String(count);
+	if (count < 1000000) return `${(count / 1000).toFixed(1)}k`;
+	return `${(count / 1000000).toFixed(2)}M`;
+}
+
 // 工具卡片头部的耗时：1s 以内保留毫秒，以上换成一位小数的秒，避免长串数字撑开头部。
 export function formatDuration(ms) {
 	if (ms === null || ms === undefined || ms === "") return "";
@@ -222,6 +283,7 @@ export function createState(overrides = {}) {
 		lastSeq: 0,
 		localIds: 0,
 		sessionId: null,
+		usage: null,
 		turn: 0,
 		running: false,
 		thinking: false,
@@ -485,12 +547,35 @@ export function applyEvent(state, event, mode = "live") {
 				thinking: true,
 				turn: typeof event.turn === "number" ? event.turn : state.turn,
 			};
-		case "turn_end":
-			return { ...applyTurnEnd(state, event), thinking: false };
-		case "session_start":
-			return event.session_id
-				? { ...state, sessionId: event.session_id }
-				: state;
+		case "turn_end": {
+			const usage = usageFrom(event.usage);
+			return {
+				...applyTurnEnd(state, event),
+				thinking: false,
+				usage: usage ? usageAdd(state.usage, usage) : state.usage,
+			};
+		}
+		case "session_end": {
+			// session_end.usage 是整份 transcript 的累计值，直接覆盖比累加可靠
+			// （崩溃恢复时可能缺少前几轮的 turn_end）。
+			const usage = usageFrom(event.usage);
+			return usage ? { ...state, usage } : state;
+		}
+		case "session_start": {
+			const id = typeof event.session_id === "string" ? event.session_id : "";
+			if (!id) return state;
+			if (state.sessionId && state.sessionId !== id) {
+				// 交接（手动或自动）把工作交给了新 session：旧 transcript 不再属于
+				// 这个标签页。运行时标志保留，避免 turn 中途闪一下「空闲」。
+				const fresh = createState({
+					sessionId: id,
+					running: state.running,
+					thinking: state.thinking,
+				});
+				return addNotice(fresh, `已交接，新会话 ${id}`, "muted");
+			}
+			return { ...state, sessionId: id };
+		}
 		default:
 			return state;
 	}

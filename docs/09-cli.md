@@ -54,6 +54,7 @@
 - `message_update`：文本或工具参数的增量。
 - `tool_execution_start`、`tool_execution_update`、`tool_execution_end`：工具过程。
 - `turn_end`、`session_end`：本轮和会话结束。
+- 发生交接时，流里还有 `handoff` 事件、源会话的 `session_end`，以及新会话的 `session_start` 与 `session_end`。消费方靠新 `session_start` 的 id 跟上交接后的会话。
 
 如果你不是在写前端或集成，用 `text` 或 `json` 就够了。事件字段属于程序接口，不是人读格式。
 

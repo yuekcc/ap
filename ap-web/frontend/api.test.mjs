@@ -23,6 +23,16 @@ test("turnBody 透传 session_key 与 cwd，空值不写进请求体", () => {
 	);
 });
 
+test("turnBody 支持 handoff：空提示词合法，handoff 只写 true", () => {
+	assert.deepEqual(turnBody({ prompt: "", handoff: true, session_key: "k", cwd: "/w" }), {
+		prompt: "",
+		handoff: true,
+		session_key: "k",
+		cwd: "/w",
+	});
+	assert.deepEqual(turnBody({ prompt: "hi", handoff: false }), { prompt: "hi" });
+});
+
 test("eventsUrl 按 session_key 过滤，空 key 保持旧的全量订阅", () => {
 	assert.equal(eventsUrl("web_new_1"), "/api/events?session_key=web_new_1");
 	assert.equal(eventsUrl("ses a&b"), "/api/events?session_key=ses%20a%26b");

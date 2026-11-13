@@ -97,7 +97,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | TUI | `ap-tui/` | `docs/tui.md`、`tui_test.odin` |
 | 行编辑器 | `lineedit/` | `lineedit/*_test.odin`、`docs/internal/lineedit.md` |
 | Web 后端 | `ap-web/server.odin`、`api.odin`、`sse.odin`、`runner.odin` | `docs/web.md`、对应 `*_test.odin` |
-| Web 前端 | `ap-web/frontend/` | 重新生成 `ap-web/dist/`，跑 `npm --prefix ap-web test`；不要手改 `dist/` |
+| Web 前端 | `ap-web/frontend/`、`ap-web/index.html` | 重新生成 `ap-web/dist/`，跑 `npm --prefix ap-web test`；不要手改 `dist/`；图标是 `data-icon` 占位，由 `build.mjs` 从 `bootstrap-icons` 内联 |
 | MAGI 决策 | `magi/`、`cmd/magi-cli/` | `docs/magi.md`、`docs/README.md`、README 的 MAGI 段落 |
 | 包边界 | `tools/check-deps.sh`、`tools/check-deps.ps1` | `docs/dependencies.md`、`docs/architecture.md` |
 

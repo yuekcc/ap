@@ -9,9 +9,11 @@ import {
 	applyEvent,
 	applyTurnDone,
 	createState,
+	formatTokenCount,
 	groupSessionsByDay,
 	ingestHistory,
 	sessionTitle,
+	usageTotal,
 } from "./render.js";
 
 function asArray(value) {
@@ -41,10 +43,31 @@ export function createStore() {
 		config: null,
 		projects: [],
 		projectCwd: null,
+		usage: null,
 		draft: "",
 
 		get currentTitle() {
 			return this.sessionId ? sessionTitle({ session_id: this.sessionId }) : "新会话";
+		},
+
+		// 顶栏 chip：本 session 的累计 token 用量（来自 session_end / turn_end）。
+		get usageLabel() {
+			const total = usageTotal(this.usage);
+			return total === null ? "" : `${formatTokenCount(total)} tokens`;
+		},
+
+		get usageTitle() {
+			const usage = this.usage;
+			if (!usage) return "";
+			const parts = [];
+			if (typeof usage.input_tokens === "number") parts.push(`输入 ${usage.input_tokens}`);
+			if (typeof usage.output_tokens === "number") parts.push(`输出 ${usage.output_tokens}`);
+			if (typeof usage.cached_tokens === "number") parts.push(`缓存 ${usage.cached_tokens}`);
+			if (typeof usage.reasoning_tokens === "number") {
+				parts.push(`推理 ${usage.reasoning_tokens}`);
+			}
+			if (typeof usage.total_tokens === "number") parts.push(`合计 ${usage.total_tokens}`);
+			return parts.join(" · ");
 		},
 
 		// 顶部工作空间标签：服务端的 project 列表 + 当前正在使用的目录。
@@ -232,6 +255,7 @@ export function createStore() {
 		store.lastSeq = view.lastSeq;
 		store.running = view.running;
 		store.thinking = view.running && view.thinking === true;
+		store.usage = view.usage;
 	}
 
 	return store;

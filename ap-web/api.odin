@@ -15,6 +15,10 @@ import "core:time"
 
 MAX_PROMPT_BYTES :: 1024 * 1024
 
+// handoff 的聚焦提示词走命令行（ap 的 --handoff=<文本>），不能像正常 turn
+// 那样从 stdin 传 1MB：Windows 的整条命令行上限是 32767 字符，这里留足余量。
+MAX_HANDOFF_PROMPT_BYTES :: 8192
+
 // 路由表：server 的 register_route 需要动态数组分配，不能放在 contextless
 // 的 @(init) 里，所以 main 在开始 accept 之前显式调用一次；测试也用它重置。
 API_ROUTES :: []Http_Route {
@@ -28,6 +32,8 @@ API_ROUTES :: []Http_Route {
 	{.Get, "/api/history", false, api_history},
 	{.Get, "/api/cwd", false, api_cwd},
 	{.Post, "/api/cwd/pick", false, api_cwd_pick},
+	{.Post, "/api/cwd/reveal", false, api_cwd_reveal},
+	{.Post, "/api/cwd/terminal", false, api_cwd_terminal},
 	{.Post, "/api/turn", false, api_turn_start},
 	{.Delete, "/api/turn", false, api_turn_cancel},
 	{.Get, "/api/events", false, api_events},
@@ -646,6 +652,8 @@ Api_Turn_Body :: struct {
 	agent:       Maybe(string) `json:"agent"`,
 	max_steps:   Maybe(int)    `json:"max_steps"`,
 	max_tokens:  Maybe(int)    `json:"max_tokens"`,
+	// true 表示这一轮是手动交接：prompt 变成新 session 的聚焦提示词（可为空）。
+	handoff:     bool          `json:"handoff"`,
 }
 
 api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
@@ -655,13 +663,23 @@ api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Res
 		api_error(response, 400, "invalid_json", "request body must be a JSON object")
 		return
 	}
-	if len(strings.trim_space(body.prompt)) == 0 {
-		api_error(response, 400, "prompt_empty", "prompt is required")
-		return
-	}
-	if len(body.prompt) > MAX_PROMPT_BYTES {
-		api_error(response, 413, "prompt_too_large", "prompt must be at most 1MB")
-		return
+	prompt := body.prompt
+	if body.handoff {
+		// 交接时提示词只是聚焦点，空字符串表示只生成交接文档、不跑 turn。
+		prompt = strings.trim_space(body.prompt)
+		if len(prompt) > MAX_HANDOFF_PROMPT_BYTES {
+			api_error(response, 413, "prompt_too_large", "handoff prompt must be at most 8KB")
+			return
+		}
+	} else {
+		if len(strings.trim_space(prompt)) == 0 {
+			api_error(response, 400, "prompt_empty", "prompt is required")
+			return
+		}
+		if len(prompt) > MAX_PROMPT_BYTES {
+			api_error(response, 413, "prompt_too_large", "prompt must be at most 1MB")
+			return
+		}
 	}
 	if steps, ok := body.max_steps.?; ok && steps <= 0 {
 		api_error(response, 400, "invalid_request", "max_steps must be a positive integer")
@@ -686,13 +704,14 @@ api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Res
 	}
 
 	request_options := Turn_Request {
-		prompt      = body.prompt,
+		prompt      = prompt,
 		session_key = strings.trim_space(body.session_key),
 		cwd         = project.root,
 		model       = non_empty_maybe(body.model),
 		agent       = non_empty_maybe(body.agent),
 		max_steps   = body.max_steps,
 		max_tokens  = body.max_tokens,
+		handoff     = body.handoff,
 	}
 	status, key, message := runner_start_turn(app, request_options, context.temp_allocator)
 	switch status {
@@ -700,6 +719,8 @@ api_turn_start :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Res
 		api_json(response, 202, Api_Accepted{accepted = true, session_key = key})
 	case .Busy:
 		api_error(response, 409, "turn_running", message)
+	case .No_Session:
+		api_error(response, 409, "handoff_unavailable", message)
 	case .Shutting_Down:
 		api_error(response, 503, "shutting_down", message)
 	case .Failed:

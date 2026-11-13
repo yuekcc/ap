@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const indexPath = fileURLToPath(new URL("../index.html", import.meta.url));
@@ -113,6 +114,69 @@ test("顶部是工作空间标签，侧栏承载新对话与当前空间的对�
 	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the sidebar");
 });
 
+test("顶栏右侧是在工作目录打开文件管理器与终端的两个按钮", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+	const titlebarStart = html.indexOf('<header class="titlebar">');
+	const titlebarEnd = html.indexOf("</header>");
+	assert.ok(titlebarStart >= 0 && titlebarEnd > titlebarStart, "index.html must have a titlebar");
+	const titlebar = html.slice(titlebarStart, titlebarEnd);
+
+	assert.ok(!titlebar.includes("titlebar__env"), "环境标签被两个操作按钮取代");
+	assert.ok(!/>本地</.test(titlebar), "titlebar must not keep the 本地 label");
+
+	assert.ok(titlebar.includes('@click="openWorkdirFiles()"'), "打开文件管理器是一个独立按钮");
+	assert.ok(titlebar.includes('@click="openWorkdirTerminal()"'), "打开终端是一个独立按钮");
+	assert.ok(titlebar.includes('data-icon="folder2-open"'), "文件管理器按钮使用文件夹图标");
+	assert.ok(titlebar.includes('data-icon="terminal"'), "终端按钮使用终端图标");
+	assert.ok(
+		titlebar.includes(':disabled="!$store.ap.projectCwd"'),
+		"没有工作目录时按钮不可点",
+	);
+
+	assert.ok(css.includes(".titlebar__open-btn"), "titlebar buttons need their own style");
+	assert.ok(
+		!css.includes(".titlebar__env"),
+		"旧的本地标签样式必须一起删掉",
+	);
+});
+
+test("键位提示进 placeholder，交接入口在输入框下方", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	assert.ok(html.includes("Enter 发送 · Shift+Enter 换行"), "键位提示写进 placeholder");
+	assert.ok(
+		html.includes('placeholder="给 ap 一个提示词…（Enter 发送 · Shift+Enter 换行）"'),
+		"placeholder 同时保留用途提示",
+	);
+	assert.ok(!html.includes('class="composer__hint"'), "独立的键位提示行已移除");
+	assert.ok(!css.includes(".composer__hint"), "旧提示行样式一并删除");
+
+	const composerStart = html.indexOf('<footer class="composer">');
+	assert.ok(composerStart > 0, "index.html must have a composer");
+	const composer = html.slice(composerStart);
+	assert.ok(composer.includes('@click="sendHandoff()"'), "交接入口放在输入区");
+	assert.ok(
+		composer.includes(
+			':disabled="$store.ap.running || $store.ap.loading || !$store.ap.sessionId"',
+		),
+		"没有真实 session 时不能交接",
+	);
+	assert.ok(css.includes(".composer__handoff"), "交接按钮有自己的样式");
+});
+
+test("工作区顶栏展示 token 用量", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const topbarStart = html.indexOf('<header class="topbar">');
+	const topbarEnd = html.indexOf("</header>", topbarStart);
+	assert.ok(topbarStart >= 0 && topbarEnd > topbarStart, "index.html must have a topbar");
+	const topbar = html.slice(topbarStart, topbarEnd);
+	assert.ok(topbar.includes('class="chip chip--usage"'), "用量和模型/agent 一样是 chip");
+	assert.ok(topbar.includes("$store.ap.usageLabel"), "顶栏展示累计 token");
+	assert.ok(topbar.includes("$store.ap.usageTitle"), "悬停能看到输入/输出明细");
+});
+
 test("只提供浅色主题", async () => {
 	const css = await readFile(stylesPath, "utf8");
 	assert.ok(!css.includes("prefers-color-scheme: dark"), "no dark theme");
@@ -173,6 +237,35 @@ test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐�
 
 	// 动效必须能被减少动态偏好关掉。
 	assert.ok(css.includes("prefers-reduced-motion: reduce"), "motion must respect reduced-motion");
+});
+
+test("图标来自 bootstrap-icons：源码只留 data-icon 占位，dist 已内联", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const names = [...html.matchAll(/data-icon="([^"]+)"/g)].map((match) => match[1]);
+	assert.ok(names.length >= 5, "index.html must reference bootstrap icons");
+	assert.ok(
+		!/<svg[^>]*>\s*<path/.test(html),
+		"icon paths must not be hand-written in index.html anymore",
+	);
+	for (const match of html.matchAll(/<svg[^>]*data-icon="[^"]+"[^>]*>/g)) {
+		assert.ok(match[0].includes('fill="currentColor"'), "icons must inherit the surrounding color");
+	}
+
+	// 图标名必须是 bootstrap-icons 的真实文件名；没装依赖时跳过这半段。
+	if (existsSync(new URL("../node_modules/bootstrap-icons/icons/", import.meta.url))) {
+		for (const name of new Set(names)) {
+			const file = new URL(`../node_modules/bootstrap-icons/icons/${name}.svg`, import.meta.url);
+			assert.ok(existsSync(file), `bootstrap-icons/icons/${name}.svg must exist`);
+		}
+	}
+
+	// dist 是提交进仓库的产物：占位没被内联说明忘了构建。
+	const distHtml = await readFile(new URL("../dist/index.html", import.meta.url), "utf8");
+	assert.equal(
+		distHtml.match(/<svg[^>]*data-icon="[^"]+"[^>]*><\/svg>/g),
+		null,
+		"dist/index.html 的图标还没内联，先跑 npm --prefix ap-web run build",
+	);
 });
 
 test("工具卡片默认折叠，头部只留关键行与耗时；思考中在主区域居中显示动画", async () => {

@@ -9,6 +9,7 @@ import {
 	createState,
 	formatArgs,
 	formatDuration,
+	formatTokenCount,
 	groupSessionsByDay,
 	ingestHistory,
 	previewContent,
@@ -17,6 +18,8 @@ import {
 	sessionMeta,
 	sessionTitle,
 	truncateUtf8,
+	usageFrom,
+	usageTotal,
 } from "./render.js";
 
 const ev = (type, fields = {}) => ({ type, ...fields });
@@ -498,4 +501,79 @@ test("handoff 结束不当作失败", () => {
 	});
 	assert.equal(state.running, false);
 	assert.equal(state.items.length, 0);
+});
+
+test("token 用量：turn_end 累加，session_end 用累计值覆盖", () => {
+	let state = createState();
+	state = applyEvent(
+		state,
+		ev("turn_end", {
+			turn: 1,
+			stop_reason: "stop",
+			usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+		}),
+	);
+	assert.equal(usageTotal(state.usage), 12);
+
+	state = applyEvent(
+		state,
+		ev("turn_end", {
+			turn: 2,
+			stop_reason: "stop",
+			usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+		}),
+	);
+	assert.equal(usageTotal(state.usage), 18);
+
+	// session_end 是整份 transcript 的累计值，覆盖而不是再累加。
+	state = applyEvent(
+		state,
+		ev("session_end", {
+			reason: "exit",
+			usage: { input_tokens: 15, output_tokens: 3, total_tokens: 18 },
+		}),
+	);
+	assert.equal(usageTotal(state.usage), 18);
+});
+
+test("usage 缺失字段不用 0 冒充，total 缺失时退回 input+output", () => {
+	const usage = usageFrom({
+		input_tokens: 7,
+		output_tokens: null,
+		cached_tokens: null,
+		reasoning_tokens: null,
+		total_tokens: null,
+	});
+	assert.equal(usage.input_tokens, 7);
+	assert.equal(usage.output_tokens, null);
+	assert.equal(usageTotal(usage), 7);
+	assert.equal(usageFrom({}), null);
+	assert.equal(usageFrom(null), null);
+	assert.equal(usageTotal(null), null);
+
+	assert.equal(formatTokenCount(950), "950");
+	assert.equal(formatTokenCount(1234), "1.2k");
+	assert.equal(formatTokenCount(2500000), "2.50M");
+	assert.equal(formatTokenCount(null), "");
+});
+
+test("交接后的 session_start 清空旧 transcript，并保留运行态", () => {
+	let state = createState({ sessionId: "ses_old" });
+	state = applyEvent(state, ev("user_message", { content: "old" }));
+	state = applyEvent(state, ev("turn_start", { turn: 1 }));
+	state = applyEvent(state, ev("session_end", { reason: "exit", usage: { total_tokens: 9 } }));
+	assert.equal(state.running, true);
+
+	const next = applyEvent(state, ev("session_start", { session_id: "ses_new" }));
+	assert.equal(next.sessionId, "ses_new");
+	assert.equal(next.running, true, "交接瞬间不能闪成空闲");
+	assert.equal(next.usage, null, "新 session 的用量从零开始");
+	assert.equal(next.lastSeq, 0, "新 transcript 的 seq 从 1 重新开始");
+	assert.equal(next.items.length, 1);
+	assert.equal(next.items[0].kind, "notice");
+	assert.match(next.items[0].text, /已交接/);
+
+	// 同一个 session 重复 session_start（每轮 ap 都会发）不清空历史。
+	const again = applyEvent(next, ev("session_start", { session_id: "ses_new" }));
+	assert.equal(again.items.length, 1);
 });
