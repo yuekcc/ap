@@ -6,7 +6,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 
-// dist/ 在编译期被读进 exe；dist 必须提交进仓库（见 docs/web.md「构建与运行」）。
+// dist/ 在编译期被读进 exe；它不提交进仓库，编译前必须先构建（见 docs/internal/web.md「构建与运行」）。
 EMBEDDED_FILES := #load_directory("dist")
 
 MAX_ASSET_BYTES :: 8 * 1024 * 1024

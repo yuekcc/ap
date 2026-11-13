@@ -18,13 +18,13 @@ ap 是一个用 [Odin](https://odin-lang.org/) 写的命令行 coding agent。�
 
 ## 快速开始
 
-支持 Windows、Linux 和 macOS，shell 统一使用 Bash。需要 Odin nightly（开发和验证使用 `dev-2026-10-nightly:84bc3fc`）、bash 和 libcurl。Windows 的 bash 由 Git for Windows 提供。Node 和 npm 只在修改 `ap-web/frontend/` 时需要。
+支持 Windows、Linux 和 macOS，shell 统一使用 Bash。需要 Odin nightly（开发和验证使用 `dev-2026-10-nightly:84bc3fc`）、bash 和 libcurl。Windows 的 bash 由 Git for Windows 提供。`ap-web/dist/` 不提交进仓库，编译 `ap-web` 需要 Node 和 npm 先生成它。
 
 ```sh
 ./build.sh
 ```
 
-脚本会刷新 `ap-web/dist`（检测到 `npx` 时）、运行 `tools/check-deps.sh`，再编译四个入口。产物在 `build/`：`ap`、`ap-tui`、`ap-web`、`magi-cli`；Windows 为对应的 `.exe`。
+脚本会用 `npm --prefix ap-web run build` 重新生成 `ap-web/dist`、运行 `tools/check-deps.sh`，再编译四个入口。产物在 `build/`：`ap`、`ap-tui`、`ap-web`、`magi-cli`；Windows 为对应的 `.exe`。
 
 配置并运行：
 
@@ -53,7 +53,7 @@ npm --prefix ap-web test
 npm --prefix ap-web run build
 ```
 
-`ap-web/dist/` 是提交进仓库的构建产物，不要手改。
+`ap-web/dist/` 是构建产物，不提交进仓库，不要手改。
 
 ## 架构
 

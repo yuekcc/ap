@@ -24,7 +24,7 @@
 
 **提示模型未配置。** `model` 必填，即使命令行传了 `--model`。
 
-**`build.sh` 在前端构建处停下。** 先跑 `npm --prefix ap-web install`，或使用已提交的 `ap-web/dist/`。
+**`build.sh` 在前端构建处停下。** 先跑 `npm --prefix ap-web install`，确认 `npm --prefix ap-web run build` 能生成 `ap-web/dist/`；该目录不提交进仓库。
 
 **端口被占用。** 换一个端口：
 

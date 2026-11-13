@@ -7,3 +7,5 @@
 .rpi
 node_modules/
 .playwright-cli
+
+/ap-web/dist/

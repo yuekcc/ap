@@ -217,7 +217,7 @@ npm --prefix ap-web run build
 npm --prefix ap-web run watch
 ```
 
-`dist/` 提交进仓库。只改 Odin 代码时不需要 Node。
+`dist/` 不提交进仓库，编译 `ap-web` 前必须先构建它。只改 Odin 代码时不需要重装前端依赖。
 
 全量构建执行下面的命令。
 
@@ -227,12 +227,12 @@ npm --prefix ap-web run watch
 
 构建脚本按下面的顺序执行。
 
-1. 找到 `npx` 时先执行 `npm --prefix ap-web run build` 刷新 `dist/`。找不到时使用仓库里已提交的 `dist/`。
+1. 找到 `npx` 时先执行 `npm --prefix ap-web run build` 刷新 `dist/`。找不到时使用本地已有的 `dist/`，两者都没有则报错退出。
 2. 执行 `tools/check-deps.sh`。
 3. 依次构建 `cmd/ap`、`cmd/ap-tui`、`cmd/ap-web`、`cmd/magi-cli`，产物在 `build/`。
 4. Windows 的产物带 `.exe`。
 
-`#load_directory("dist")` 在编译期读取 `ap-web/dist/`。目录不存在时编译失败。这就是 `dist/` 必须提交、且前端构建要先于 Odin 构建的原因。
+`#load_directory("dist")` 在编译期读取 `ap-web/dist/`。目录不存在时编译失败。这就是前端构建必须先于 Odin 构建、且新克隆的仓库要先跑一次前端构建的原因。
 
 启动服务使用下面的命令。
 

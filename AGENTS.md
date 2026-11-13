@@ -11,21 +11,21 @@ ap 是用 Odin 写的 coding agent。`ap` 本体是一次性 CLI：一条提示�
 - Odin nightly，开发和验证使用 `dev-2026-10-nightly:84bc3fc`。nightly 的 stdlib 会变，不要依赖更新版本的 API；升级 Odin 后必须重跑完整测试。
 - Windows 需要 Git for Windows 提供 `bash.exe`。ap 会跳过 `C:\Windows\System32` 下的 WSL `bash.exe`；`AP_BASH` 可指定绝对路径。
 - Linux 和 macOS 需要系统 libcurl 开发包。Windows 使用 Odin 随附的静态 libcurl。
-- Node 和 npm 只在修改 `ap-web/frontend/` 时需要。`ap-web/dist/` 是提交进仓库的构建产物。
+- `ap-web/dist/` 是构建产物，不提交进仓库；编译 `ap-web` 前必须用 Node 和 npm 生成它。
 - 构建入口是 `./build.sh`，测试入口是 `./test.sh`。仓库没有 `build.ps1` 或 `test.ps1`，不要引用不存在的脚本。
-- 不要提交 `build/`、`tmp/`、`.ap/`、`node_modules/`、日志、真实 API key 或其他密钥。
+- 不要提交 `build/`、`tmp/`、`.ap/`、`node_modules/`、`ap-web/dist/`、日志、真实 API key 或其他密钥。
 
 ## 构建与测试
 
 ```sh
-./build.sh                 # 刷新前端（有 npx 时）、检查依赖边、编译四个入口
+./build.sh                 # 构建前端、检查依赖边、编译四个入口
 ./test.sh                  # 全部 Odin 测试 + tools/check-deps.sh
 tools/check-deps.sh        # 只检查包边界
 tools/check-deps.sh --self-test   # 验证检查器本身能抓到违规
 npm --prefix ap-web test   # 前端单元测试
 ```
 
-`build.sh` 在检测到 `npx` 时会重建前端。`ap-web/node_modules` 不存在时先跑 `npm --prefix ap-web install`，或直接 `odin build` 使用已提交的 `dist/`。
+`build.sh` 会用 `npm --prefix ap-web run build` 重建前端。`ap-web/node_modules` 不存在时先跑 `npm --prefix ap-web install`；`dist/` 不提交进仓库，缺失时没有后备可用。
 
 聚焦单个包时使用与 `test.sh` 相同的参数：
 
@@ -98,7 +98,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | TUI | `ap-tui/` | `docs/tui.md`、`tui_test.odin` |
 | 行编辑器 | `lineedit/` | `lineedit/*_test.odin`、`docs/internal/lineedit.md` |
 | Web 后端 | `ap-web/server.odin`、`api.odin`、`sse.odin`、`runner.odin` | `docs/web.md`、对应 `*_test.odin` |
-| Web 前端 | `ap-web/frontend/`、`ap-web/index.html` | 重新生成 `ap-web/dist/`，跑 `npm --prefix ap-web test`；不要手改 `dist/`；图标是 `data-icon` 占位，由 `build.mjs` 从 `bootstrap-icons` 内联 |
+| Web 前端 | `ap-web/frontend/`、`ap-web/index.html` | 本地重新生成 `ap-web/dist/`（不提交），跑 `npm --prefix ap-web test`；不要手改 `dist/`；图标是 `data-icon` 占位，由 `build.mjs` 从 `bootstrap-icons` 内联 |
 | MAGI 决策 | `magi/`、`cmd/magi-cli/` | `docs/magi.md`、`docs/README.md`、README 的 MAGI 段落 |
 | 包边界 | `tools/check-deps.sh`、`tools/check-deps.ps1` | `docs/dependencies.md`、`docs/architecture.md` |
 
@@ -140,7 +140,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 ## 完成前检查清单
 
 - [ ] `./test.sh` 通过，`tools/check-deps.sh` 没有违规
-- [ ] 改过前端：`npm --prefix ap-web test` 通过，`ap-web/dist/` 已重新生成
+- [ ] 改过前端：`npm --prefix ap-web test` 通过；`ap-web/dist/` 已在本地重新生成，且没有被提交
 - [ ] 行为变更已有测试，bug 修复有回归用例
 - [ ] `README.md`、`docs/`、`settings.example.json` 中受影响的说明已同步
 - [ ] 没有破坏 transcript、stdout、取消和恢复的契约

@@ -28,7 +28,7 @@
 - 工作区顶栏显示当前 session 的累计 token 用量，悬停查看输入、输出、缓存与推理明细
 - 会话标题：首轮结束后自动生成一次（`ap -s <id> --session-title`），顶栏标题旁的刷新按钮可再生成一次；标题来自 transcript 的 `session_title` 事件
 - 默认只监听 `127.0.0.1`；非回环监听会打印安全警告
-- 前端 `dist/` 已提交，只改 Odin 代码时无需安装 Node
+- 前端 `dist/` 是构建产物，不提交进仓库；编译前需要先跑一次前端构建
 
 ## 快速开始
 
@@ -37,7 +37,7 @@
 - Odin nightly（开发使用 `dev-2026-10-nightly:84bc3fc`）
 - 一个可执行的 `ap`（`--agent-bin`、`AP_AGENT_BIN`、`AP_BIN`、同目录 `ap`、`PATH` 依次查找）
 - Windows 需要 Git for Windows 提供的 `bash.exe`（ap 本身的要求）
-- 仅修改前端时需要 Node + npm
+- 构建 ap-web 时需要 Node + npm（生成 `ap-web/dist/`）
 
 ### 构建
 
@@ -60,7 +60,7 @@ mkdir -p build
 odin build cmd/ap-web -out:build/ap-web -vet
 ```
 
-`build.sh` 检测到 `npx` 时会先刷新 `ap-web/dist`，否则直接使用仓库里已提交的产物。`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，所以该目录必须存在。
+`build.sh` 检测到 `npx` 时会先刷新 `ap-web/dist`，否则沿用本地已有产物；两者都没有时报错退出。`#load_directory("dist")` 在**编译期**读取 `ap-web/dist/`，所以该目录必须存在，而它不提交进仓库。
 
 ### 运行
 
@@ -190,7 +190,7 @@ ap-web/
 ├── net_unix.odin        # Unix socket / 监听 / 关停信号
 ├── index.html           # Alpine 模板（图标是 <svg data-icon="…"> 占位）
 ├── frontend/            # 前端源码（api/sse/store/render/markdown/app）
-├── dist/                # esbuild 产物，提交进仓库
+├── dist/                # esbuild 产物，不提交进仓库
 └── build.mjs            # esbuild 构建脚本
 ```
 

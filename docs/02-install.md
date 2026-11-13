@@ -28,7 +28,7 @@ Windows 用户请在 Git Bash 里执行构建命令，不要在 `cmd.exe` 或 Po
 
 脚本会做三件事：
 
-1. 检测到 `npx` 时，重新构建 `ap-web/dist`。
+1. 用 `npm --prefix ap-web run build` 重新生成 `ap-web/dist`。
 2. 检查包依赖边界。
 3. 编译四个入口。
 
@@ -49,7 +49,7 @@ Windows 下是对应的 `.exe` 文件。
 npm --prefix ap-web install
 ```
 
-或者直接使用仓库里已提交的 `ap-web/dist/`，跳过前端构建，只编译你需要的入口。不要手改 `ap-web/dist/`。
+`ap-web/dist/` 不提交进仓库，编译 `ap-web` 前必须有它。不要手改 `ap-web/dist/`。
 
 ## 验证安装
 
@@ -78,7 +78,7 @@ npm --prefix ap-web install
 
 **找不到 bash。** 安装 Git for Windows，或把 `AP_BASH` 指向 `bash.exe` 的绝对路径。不要指向 WSL 的 bash。
 
-**前端构建失败。** 先跑 `npm --prefix ap-web install`。如果本机没有 Node，直接使用已提交的 `dist/`，不要删除它。
+**前端构建失败。** 先跑 `npm --prefix ap-web install`。`ap-web/dist/` 不提交进仓库，没有 Node 就无法编译 `ap-web`；其余三个入口不受影响。
 
 **libcurl 链接失败。** Linux 安装 `libcurl` 开发包；macOS 确认系统 libcurl 头文件可用。Windows 应使用 Odin 随附的静态 libcurl，不要手动替换。
 
