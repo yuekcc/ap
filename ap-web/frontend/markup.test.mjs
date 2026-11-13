@@ -293,3 +293,23 @@ test("工具卡片默认折叠，头部只留关键行与耗时；思考中在�
 });
 
 
+test("顶栏标题旁有刷新按钮，运行中不可点", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	assert.ok(html.includes('class="topbar__heading"'), "title and refresh share one heading row");
+	const headingIndex = html.indexOf('class="topbar__heading"');
+	const titleIndex = html.indexOf("$store.ap.currentTitle", headingIndex);
+	assert.ok(titleIndex > headingIndex, "heading keeps the session title");
+
+	const buttonIndex = html.indexOf('class="topbar__title-btn"', headingIndex);
+	assert.ok(buttonIndex > titleIndex, "refresh button sits next to the title");
+	const button = html.slice(buttonIndex, html.indexOf("</button>", buttonIndex));
+	assert.ok(button.includes("refreshTitle()"), "refresh button calls refreshTitle");
+	assert.ok(button.includes('data-icon="arrow-clockwise"'), "refresh button uses an inline icon");
+	assert.ok(
+		button.includes("titlePending") && button.includes("$store.ap.running"),
+		"refresh button is disabled while a turn or another refresh is running",
+	);
+	assert.ok(css.includes(".topbar__title-btn"), "refresh button has its own style");
+});

@@ -164,6 +164,15 @@ Handoff_Event :: struct {
 	source_events:   int           `json:"source_events"`,
 }
 
+// session_title：一次标题生成调用的产物。侧栏的会话标题读最后一条。
+// 它只追加，不改写任何历史事件；投影时被忽略（它不是 message）。
+Session_Title_Event :: struct {
+	using header: Event_Header,
+	title: string       `json:"title"`,
+	// 生成标题那次调用的用量；计入 session_end.usage。
+	usage: Maybe(Usage) `json:"usage"`,
+}
+
 // ---- 前端宽松事件 ----
 
 Tool_Call_Delta :: struct {
@@ -222,6 +231,7 @@ Stream_Event :: struct {
 	target_id: Maybe(string) `json:"target_id"`,
 	reason:    string        `json:"reason"`,
 	chunk:     string        `json:"chunk"`,
+	title:     string        `json:"title"`,
 
 	turn: int `json:"turn"`,
 	step: int `json:"step"`,

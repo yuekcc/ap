@@ -83,6 +83,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | 输出格式或 stderr 排版 | `ap-cli/output.odin` | `docs/cli-and-config.md`、输出测试 |
 | 基础 system prompt | `ap-core/engine/prompts/system.md` | `docs/context-management.md`、`--print-system-prompt` 行为 |
 | 交接提示词 | `ap-core/engine/prompts/handoff.md` | `docs/context-management.md` 的 handoff 章 |
+| 会话标题 | `ap-core/engine/title.odin`、`ap-core/engine/prompts/title.md` | `title_test.odin`、`docs/07-sessions.md`、`docs/11-web.md` |
 | 上下文预算、省略与 handoff | `ap-core/engine/budget.odin`、`handoff.odin`、`config.odin` | `budget_test.odin`、`docs/context-management.md`、`docs/proposals/context-budget-and-handoff.md` |
 | handoff 的参数与新 session | `ap-cli/run.odin`、`options.odin`、`output.odin` | `options_test.odin`、`handoff_test.odin`、`docs/cli-and-config.md` |
 | 应用层 prompt sections | `ap-cli/prompt.odin` | `prompt_test.odin`、`docs/context-management.md` |

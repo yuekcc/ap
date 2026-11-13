@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cwdPath, eventsUrl, turnBody } from "./api.js";
+import { cwdPath, eventsUrl, sessionTitleBody, turnBody } from "./api.js";
 
 test("turnBody 透传 session_key 与 cwd，空值不写进请求体", () => {
 	assert.deepEqual(
@@ -47,4 +47,9 @@ test("cwdPath 把工作目录编码进已有 query", () => {
 		"/api/history?session_id=ses_1&cwd=C%3A%5Cwork%5Ca",
 	);
 	assert.equal(cwdPath("/api/history?session_id=ses_1", ""), "/api/history?session_id=ses_1");
+});
+
+test("sessionTitleBody 只带 session_key，空 key 也保留字段", () => {
+	assert.deepEqual(sessionTitleBody("web_new_1"), { session_key: "web_new_1" });
+	assert.deepEqual(sessionTitleBody(), { session_key: "" });
 });

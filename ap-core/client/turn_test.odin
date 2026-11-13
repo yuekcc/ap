@@ -279,6 +279,24 @@ test_build_agent_command_handoff :: proc(t: ^testing.T) {
 	)
 }
 
+// 会话标题：没有提示词，用 --session-title 代替 --print0。
+@(test)
+test_build_agent_command_title :: proc(t: ^testing.T) {
+	options := Turn_Options {
+		agent_bin  = "C:/bin/ap.exe",
+		session_id = "ses_1",
+		config_dir = "C:/cfg",
+		title      = true,
+	}
+	command := build_agent_command(&options, "")
+	defer delete(command)
+	expect_command(
+		t,
+		command[:],
+		{"C:/bin/ap.exe", "--session-title", "--output-format", "stream-json", "-s", "ses_1", "--config-dir", "C:/cfg"},
+	)
+}
+
 // 记录「这块内存是不是本 allocator 给的」；turn 的结果必须能被同一 allocator 释放。
 Allocator_Probe :: struct {
 	backing: runtime.Allocator,

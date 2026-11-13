@@ -189,6 +189,30 @@ Final_Json :: struct {
 	handoff:     Maybe(Final_Handoff),
 }
 
+// --session-title 的 json 载荷：标题与生成它的那次调用用量。
+Final_Title :: struct {
+	session_id: string,
+	title:      string,
+	usage:      protocol.Usage,
+}
+
+output_title :: proc(out: ^Output_State, session_id, title: string, usage: protocol.Usage) {
+	if out.format != .Json {
+		return
+	}
+	payload := Final_Title {
+		session_id = session_id,
+		title      = title,
+		usage      = usage,
+	}
+	data, err := platform.json_marshal_utf8(payload)
+	if err != nil {
+		return
+	}
+	write_stdout(data)
+	write_stdout(transmute([]byte)string("\n"))
+}
+
 // handoff 由调用方提供：新 session id 只有在 CLI 创建完新 session 之后才知道。
 output_final :: proc(
 	out: ^Output_State,

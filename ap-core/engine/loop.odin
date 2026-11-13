@@ -140,8 +140,8 @@ loop_default_sleep :: proc(ms: int) {
 	time.sleep(time.Duration(ms) * time.Millisecond)
 }
 
-// turn_end 覆盖一轮的量；handoff 是独立的一次模型调用（manual handoff 没有
-// turn），所以两者都要累加，否则 session_end.usage 会漏掉交接那一次。
+// turn_end 覆盖一轮的量；handoff 与 session_title 是独立的一次模型调用
+// （manual handoff 没有 turn），都要累加，否则 session_end.usage 会漏掉它们。
 historical_usage_from_events :: proc(events: []Event) -> Usage {
 	total := Usage{}
 	for ev in events {
@@ -155,6 +155,13 @@ historical_usage_from_events :: proc(events: []Event) -> Usage {
 			handoff: Handoff_Event
 			if json.unmarshal_string(ev.line, &handoff) == nil {
 				if usage, has_usage := handoff.usage.?; has_usage {
+					total = usage_add(total, usage)
+				}
+			}
+		case EVENT_SESSION_TITLE:
+			title: Session_Title_Event
+			if json.unmarshal_string(ev.line, &title) == nil {
+				if usage, has_usage := title.usage.?; has_usage {
 					total = usage_add(total, usage)
 				}
 			}

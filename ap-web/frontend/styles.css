@@ -557,6 +557,13 @@ body {
   background: var(--bg);
 }
 
+.topbar__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .topbar__title {
   min-width: 0;
   overflow: hidden;
@@ -565,6 +572,37 @@ body {
   font-size: 15.5px;
   font-weight: 600;
   letter-spacing: -0.02em;
+}
+
+/* 标题旁边的刷新按钮：只在悬停/聚焦时显眼，平时不抢标题的位置。 */
+.topbar__title-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), color 0.12s var(--ease-out);
+}
+
+.topbar__title-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.topbar__title-btn:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.topbar__title-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .topbar__right {

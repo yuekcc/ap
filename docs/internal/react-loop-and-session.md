@@ -70,7 +70,7 @@ user_message
 
 - `message_end.usage`：本次响应的 usage，可能为 `null`。
 - `turn_end.usage`：本 turn 内各 step 的累加。
-- `session_end.usage`：整个 session 的累加，按所有 `turn_end.usage` 与 `handoff.usage` 求和，包含此前多次恢复运行。
+- `session_end.usage`：整个 session 的累加，按所有 `turn_end.usage`、`handoff.usage` 与 `session_title.usage` 求和，包含此前多次恢复运行。
 
 ## session_start
 
@@ -157,6 +157,20 @@ user_message
 - `handoff` 同时登记进 `event_type_known` 与 `event_type_canonical`，恢复时不会当未知事件丢掉。
 - 同一 session 可以有多条 `handoff`，恢复时全部保留。投影忽略它：它不是 message。
 - `handoff.usage` 计入 `session_end.usage`。manual handoff 没有 turn，用量只能挂在事件上。
+
+## session_title
+
+侧栏显示的会话标题。一次标题生成调用一条，只追加，不改写任何历史事件。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `title` | string | 一行标题 |
+| `usage` | usage 或 null | 生成标题那次调用的用量；provider 没报告时为 `null` |
+
+- 读取方取最后一条非空 `title`；同一 session 可以有多条（人工刷新 = 再追加一条）。
+- 投影忽略它：它不是 message，`context_build` 与 `context_build_budgeted` 的结果不受标题影响。
+- `session_title.usage` 计入 `session_end.usage`。
+- 标题由一次不带工具的模型调用产生，用该 session 冻结的 model；提示词见 `ap-core/engine/prompts/title.md`。
 
 ## step_start
 

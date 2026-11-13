@@ -23,6 +23,8 @@ export function registerApp(Alpine) {
 		resyncing: false,
 		// 发起本轮时的 session id：turn 结束时 id 变了说明发生了交接。
 		turnSessionId: null,
+		// 标题请求在飞：只用于禁用按钮，不牵扯全局 loading。
+		titlePending: false,
 
 		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
 		renderMarkdown,
@@ -400,6 +402,31 @@ export function registerApp(Alpine) {
 				store.setRunning(false);
 				store.setDraft(focus);
 				this.fail("交接失败", error);
+			}
+		},
+
+		// 手动刷新标题：服务端同步跑一次 ap --session-title，返回最终标题。
+		// 结果也会通过 SSE 的 session_title 事件到达，两条路径都只是覆盖同一个值。
+		async refreshTitle() {
+			const store = this.$store.ap;
+			if (this.titlePending || store.running || store.loading || !store.sessionId) return;
+			this.titlePending = true;
+			try {
+				const result = await api.sessionTitle(store.sessionKey);
+				const title = typeof result?.title === "string" ? result.title : "";
+				store.setTitle(title);
+				store.setSessionTitle(store.sessionId, title);
+				if (title) store.notice(`标题已更新：${title}`, "muted");
+			} catch (error) {
+				if (error?.status === 409 && error?.code === "turn_running") {
+					store.notice("该会话正在运行，稍后再生成标题", "warning");
+				} else if (error?.status === 409) {
+					store.notice("当前会话还没有可用的对话，无法生成标题", "warning");
+				} else {
+					this.fail("生成标题失败", error);
+				}
+			} finally {
+				this.titlePending = false;
 			}
 		},
 

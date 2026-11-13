@@ -42,40 +42,6 @@ Handoff_Request :: struct {
 	user:                 rawptr,
 }
 
-Handoff_Capture :: struct {
-	text:     [dynamic]byte,
-	end_text: string,
-	usage:    Usage,
-	seen_end: bool,
-	error:    Provider_Error,
-}
-
-handoff_capture_destroy :: proc(c: ^Handoff_Capture) {
-	delete(c.text)
-	delete(c.end_text)
-}
-
-handoff_capture_event :: proc(user: rawptr, event: Provider_Event) {
-	capture := (^Handoff_Capture)(user)
-	switch ev in event {
-	case Provider_Text_Delta:
-		append(&capture.text, ..transmute([]byte)ev.text)
-	case Provider_Message_End:
-		capture.seen_end = true
-		capture.usage = ev.usage
-		// 没有 delta 的 provider（或纯非流式替身）只在 message_end 里给全文；
-		// provider 的缓冲随后释放，所以要在这里持有副本。
-		if len(capture.text) == 0 && len(ev.text) > 0 {
-			delete(capture.end_text)
-			capture.end_text = strings.clone(ev.text)
-		}
-	case Provider_Error_Event:
-		capture.error = ev.err
-	case Provider_Message_Start, Provider_Reasoning_Delta, Provider_Tool_Start,
-	     Provider_Tool_Delta, Provider_Tool_End:
-	}
-}
-
 // handoff_request_messages 组装交接请求的 messages：省略后的投影，加上可选的
 // 聚焦提示词。system 消息由调用方拼上 handoff.md，不在这里。
 handoff_request_messages :: proc(
@@ -140,12 +106,12 @@ handoff_run :: proc(
 		include_usage = req.settings.stream_include_usage,
 	}
 
-	capture: Handoff_Capture
-	defer handoff_capture_destroy(&capture)
+	capture: One_Shot_Capture
+	defer one_shot_capture_destroy(&capture)
 	perr := req.provider_call(
 		req.provider,
 		&request,
-		Stream_Sink{user = &capture, on_event = handoff_capture_event},
+		Stream_Sink{user = &capture, on_event = one_shot_capture_event},
 		req.cancel,
 	)
 	if perr.kind != .None {
@@ -158,11 +124,7 @@ handoff_run :: proc(
 		return result, {}, {kind = .Protocol, message = "handoff returned no message_end", retryable = false}
 	}
 
-	text := string(capture.text[:])
-	if len(text) == 0 {
-		text = capture.end_text
-	}
-	text = strings.trim_space(text)
+	text := one_shot_capture_text(&capture)
 	if len(text) == 0 {
 		return result, {}, {kind = .Protocol, message = "handoff returned no text", retryable = false}
 	}

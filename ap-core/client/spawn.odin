@@ -95,6 +95,8 @@ build_agent_command :: proc(
 		} else {
 			append(&cmd, "--handoff")
 		}
+	} else if options.title {
+		append(&cmd, "--session-title")
 	} else {
 		append(&cmd, "--print0")
 	}

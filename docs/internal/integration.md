@@ -151,6 +151,7 @@ Windows 还要清理管道继承标志。启动子进程前，对前端自己保
 | `turn_end` | `stop_reason`、`usage`、`context` | 记录本 turn 的 stop reason。`stop_reason` 可能是 `stop`、`max_tokens`、`max_steps`、`cancelled`、`context_too_long`、`handoff`。`handoff` **不是失败**：本轮正常结束，交接文档已写入 `handoff` 事件，CLI 会创建承载它的新 session。`tool_use` 只出现在 `message_end`，不会出现在 `turn_end`。`context` 是可选观测字段，关闭预算时为 `null`。 |
 | `handoff` | `reason`、`content`、`usage`、`source_events` | 交接文档。投影时忽略，前端可选择展示或忽略。`usage` 已计入 `session_end.usage`。 |
 | `session_end` | `reason`、`usage` | 记录 session 级结果。通常不直接展示。 |
+| `session_title` | `title` | 会话标题，取最后一条。投影时忽略，用来更新侧栏；`usage` 已计入 `session_end.usage`。 |
 
 解析事件时还有下面几条规则：
 

@@ -26,6 +26,7 @@
 - 顶栏两个按钮：在当前工作目录打开文件管理器（Windows `explorer`、macOS `open`、Linux `xdg-open`）和终端（Windows `wt.exe`、macOS `Terminal`、Linux 常见终端模拟器）
 - 输入框下方的「交接」按钮：生成交接文档并创建新 session，输入框文字作为新 session 的首个提示词；交接后页面自动切到新 session
 - 工作区顶栏显示当前 session 的累计 token 用量，悬停查看输入、输出、缓存与推理明细
+- 会话标题：首轮结束后自动生成一次（`ap -s <id> --session-title`），顶栏标题旁的刷新按钮可再生成一次；标题来自 transcript 的 `session_title` 事件
 - 默认只监听 `127.0.0.1`；非回环监听会打印安全警告
 - 前端 `dist/` 已提交，只改 Odin 代码时无需安装 Node
 
@@ -117,13 +118,14 @@ Session:
 | GET | `/api/config` | – | `{model, agent, max_steps, max_tokens, cwd, platform}` | 前端展示用 |
 | GET | `/api/session/current` | – / `?session_key=<key>` | `{session_key, session_id, cwd, running, turn}` | 指定 session 的运行态；不带参数时返回最近活跃 session |
 | POST | `/api/session/new` | `{cwd?}` | `{session_id: null, session_key, cwd}` | 只分配 slot；`cwd` 决定 slot 所属 project（缺省用默认目录） |
-| GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running}]` | 指定工作目录的 session 列表；不带 `cwd` 时用默认 project |
+| GET | `/api/sessions` | – / `?cwd=<dir>` | `[{session_id, ts, turns, running, title}]` | 指定工作目录的 session 列表；`title` 取 transcript 里最后一条 `session_title`，没有时为空串 |
 | GET | `/api/projects` | – | `[{cwd, hash, latest_ts, sessions}]` | 侧栏分组：所有有 session 的 project 及其会话，按最近活动排序 |
 | POST | `/api/session/resume` | `{session_id, cwd?}` | `{session_id, session_key, cwd}` | 注册/切换该 session；不因其他 session 在跑而 409 |
 | GET | `/api/history?session_id=<id>&cwd=<dir>` | – | `{events: [...]}` | 从该 project 的 transcript 重放历史，解析 blob 引用 |
 | GET | `/api/cwd` | – | `{cwd}` | 默认工作目录（启动目录 / `--cwd`），不随会话切换变化 |
 | POST | `/api/cwd/pick` | – | `{cwd}` | 弹出目录选择框；取消 409，Unix 501；只返回路径，不改变任何运行态 |
 | POST | `/api/cwd/reveal` | `{cwd?}` | `{cwd}` | 在本机文件管理器打开该目录（缺省用默认 project）；不改变运行态 |
+| POST | `/api/session/title` | `{session_key?, cwd?}` | `{session_key, title}` | 为已落盘的 session 生成标题（同步等待 `ap --session-title`）。没有 transcript 409 `title_unavailable`，正在跑 turn 409 `turn_running`，生成失败 500 `title_failed` |
 | POST | `/api/cwd/terminal` | `{cwd?}` | `{cwd}` | 在本机终端打开该目录（缺省用默认 project）；启动失败 500 `open_failed` |
 | POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?, handoff?}` | `202 {accepted: true, session_key}` | 启动一轮；同一 session 运行中 409，不同 session/project 可并发。`handoff: true` 时等价于 `ap --handoff`：`prompt` 变成新 session 的首个提示词（可为空，空表示只交接），聚焦提示词上限 8KB |
 | DELETE | `/api/turn?session_key=<key>` | – | `202 {cancelled}` | 取消该 session 的 turn（终止进程树） |

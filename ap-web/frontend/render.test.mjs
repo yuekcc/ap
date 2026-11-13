@@ -24,8 +24,11 @@ import {
 
 const ev = (type, fields = {}) => ({ type, ...fields });
 
-test("会话列表标题取 id 里的日期时间，元信息带短 id 与轮数", () => {
+test("会话列表标题优先用生成的主题，没有时退回日期", () => {
 	const session = { session_id: "ses_20261022_120000_abcdef123456", turns: 3 };
+	assert.equal(sessionTitle({ ...session, title: "侧栏标题生成" }), "侧栏标题生成");
+	assert.equal(sessionTitle({ ...session, title: "   " }), "10-22 12:00");
+	assert.equal(sessionTitle({ ...session, title: null }), "10-22 12:00");
 	assert.equal(sessionTitle(session), "10-22 12:00");
 	assert.equal(sessionMeta(session), "abcdef12 · 3 轮");
 	assert.equal(sessionMeta({ ...session, running: true }), "abcdef12 · 3 轮 · 运行中");
@@ -486,6 +489,20 @@ test("session_start 更新当前 session", () => {
 });
 
 // handoff 不是失败：turn_end 落成 handoff 不应产生告警，turn_done 也不应报错。
+test("session_title 事件设置标题，空标题不覆盖已有值", () => {
+	let state = createState({ sessionId: "ses_20261022_120000_abcdef123456" });
+	state = applyEvent(state, ev("session_title", { title: "侧栏标题生成" }));
+	assert.equal(state.title, "侧栏标题生成");
+	state = applyEvent(state, ev("session_title", { title: "  " }));
+	assert.equal(state.title, "侧栏标题生成");
+	// history 重放与实时事件走同一条 reducer。
+	const replayed = ingestHistory(
+		createState({ sessionId: "ses_20261022_120000_abcdef123456" }),
+		[ev("session_title", { title: "旧标题" }), ev("session_title", { title: "新标题" })],
+	);
+	assert.equal(replayed.title, "新标题");
+});
+
 test("handoff 结束不当作失败", () => {
 	let state = createState();
 	state = applyEvent(state, ev("turn_end", { seq: 1, stop_reason: "handoff" }));

@@ -75,6 +75,8 @@ Turn_Job :: struct {
 	session_end:  string, // 最后一条 session_end.reason（turn_end 缺失时兜底）
 	usage:        protocol.Usage,
 	have_usage:   bool,
+	// 最近一条 turn_start/turn_end 的 turn 号；自动生成标题只在首轮（1）之后。
+	turn:         int,
 }
 
 Runner_State :: struct {
@@ -520,6 +522,7 @@ runner_on_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: stri
 		}
 	case protocol.EVENT_TURN_START, protocol.EVENT_TURN_END:
 		if ev.turn > 0 {
+			job.turn = ev.turn
 			runner_set_turn(app, job.key, ev.turn)
 		}
 	case protocol.EVENT_HANDOFF:
@@ -586,6 +589,25 @@ runner_thread :: proc(user: rawptr) {
 	}
 	result := client.turn_run(&job.options, job.prompt, callbacks)
 
+	// 首轮结束后自动生成一次标题。此时该 session 的 running 仍为 true，
+	// 标题进程与 turn 不会同时写 transcript；失败不影响 turn_done。
+	if runner_should_auto_title(app, job) {
+		title, message := runner_title_run(
+			app,
+			job.key,
+			job.session_id,
+			job.options.cwd,
+			job.options.cancel,
+			runtime.heap_allocator(),
+		)
+		if len(title) == 0 && len(message) > 0 {
+			// 标题是附带的产物：失败只留一行日志，不改变 turn_done 与退出码。
+			fmt.eprintf("ap-web: session title failed: %s\n", message)
+		}
+		delete(title, runtime.heap_allocator())
+		delete(message, runtime.heap_allocator())
+	}
+
 	// session 指针已在每条 session_start 回调里更新；这里不再覆盖，
 	// 否则用户 turn 中调 /api/session/new 清掉的指针会被重新写回。
 	stop_reason := runner_stop_reason(job)
@@ -621,6 +643,161 @@ runner_thread :: proc(user: rawptr) {
 	}
 	sync.mutex_unlock(&app.runner.mu)
 	free_job(job)
+}
+
+// ---------------------------------------------------------------------------
+// 会话标题
+// ---------------------------------------------------------------------------
+
+// 标题任务：起一个 ap --session-title 子进程，把它的 transcript 事件原样
+// 广播给订阅了这个 session 的页面。与 turn 共用同一把 per-session 分飞锁，
+// 因为两者都会往同一份 transcript 追加事件。
+
+Title_Job :: struct {
+	app:        ^App,
+	key:        string,
+	session_id: string,
+	title:      string, // 最后一条 session_title 事件里的标题（owner）
+}
+
+title_event_line :: proc(user: rawptr, ev: protocol.Stream_Event, line: string) {
+	job := (^Title_Job)(user)
+	if ev.type == protocol.EVENT_SESSION_TITLE && len(ev.title) > 0 {
+		if len(job.title) > 0 {
+			delete(job.title, runtime.heap_allocator())
+		}
+		job.title = strings.clone(ev.title, runtime.heap_allocator())
+	}
+	forwarded := line
+	if strings.has_suffix(forwarded, "\r") {
+		forwarded = forwarded[:len(forwarded) - 1]
+	}
+	if len(forwarded) > 0 {
+		_ = sse_hub_broadcast(&job.app.hub, "ap", forwarded, job.key, job.session_id)
+	}
+}
+
+// runner_title_run 跑一次标题生成。调用方已经确保这个 session 没有别的子进程在写。
+// title 成功时非空，message 失败时非空；两者都归 allocator。
+runner_title_run :: proc(
+	app: ^App,
+	key, session_id, cwd: string,
+	cancel: ^client.Cancel_Token,
+	allocator := context.allocator,
+) -> (title: string, message: string) {
+	job := new(Title_Job, runtime.heap_allocator())
+	job^ = {
+		app        = app,
+		key        = strings.clone(key, runtime.heap_allocator()),
+		session_id = strings.clone(session_id, runtime.heap_allocator()),
+	}
+	defer {
+		delete(job.key, runtime.heap_allocator())
+		delete(job.session_id, runtime.heap_allocator())
+		delete(job.title, runtime.heap_allocator())
+		free(job, runtime.heap_allocator())
+	}
+
+	options := client.Turn_Options {
+		agent_bin  = app.agent_bin,
+		config_dir = app.config_dir,
+		cwd        = cwd,
+		session_id = session_id,
+		title      = true,
+		cancel     = cancel,
+		allocator  = runtime.heap_allocator(),
+	}
+	result := client.turn_run(
+		&options,
+		"",
+		client.Turn_Callbacks{user = rawptr(job), on_event_line = title_event_line},
+	)
+	defer {
+		if len(result.session_id) > 0 {
+			delete(result.session_id, runtime.heap_allocator())
+		}
+		if len(result.stderr_preview) > 0 {
+			delete(result.stderr_preview, runtime.heap_allocator())
+		}
+	}
+
+	if len(job.title) > 0 {
+		return strings.clone(job.title, allocator), ""
+	}
+	if len(result.stderr_preview) > 0 {
+		return "", strings.clone(result.stderr_preview, allocator)
+	}
+	return "", fmt.aprintf("title generation failed (exit %d)", result.exit_code, allocator = allocator)
+}
+
+// 首轮（turn 1）正常结束后才有自动生成的意义：改标题、重跑、取消都不算。
+// transcript 读不到时（例如测试替身不落盘）不猜，省掉一次模型调用。
+runner_should_auto_title :: proc(app: ^App, job: ^Turn_Job) -> bool {
+	if len(job.session_id) == 0 || job.turn != 1 {
+		return false
+	}
+	if job.stop_reason != protocol.STOP_REASON_STOP {
+		return false
+	}
+	project, perr := client.locate_project(app.config_dir, job.options.cwd)
+	if !client.is_ok(perr) {
+		return false
+	}
+	summary := session_transcript_summary(project, job.session_id, runtime.heap_allocator())
+	defer delete(summary.title, runtime.heap_allocator())
+	return summary.readable && len(summary.title) == 0
+}
+
+Title_Status :: enum {
+	Ok,
+	No_Session, // 没有落盘的 session（还没有首轮）
+	Busy, // 该 session 正在跑 turn 或已经在生成标题
+	Failed,
+}
+
+// 人工刷新标题（POST /api/session/title）。同步等子进程结束：调用方拿到
+// 最终标题与失败原因，页面不必再猜什么时候完成。
+runner_generate_title :: proc(
+	app: ^App,
+	key: string,
+	allocator := context.allocator,
+) -> (title: string, status: Title_Status, message: string) {
+	sync.mutex_lock(&app.runner.mu)
+	// 返回的字符串一律归 allocator：调用方会 delete，不能把字面量交出去。
+	rt := runner_find_locked(app, key)
+	if rt == nil {
+		sync.mutex_unlock(&app.runner.mu)
+		return "", .No_Session, strings.clone("session not found", allocator)
+	}
+	if len(rt.session_id) == 0 {
+		sync.mutex_unlock(&app.runner.mu)
+		return "", .No_Session, strings.clone("session has no transcript yet", allocator)
+	}
+	if rt.running {
+		sync.mutex_unlock(&app.runner.mu)
+		return "", .Busy, strings.clone("a turn is already running in this session", allocator)
+	}
+	// 标题任务占用分飞锁：期间不能起新 turn，也不会并发写 transcript。
+	rt.running = true
+	sync.atomic_store(&rt.cancel.value, 0)
+	session_id := strings.clone(rt.session_id, context.temp_allocator)
+	cwd := rt.cwd
+	if len(cwd) == 0 {
+		cwd = app_cwd(app)
+	}
+	sync.mutex_unlock(&app.runner.mu)
+
+	title, message = runner_title_run(app, key, session_id, cwd, &rt.cancel, allocator)
+
+	sync.mutex_lock(&app.runner.mu)
+	if current := runner_find_locked(app, key); current != nil {
+		current.running = false
+		sync.atomic_store(&current.cancel.value, 0)
+	}
+	sync.mutex_unlock(&app.runner.mu)
+
+	status = .Ok if len(title) > 0 else .Failed
+	return
 }
 
 // ---------------------------------------------------------------------------

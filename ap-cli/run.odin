@@ -101,7 +101,8 @@ run :: proc(args: []string) -> int {
 	}
 
 	prompt := ""
-	if !opts.print_system_prompt && !manual_handoff {
+	// --session-title 不跑 turn，也就没有提示词可读。
+	if !opts.print_system_prompt && !manual_handoff && !opts.session_title {
 		value, prerr := read_prompt(opts, cwd)
 		if !is_ok(prerr) {
 			apcore.log_error("%s", prerr.message)
@@ -231,6 +232,10 @@ run :: proc(args: []string) -> int {
 	}
 	emitter := make_loop_emitter(&out)
 
+	if opts.session_title {
+		return run_session_title(&session, &out, emitter, &cancel)
+	}
+
 	if manual_handoff {
 		return run_manual_handoff(
 			&env,
@@ -338,6 +343,48 @@ run :: proc(args: []string) -> int {
 		}
 	}
 	return exit_code
+}
+
+// --session-title：生成会话标题并追加 session_title 事件。
+// 不跑 turn、不读提示词；标题写完后照常 session_close 收尾。
+run_session_title :: proc(
+	session: ^apcore.Session,
+	out: ^Output_State,
+	emitter: apcore.Emitter,
+	cancel: ^apcore.Cancel_Token,
+) -> int {
+	title, terr := apcore.session_title_generate(session, cancel, emitter)
+	if !apcore.is_ok(terr) {
+		apcore.log_error("%s", terr.message)
+		end_line, _ := apcore.session_close(session, {reason = protocol.SESSION_END_ERROR})
+		if out.format == .Stream_Json {
+			write_stdout(transmute([]byte)end_line)
+			write_stdout(transmute([]byte)string("\n"))
+		}
+		return exit_code_for(terr.kind)
+	}
+	defer apcore.session_title_destroy(&title)
+
+	// session_close 会从 transcript 重算整份用量，已经包含标题这次调用。
+	end_line, end_err := apcore.session_close(
+		session,
+		{reason = protocol.SESSION_END_EXIT, usage = title.usage},
+	)
+	if !apcore.is_ok(end_err) {
+		apcore.log_error("%s", end_err.message)
+		return int(Exit_Code.Internal)
+	}
+	switch out.format {
+	case .Stream_Json:
+		write_stdout(transmute([]byte)end_line)
+		write_stdout(transmute([]byte)string("\n"))
+	case .Text:
+		write_stdout(transmute([]byte)title.title)
+		write_stdout(transmute([]byte)string("\n"))
+	case .Json:
+		output_title(out, session.session_id, title.title, title.usage)
+	}
+	return int(Exit_Code.OK)
 }
 
 // 一次交接创建出的新 session。close 在调用方跑完它的首个 turn 之后执行。

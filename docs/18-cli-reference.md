@@ -25,6 +25,7 @@ ap [options]
 | `--max-tokens <n>` | 正整数 | 单次响应的 `max_tokens` |
 | `--context-window <n>` | 非负整数 | 覆盖上下文窗口；`0` 关闭预算和自动交接 |
 | `--handoff [提示词]` | 可选文本 | 生成交接文档并创建新会话 |
+| `--session-title` | — | 为已落盘的会话生成标题并写进 transcript |
 | `--no-handoff` | — | 关闭自动交接 |
 | `--output-format <fmt>` | `text`、`json`、`stream-json` | 输出格式，默认 `text` |
 | `--no-agents-md` | — | 不注入全局和项目 `AGENTS.md` |
@@ -44,11 +45,12 @@ ap [options]
 - `-s` 与 `-c` 互斥。
 - `--fork-session` 必须与 `-s` 或 `-c` 连用。
 - `--handoff` 必须与 `-s`、`-c` 或 `--fork-session` 之一连用，与 `--print-system-prompt` 和 `--no-handoff` 互斥。源会话必须至少有一条用户消息。
+- `--session-title` 必须与 `-s` 或 `-c` 连用，与 `--fork-session`、`--handoff`、`--print-system-prompt` 及三种提示词来源互斥。
 - `--parent-tool-call-id` 必须与 `--parent-session-id` 同时使用。
 - `--max-steps` 和 `--max-tokens` 必须是正整数。`--context-window` 必须是非负整数。
 - 参数非法、缺值或冲突时退出 2。
 
-提示词来源三选一：`--print`、`--input-file`、`--print0`。同时给多个退出 2，一个都不给也退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt` 不需要提示词。
+提示词来源三选一：`--print`、`--input-file`、`--print0`。同时给多个退出 2，一个都不给也退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt`、`--session-title` 不需要提示词。
 
 ## 输出格式
 

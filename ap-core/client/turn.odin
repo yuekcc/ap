@@ -20,6 +20,8 @@ Turn_Options :: struct {
 	// 手动交接：让 ap 生成交接文档并创建新 session。prompt 作为聚焦提示词
 	// （可为空）走命令行，进程不再从 stdin 读提示。
 	handoff:     bool,
+	// 生成会话标题：ap --session-title。没有提示词，也不从 stdin 读。
+	title:       bool,
 	model:       Maybe(string),
 	agent:       Maybe(string),
 	max_steps:   Maybe(int),
@@ -232,9 +234,9 @@ turn_run :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callbac
 	os.close(stderr_w)
 
 	// 提示词走 stdin；关写端就是 --print0 的 EOF 信号。
-	// --handoff 的聚焦提示词已经进了命令行，此时不写 stdin：ap 不读它，
-	// 大提示词会把管道写满。
-	if !options.handoff {
+	// --handoff 的聚焦提示词已经进了命令行，--session-title 根本没有提示词：
+	// 两种模式都不写 stdin，否则大提示词会把管道写满。
+	if !options.handoff && !options.title {
 		if !platform.write_all(stdin_w, transmute([]byte)prompt) {
 			append_stderr_line(&state.stderr_log, "cannot write prompt to agent stdin")
 		}

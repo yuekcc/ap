@@ -57,7 +57,7 @@
 
 ## 提示词来源
 
-`--print`、`--input-file`、`--print0` 三选一。正常运行必须且只能给一个。同时出现多个在解析参数时退出 2，一个都不给在读取提示词时退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt` 不需要提示词。
+`--print`、`--input-file`、`--print0` 三选一。正常运行必须且只能给一个。同时出现多个在解析参数时退出 2，一个都不给在读取提示词时退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt`、`--session-title` 不需要提示词。
 
 - `--print`：参数即提示词。空字符串和非法 UTF-8 都退出 2。Windows 上若系统 ANSI 代码页不是 UTF-8，ap 会先用宽字符命令行重建参数，再转成 UTF-8。
 - `--input-file`：路径按启动目录解析，支持 `~`。文件必须存在、可读、非空且是合法 UTF-8。
@@ -76,6 +76,19 @@
 - 交接成功退出 0，`stop_reason` 为 `handoff`。交接失败按 `--no-handoff` 的行为结束，退出 3。
 
 自动交接（`budget_exhausted`、`context_too_long`）不需要 `--handoff`：预算默认开启，上下文真的不够用时自动发生。`--no-handoff` 关闭它，`context_window_tokens = 0` 把整套上下文管理关掉。
+
+## session-title
+
+`ap -s <id> --session-title` 为已落盘的会话生成标题，写进 transcript 的 `session_title` 事件。
+
+- 只适用于恢复模式：需要 `-s` 或 `-c`，与 `--fork-session`、`--handoff`、`--print-system-prompt` 及三种提示词来源互斥。
+- 走一次不带工具的模型调用：输入是首条用户消息与最近一轮问答的摘要（各截断 2000 字节），model 取该 session 冻结的值，输出上限 256 token。
+- 模型返回值会被清理成一行：去标签、去引号、去行首 markdown 标记、截断到 40 个字符。
+- 只追加 `session_title` 事件，不改写历史。随后照常写 `session_end`，`session_end.usage` 包含这次调用的用量。投影忽略标题事件，`context_build` 不受影响。
+- 输出：`text` 打印标题；`json` 打印 `{session_id, title, usage}`；`stream-json` 依次输出 `session_start`、`session_title`、`session_end`。
+- 生成失败（provider 报错、返回空标题）退出 3，不写 `session_title`，但仍写 `session_end(reason=error)`。
+
+自动生成不是 CLI 的行为：ap-web 在首轮 `turn_end` 之后自己起一个 `--session-title` 子进程。见 [第 11 章](../11-web.md) 与 [react-loop-and-session.md](react-loop-and-session.md)。
 
 ## 上下文开关
 

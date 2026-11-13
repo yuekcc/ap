@@ -21,6 +21,7 @@ EVENT_TOOL_EXECUTION_END :: "tool_execution_end"
 EVENT_ERROR :: "error"
 EVENT_CANCEL :: "cancel"
 EVENT_HANDOFF :: "handoff"
+EVENT_SESSION_TITLE :: "session_title"
 
 // ---- turn_end / message_end 的 stop_reason ----
 
@@ -84,7 +85,8 @@ event_type_known :: proc(typ: string) -> bool {
 	     EVENT_TOOL_EXECUTION_END,
 	     EVENT_ERROR,
 	     EVENT_CANCEL,
-	     EVENT_HANDOFF:
+	     EVENT_HANDOFF,
+	     EVENT_SESSION_TITLE:
 		return true
 	}
 	return false
@@ -120,6 +122,8 @@ event_type_canonical :: proc(typ: string) -> string {
 		return EVENT_CANCEL
 	case EVENT_HANDOFF:
 		return EVENT_HANDOFF
+	case EVENT_SESSION_TITLE:
+		return EVENT_SESSION_TITLE
 	}
 	return typ
 }

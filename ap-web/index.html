@@ -120,7 +120,19 @@
 
     <div class="workspace">
       <header class="topbar">
-        <h1 class="topbar__title" x-text="$store.ap.currentTitle"></h1>
+        <div class="topbar__heading">
+          <h1 class="topbar__title" x-text="$store.ap.currentTitle"></h1>
+          <button
+            class="topbar__title-btn"
+            type="button"
+            @click="refreshTitle()"
+            :disabled="$store.ap.running || $store.ap.loading || titlePending || !$store.ap.sessionId"
+            title="重新生成会话标题"
+            aria-label="重新生成会话标题"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-clockwise" aria-hidden="true"></svg>
+          </button>
+        </div>
         <div class="topbar__right">
           <span class="chip" x-show="$store.ap.config?.model" x-text="$store.ap.config?.model"></span>
           <span class="chip" x-show="$store.ap.config?.agent" x-text="$store.ap.config?.agent"></span>

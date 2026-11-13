@@ -25,12 +25,27 @@ main :: proc() {
 	}
 	text := string(prompt[:])
 
-	// 交接走命令行参数（不带 --print0），stdin 只有 EOF；按参数分场景。
+	// 交接与标题走命令行参数（不带 --print0），stdin 只有 EOF；按参数分场景。
 	handoff := false
-	for arg in os.args {
+	title_mode := false
+	session_id := "ses_fake"
+	for i := 0; i < len(os.args); i += 1 {
+		arg := os.args[i]
 		if strings.has_prefix(arg, "--handoff") {
 			handoff = true
 		}
+		if arg == "--session-title" {
+			title_mode = true
+		}
+		if arg == "-s" && i + 1 < len(os.args) {
+			session_id = os.args[i + 1]
+		}
+	}
+	if title_mode {
+		emit(fmt.tprintf(`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"%s","parent_session_id":null}`, session_id))
+		emit(`{"v":1,"seq":1,"ts":2,"type":"session_title","title":"假标题","usage":{"input_tokens":7,"output_tokens":2,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":9}}`)
+		emit(fmt.tprintf(`{"v":1,"seq":2,"ts":3,"type":"session_end","reason":"exit","usage":{"input_tokens":7,"output_tokens":2,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":9}}`))
+		os.exit(0)
 	}
 	if handoff {
 		emit(`{"v":1,"seq":0,"ts":1,"type":"session_start","session_id":"ses_handoff_src","parent_session_id":null}`)

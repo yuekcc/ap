@@ -162,8 +162,10 @@ function blockText(block) {
 
 const SESSION_ID_RE = /^ses_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_(.+)$/i;
 
-// 会话列表只拿到 id 与轮数：标题用 id 里的日期时间，元信息用短 id。
+// 标题来自 transcript 的 session_title 事件；没有生成过时退回 id 里的日期时间。
 export function sessionTitle(session) {
+	const title = typeof session?.title === "string" ? session.title.trim() : "";
+	if (title) return title;
 	const id = String(session?.session_id ?? "");
 	const match = SESSION_ID_RE.exec(id);
 	if (!match) return id || "会话";
@@ -283,6 +285,7 @@ export function createState(overrides = {}) {
 		lastSeq: 0,
 		localIds: 0,
 		sessionId: null,
+		title: "",
 		usage: null,
 		turn: 0,
 		running: false,
@@ -554,6 +557,11 @@ export function applyEvent(state, event, mode = "live") {
 				thinking: false,
 				usage: usage ? usageAdd(state.usage, usage) : state.usage,
 			};
+		}
+		case "session_title": {
+			// 标题只追加：后写的事件覆盖先写的。
+			const title = typeof event.title === "string" ? event.title.trim() : "";
+			return title ? { ...state, title } : state;
 		}
 		case "session_end": {
 			// session_end.usage 是整份 transcript 的累计值，直接覆盖比累加可靠

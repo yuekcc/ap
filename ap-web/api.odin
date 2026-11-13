@@ -34,6 +34,7 @@ API_ROUTES :: []Http_Route {
 	{.Post, "/api/cwd/pick", false, api_cwd_pick},
 	{.Post, "/api/cwd/reveal", false, api_cwd_reveal},
 	{.Post, "/api/cwd/terminal", false, api_cwd_terminal},
+	{.Post, "/api/session/title", false, api_session_title},
 	{.Post, "/api/turn", false, api_turn_start},
 	{.Delete, "/api/turn", false, api_turn_cancel},
 	{.Get, "/api/events", false, api_events},
@@ -100,6 +101,8 @@ Api_Session_Entry :: struct {
 	ts:         i64    `json:"ts"`,
 	turns:      int    `json:"turns"`,
 	running:    bool   `json:"running"`,
+	// 最近一条 session_title 事件里的标题；还没有生成过时为空串。
+	title:      string `json:"title"`,
 }
 
 // 侧栏的 project 分组：一个 working directory 下的全部 session。
@@ -433,13 +436,15 @@ session_entries :: proc(
 		if info, stat_err := os.stat(client.session_file(project, id), context.temp_allocator); stat_err == nil {
 			ts = time.time_to_unix_nano(info.modification_time) / 1_000_000
 		}
+		summary := session_transcript_summary(project, id, allocator)
 		append(&entries, Api_Session_Entry{
 			// id 来自 client.session_ids 的临时列表，helper 返回前会释放；必须克隆到
 			// 调用方 allocator，否则响应序列化时读到的是悬空字符串。
 			session_id = strings.clone(id, allocator),
 			ts         = ts,
-			turns      = session_turn_count(project, id),
+			turns      = summary.turns,
 			running    = runner_session_running(app, id),
+			title      = summary.title,
 		})
 	}
 	for i in 1 ..< len(entries) {
@@ -466,28 +471,53 @@ Type_Probe :: struct {
 	type: string `json:"type"`,
 }
 
-session_turn_count :: proc(project: client.Project, session_id: string) -> int {
+Session_Probe :: struct {
+	type:  string `json:"type"`,
+	title: string `json:"title"`,
+}
+
+Session_Summary :: struct {
+	turns: int,
+	// 最近一条 session_title 的标题；没有时为空串。title 归调用方 allocator。
+	title: string,
+	// transcript 是否读得到。测试替身不落盘时用它避免误判「还没有标题」。
+	readable: bool,
+}
+
+session_transcript_summary :: proc(
+	project: client.Project,
+	session_id: string,
+	allocator := context.temp_allocator,
+) -> Session_Summary {
 	data, err := client.read_transcript(project, session_id)
 	if !client.is_ok(err) {
-		return 0
+		return {}
 	}
 	defer delete(data, context.allocator)
 
-	count := 0
+	out := Session_Summary{readable = true}
 	it := client.Line_Iterator{data = string(data)}
 	for {
 		line, more := client.next_line(&it)
 		if !more {
 			break
 		}
-		probe: Type_Probe
-		if json.unmarshal(transmute([]byte)line, &probe, json.DEFAULT_SPECIFICATION, context.temp_allocator) == nil {
-			if probe.type == protocol.EVENT_TURN_START {
-				count += 1
+		probe: Session_Probe
+		if json.unmarshal(transmute([]byte)line, &probe, json.DEFAULT_SPECIFICATION, context.temp_allocator) != nil {
+			continue
+		}
+		switch probe.type {
+		case protocol.EVENT_TURN_START:
+			out.turns += 1
+		case protocol.EVENT_SESSION_TITLE:
+			// 只追加：后写的覆盖先写的；空标题不覆盖已有标题。
+			title := strings.trim_space(probe.title)
+			if len(title) > 0 {
+				out.title = strings.clone(title, allocator)
 			}
 		}
 	}
-	return count
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +770,58 @@ api_turn_cancel :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Re
 	key, _ := query_param(request.query, "session_key")
 	cancelled := runner_cancel(app, key)
 	api_json(response, 202, Api_Cancelled{cancelled = cancelled})
+}
+
+// ---------------------------------------------------------------------------
+// session title
+// ---------------------------------------------------------------------------
+
+Api_Title_Body :: struct {
+	session_key: string `json:"session_key"`,
+	cwd:         string `json:"cwd"`,
+}
+
+Api_Session_Title :: struct {
+	session_key: string `json:"session_key"`,
+	title:       string `json:"title"`,
+}
+
+// 人工刷新标题：同步跑一次 ap --session-title，期间该 session 不接受新 turn。
+api_session_title :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Response) {
+	app := (^App)(user)
+	body: Api_Title_Body
+	if !api_parse_json(request.body, &body) {
+		api_error(response, 400, "invalid_json", "request body must be a JSON object")
+		return
+	}
+	// 这个 key 要活到子进程跑完：turn 泵会 free_all(temp)，请求体里的字符串
+	// 在那之后就失效了。
+	key := strings.clone(strings.trim_space(body.session_key), context.allocator)
+	defer delete(key, context.allocator)
+	if len(key) == 0 {
+		key = runner_current_key(app, context.allocator)
+	}
+	if len(key) == 0 {
+		api_error(response, 404, "session_not_found", "no session is selected")
+		return
+	}
+	title, status, message := runner_generate_title(app, key)
+	defer if len(title) > 0 {
+		delete(title, context.allocator)
+	}
+	defer if len(message) > 0 {
+		delete(message, context.allocator)
+	}
+	switch status {
+	case .Ok:
+		api_json(response, 200, Api_Session_Title{session_key = key, title = title})
+	case .No_Session:
+		api_error(response, 409, "title_unavailable", message)
+	case .Busy:
+		api_error(response, 409, "turn_running", message)
+	case .Failed:
+		api_error(response, 500, "title_failed", message)
+	}
 }
 
 // ---------------------------------------------------------------------------

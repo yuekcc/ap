@@ -43,11 +43,13 @@ export function createStore() {
 		config: null,
 		projects: [],
 		projectCwd: null,
+		title: "",
 		usage: null,
 		draft: "",
 
 		get currentTitle() {
-			return this.sessionId ? sessionTitle({ session_id: this.sessionId }) : "新会话";
+			if (!this.sessionId) return "新会话";
+			return sessionTitle({ session_id: this.sessionId, title: this.title });
 		},
 
 		// 顶栏 chip：本 session 的累计 token 用量（来自 session_end / turn_end）。
@@ -155,6 +157,9 @@ export function createStore() {
 
 		handleEvent(event) {
 			view = applyEvent(view, event, "live");
+			if (event?.type === "session_title") {
+				this.setSessionTitle(view.sessionId, event.title);
+			}
 			publish();
 		},
 
@@ -174,7 +179,8 @@ export function createStore() {
 		},
 
 		setSession(sessionId) {
-			view = { ...view, sessionId: sessionId ?? null };
+			// 换了 session 就先清掉旧标题：history 里的 session_title 会补回来。
+			view = { ...view, sessionId: sessionId ?? null, title: "" };
 			publish();
 		},
 
@@ -186,7 +192,11 @@ export function createStore() {
 
 		// 只同步运行态；key 由客户端持有，服务端的“最近活跃”指针不能覆盖它。
 		syncCurrent(current = {}) {
-			if (current.session_id) view = { ...view, sessionId: current.session_id };
+			if (current.session_id) {
+				view = current.session_id === view.sessionId
+					? { ...view, sessionId: current.session_id }
+					: { ...view, sessionId: current.session_id, title: "" };
+			}
 			if (typeof current.cwd === "string" && current.cwd) this.setProjectCwd(current.cwd);
 			// 刷新页面时可能正卡在模型思考中，还没等到任何增量：先按运行态亮起动画，
 			// 后续文本/工具事件会把它关掉。
@@ -238,6 +248,26 @@ export function createStore() {
 			}));
 		},
 
+		// 当前会话的标题：接口返回时会话可能还没收到 SSE 事件（例如断线）。
+		setTitle(title) {
+			const value = typeof title === "string" ? title.trim() : "";
+			if (!value) return;
+			view = { ...view, title: value };
+			publish();
+		},
+
+		// 标题已经写进 transcript；顺手把侧栏里同一个 session 的条目也改掉，
+		// 否则要等下一次 /api/projects 才显示新标题。
+		setSessionTitle(sessionId, title) {
+			const value = typeof title === "string" ? title.trim() : "";
+			if (!sessionId || !value) return;
+			for (const project of this.projects) {
+				for (const session of project.sessions ?? []) {
+					if (session.session_id === sessionId) session.title = value;
+				}
+			}
+		},
+
 		setProjectCwd(cwd) {
 			this.projectCwd = cwd || null;
 		},
@@ -255,6 +285,7 @@ export function createStore() {
 		store.lastSeq = view.lastSeq;
 		store.running = view.running;
 		store.thinking = view.running && view.thinking === true;
+		store.title = view.title;
 		store.usage = view.usage;
 	}
 

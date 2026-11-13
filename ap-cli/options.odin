@@ -39,6 +39,7 @@ Options :: struct {
 	version:              bool,
 	list_skills:          bool,
 	print_system_prompt:  bool,
+	session_title:        bool,
 }
 
 parse_args :: proc(args: []string) -> (Options, Error) {
@@ -75,6 +76,12 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 				return opts, make_error(.Usage, "%s does not take a value", name)
 			}
 			opts.print_system_prompt = true
+			i += 1
+		case "--session-title":
+			if has_inline {
+				return opts, make_error(.Usage, "%s does not take a value", name)
+			}
+			opts.session_title = true
 			i += 1
 		case "-s", "--session":
 			value, n, err := option_value(args, i, inline, has_inline, name)
@@ -285,6 +292,26 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 	}
 	if opts.handoff != nil && opts.no_handoff {
 		return opts, make_error(.Usage, "--handoff and --no-handoff are mutually exclusive")
+	}
+	if opts.session_title {
+		if opts.session_id == nil && !opts.continue_session {
+			return opts, make_error(.Usage, "--session-title requires --session or --continue")
+		}
+		if opts.fork_session {
+			return opts, make_error(.Usage, "--session-title cannot be used with --fork-session")
+		}
+		if opts.handoff != nil || opts.print_system_prompt {
+			return opts, make_error(
+				.Usage,
+				"--session-title cannot be used with --handoff or --print-system-prompt",
+			)
+		}
+		if opts.print_prompt != nil || opts.input_file != nil || opts.print0 {
+			return opts, make_error(
+				.Usage,
+				"--session-title does not take a prompt from --print, --input-file or --print0",
+			)
+		}
 	}
 	if opts.handoff != nil {
 		// 交接的聚焦提示词就是 --handoff 的值；再传一个提示词来源会静默失效。

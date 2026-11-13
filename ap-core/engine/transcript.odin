@@ -35,6 +35,7 @@ Tool_Image_Ref :: protocol.Tool_Image_Ref
 Error_Event :: protocol.Error_Event
 Cancel_Event :: protocol.Cancel_Event
 Handoff_Event :: protocol.Handoff_Event
+Session_Title_Event :: protocol.Session_Title_Event
 
 // wire 取值别名；唯一权威在 ap-core/protocol/names.odin。
 event_type_known :: protocol.event_type_known
@@ -53,6 +54,7 @@ EVENT_TOOL_EXECUTION_END :: protocol.EVENT_TOOL_EXECUTION_END
 EVENT_ERROR :: protocol.EVENT_ERROR
 EVENT_CANCEL :: protocol.EVENT_CANCEL
 EVENT_HANDOFF :: protocol.EVENT_HANDOFF
+EVENT_SESSION_TITLE :: protocol.EVENT_SESSION_TITLE
 
 STOP_REASON_STOP :: protocol.STOP_REASON_STOP
 STOP_REASON_TOOL_USE :: protocol.STOP_REASON_TOOL_USE

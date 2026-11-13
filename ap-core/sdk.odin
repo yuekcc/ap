@@ -47,6 +47,7 @@ Session_Info :: engine.Session_Info
 Close_Options :: engine.Close_Options
 Turn_Result :: engine.Turn_Result
 Session_Handoff_Result :: engine.Session_Handoff_Result
+Session_Title_Result :: engine.Session_Title_Result
 Turn_Context :: engine.Turn_Context
 Emitter :: engine.Emitter
 Progress_Style :: engine.Progress_Style
@@ -256,6 +257,20 @@ handoff_user_message :: proc(source_session_id, content: string) -> string {
 
 session_handoff_destroy :: proc(result: ^Session_Handoff_Result) {
 	engine.session_handoff_destroy(result)
+}
+
+// session_title_generate：用一次不带工具的模型调用生成会话标题并追加
+// session_title 事件。调用方随后照常 session_close 写 session_end。
+session_title_generate :: proc(
+	s: ^Session,
+	cancel: ^Cancel_Token,
+	sink: Emitter,
+) -> (Session_Title_Result, Error) {
+	return engine.session_title_generate(s, cancel, sink)
+}
+
+session_title_destroy :: proc(result: ^Session_Title_Result) {
+	engine.session_title_destroy(result)
 }
 
 // ---- 日志 ----

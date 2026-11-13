@@ -46,6 +46,27 @@ test_cli_rejects_conflicting_prompt_sources :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_cli_session_title_needs_saved_session :: proc(t: ^testing.T) {
+	opts, err := parse_args([]string{"ap", "-s", "ses_1", "--session-title"})
+	testing.expect_value(t, err.code, Exit_Code.OK)
+	testing.expect(t, opts.session_title)
+
+	// 没有可恢复的 session 就没有 transcript 可读。
+	_, no_session := parse_args([]string{"ap", "--session-title"})
+	testing.expect_value(t, no_session.code, Exit_Code.Usage)
+
+	// 标题模式不跑 turn，也不读提示词。
+	_, with_prompt := parse_args([]string{"ap", "-s", "ses_1", "--session-title", "--print", "x"})
+	testing.expect_value(t, with_prompt.code, Exit_Code.Usage)
+
+	_, with_handoff := parse_args([]string{"ap", "-s", "ses_1", "--session-title", "--handoff"})
+	testing.expect_value(t, with_handoff.code, Exit_Code.Usage)
+
+	_, with_value := parse_args([]string{"ap", "-s", "ses_1", "--session-title=1"})
+	testing.expect_value(t, with_value.code, Exit_Code.Usage)
+}
+
+@(test)
 test_cli_requires_restore_for_fork :: proc(t: ^testing.T) {
 	_, err := parse_args([]string{"ap", "--print", "x", "--fork-session"})
 	testing.expect_value(t, err.code, Exit_Code.Usage)

@@ -29,6 +29,11 @@ export function cwdPath(path, cwd) {
 	return `${path}${separator}cwd=${encodeURIComponent(value)}`;
 }
 
+// 标题请求体：服务端按 session_key 找回运行态，缺省用当前 session。
+export function sessionTitleBody(sessionKey) {
+	return { session_key: sessionKey ?? "" };
+}
+
 // 导出的纯函数便于单元测试；session_key/cwd 只在非空时进入请求体。
 export function turnBody(payload) {
 	const body = { prompt: payload.prompt ?? "" };
@@ -112,6 +117,9 @@ export const api = {
 	openTerminal: (cwd) =>
 		request("/api/cwd/terminal", { method: "POST", body: cwd ? { cwd } : undefined }),
 	startTurn: (payload) => request("/api/turn", { method: "POST", body: turnBody(payload) }),
+	// 生成/刷新会话标题：服务端同步跑一次 ap --session-title。
+	sessionTitle: (sessionKey) =>
+		request("/api/session/title", { method: "POST", body: sessionTitleBody(sessionKey) }),
 	cancelTurn: (sessionKey) =>
 		request(sessionPath("/api/turn", sessionKey), { method: "DELETE" }),
 };
