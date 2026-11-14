@@ -86,7 +86,7 @@ bash 超时与输出超限会先终止整棵进程树，再返回 `ok=false`。�
 
 取消通过 `Cancel_Token` 传播。
 
-1. `provider_stream` 的进度回调看到标志后返回非 0，libcurl 中止请求。
+1. `platform.http_stream` 的进度回调看到标志后返回非 0，libcurl 中止请求；`provider_stream` 把结果归为 `cancelled`。
 2. `run_child` 的轮询看到标志后终止进程树。bash 与 task 共用这条路径。
 3. 子代理是独立 `ap` 进程。父进程终止它的进程树，不等待它自己写完 `session_end`。
 4. Unix 先按 PPid 递归收集后代，发送 SIGTERM，2 秒后对同一快照发送 SIGKILL。Windows 优先 `TerminateJobObject`，失败时 `taskkill /T /F`。
@@ -108,7 +108,7 @@ bash 超时与输出超限会先终止整棵进程树，再返回 `ok=false`。�
 | 对象 | 默认值 | 配置 | 触发后 |
 | --- | --- | --- | --- |
 | LLM 总请求 | 600000ms | `llm_timeout_ms` | 按 `timeout` 重试 |
-| LLM 建立连接 | 30000ms | 固定 | 按 curl 错误映射，通常为 `timeout` 或 `network` |
+| LLM 建立连接 | 30000ms | 固定 | 通常为 `timeout` 或 `network` |
 | LLM 首字节 | 120000ms | 固定 | `timeout`，可重试 |
 | LLM 低速 | 1 字节每秒，持续 120s | 固定 | `timeout`，可重试 |
 | 单个 bash | `min(tool_timeout_ms, 600000)`，默认 120000ms | `tool_timeout_ms`、调用参数 `timeout_ms` | 终止进程树，返回 `ok=false` |

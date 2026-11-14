@@ -3,17 +3,11 @@ package engine
 import "../platform"
 
 import "base:runtime"
-import c "core:c/libc"
 import "core:encoding/base64"
 import "core:encoding/json"
 import "core:fmt"
 import "core:mem/virtual"
 import "core:strings"
-import "core:sync"
-import "core:time"
-import "vendor:curl"
-
-FIRST_BYTE_TIMEOUT :: 120 * time.Second
 
 Stop_Reason :: enum {
 	Stop,
@@ -800,32 +794,18 @@ provider_init :: proc(settings: ^Settings) -> Provider {
 	}
 }
 
-Curl_Context :: struct {
-	assembler:         ^Stream_Assembler,
-	cancel:            ^platform.Cancel_Token,
-	status:            c.long,
-	retry_after_ms:    Maybe(int),
-	raw:               [dynamic]byte,
-	sse:               Sse_Parser,
-	started:           time.Tick,
-	last_data:         time.Tick,
-	got_data:          bool,
-	first_byte_timeout: bool,
-	protocol_error:    string,
-	feed_failed:       bool,
+Stream_Context :: struct {
+	assembler:      ^Stream_Assembler,
+	raw:            [dynamic]byte,
+	sse:            Sse_Parser,
+	protocol_error: string,
 }
 
-curl_write_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawptr) -> c.size_t {
-	context = runtime.default_context()
-	ctx := (^Curl_Context)(user)
-	n := int(size * nitems)
-	if n <= 0 {
-		return size * nitems
-	}
-	ctx.got_data = true
-	ctx.last_data = time.tick_now()
-	if ctx.status == 200 {
-		err := sse_feed(&ctx.sse, buffer[:n], provider_sse_handler, rawptr(ctx.assembler))
+// 传输层只给原始字节和状态码；这里决定字节进 SSE 还是当作错误正文缓存。
+provider_body_cb :: proc(user: rawptr, status: int, data: []byte) -> bool {
+	ctx := (^Stream_Context)(user)
+	if status == 200 {
+		err := sse_feed(&ctx.sse, data, provider_sse_handler, rawptr(ctx.assembler))
 		if err != .None {
 			if !ctx.assembler.failed {
 				ctx.protocol_error = "SSE parse error"
@@ -835,15 +815,14 @@ curl_write_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawptr
 					ctx.protocol_error = "SSE event too large"
 				}
 			}
-			ctx.feed_failed = true
-			return 0
+			return false
 		}
-		return size * nitems
+		return true
 	}
 	if len(ctx.raw) < 1024 * 1024 {
-		append(&ctx.raw, ..buffer[:n])
+		append(&ctx.raw, ..data)
 	}
-	return size * nitems
+	return true
 }
 
 provider_sse_handler :: proc(user: rawptr, data: string) -> bool {
@@ -852,90 +831,22 @@ provider_sse_handler :: proc(user: rawptr, data: string) -> bool {
 	return err.kind == .None
 }
 
-curl_header_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawptr) -> c.size_t {
-	context = runtime.default_context()
-	ctx := (^Curl_Context)(user)
-	n := int(size * nitems)
-	line := string(buffer[:n])
-	trimmed := strings.trim_right(line, "\r\n")
-
-	if strings.has_prefix(trimmed, "HTTP/") {
-		space := strings.index_byte(trimmed, ' ')
-		if space >= 0 && space + 4 <= len(trimmed) {
-			status := 0
-			for i in space + 1 ..< min(space + 4, len(trimmed)) {
-				ch := trimmed[i]
-				if ch < '0' || ch > '9' {
-					status = 0
-					break
-				}
-				status = status * 10 + int(ch - '0')
-			}
-			if status >= 200 && status < 600 {
-				ctx.status = c.long(status)
-				if status == 200 && len(ctx.raw) > 0 {
-					err := sse_feed(&ctx.sse, ctx.raw[:], provider_sse_handler, rawptr(ctx.assembler))
-					clear(&ctx.raw)
-					if err != .None {
-						ctx.protocol_error = "SSE parse error"
-						if err == .Line_Too_Long {
-							ctx.protocol_error = "SSE line too long"
-						} else if err == .Event_Too_Long {
-							ctx.protocol_error = "SSE event too large"
-						}
-						ctx.feed_failed = true
-						return 0
-					}
-				}
-			}
-		}
-	}
-	lower, _ := strings.to_lower(trimmed, context.temp_allocator)
-	if strings.has_prefix(lower, "retry-after:") {
-		value := strings.trim_space(trimmed[len("retry-after:"):])
-		if seconds, ok := parse_positive_int(value); ok {
-			ctx.retry_after_ms = seconds * 1000
-		}
-	}
-	return size * nitems
-}
-
-curl_xferinfo_cb :: proc "c" (user: rawptr, dltotal, dlnow, ultotal, ulnow: curl.off_t) -> c.int {
-	context = runtime.default_context()
-	ctx := (^Curl_Context)(user)
-	if platform.cancel_token_cancelled(ctx.cancel) {
-		return 1
-	}
-	if !ctx.got_data && time.tick_since(ctx.started) > FIRST_BYTE_TIMEOUT {
-		ctx.first_byte_timeout = true
-		return 1
-	}
-	return 0
-}
-
-provider_network_error :: proc(code: curl.code) -> Provider_Error {
-	if code == .E_OPERATION_TIMEDOUT {
+provider_transport_error :: proc(res: platform.Http_Stream_Result) -> Provider_Error {
+	switch res.failure {
+	case .None:
+		return provider_error_none()
+	case .Cancelled:
+		return {kind = .Cancelled, message = "cancelled"}
+	case .Timeout:
 		return {kind = .Timeout, message = "LLM request timed out", retryable = true}
+	case .First_Byte_Timeout:
+		return {kind = .Timeout, message = "LLM first byte timeout", retryable = true}
+	case .Internal:
+		return {kind = .Internal, message = res.message}
+	case .Network:
+		return {kind = .Network, message = res.message, retryable = true}
 	}
-	return {kind = .Network, message = fmt.tprintf("network error: %v", code), retryable = true}
-}
-
-provider_global_ready := false
-provider_global_mu: sync.Mutex
-
-// libcurl 的 global_init 不是线程安全的；进程内可能有多个会话并发调用 provider，
-// 因此首次初始化必须串行化。初始化完成后锁只保护一次布尔读取，开销可忽略。
-provider_global_init :: proc() -> Error {
-	sync.mutex_lock(&provider_global_mu)
-	defer sync.mutex_unlock(&provider_global_mu)
-	if provider_global_ready {
-		return ok_error()
-	}
-	if res := curl.global_init(curl.GLOBAL_ALL); res != .E_OK {
-		return make_error(.Provider, "libcurl initialization failed: %v", res)
-	}
-	provider_global_ready = true
-	return ok_error()
+	return {kind = .Network, message = res.message, retryable = true}
 }
 
 provider_stream :: proc(
@@ -944,9 +855,6 @@ provider_stream :: proc(
 	sink: Stream_Sink,
 	cancel: ^platform.Cancel_Token,
 ) -> Provider_Error {
-	if gerr := provider_global_init(); !is_ok(gerr) {
-		return {kind = .Network, message = gerr.message, retryable = false}
-	}
 	body, berr := build_chat_request_body(req^)
 	if !is_ok(berr) {
 		return {kind = .Protocol, message = berr.message, retryable = false}
@@ -959,62 +867,30 @@ provider_stream :: proc(
 	assembler_init(&a, sink, req.model)
 	defer assembler_destroy(&a)
 
-	ctx := Curl_Context {
-		assembler = &a,
-		cancel    = cancel,
-		started   = time.tick_now(),
-		last_data = time.tick_now(),
-	}
+	ctx := Stream_Context{assembler = &a}
 	sse_parser_init(&ctx.sse)
 	defer sse_parser_destroy(&ctx.sse)
 
-	h := curl.easy_init()
-	if h == nil {
-		return assembler_fail(&a, {kind = .Network, message = "curl_easy_init failed", retryable = false})
-	}
-	defer curl.easy_cleanup(h)
-
-	headers: ^curl.slist
 	auth := fmt.tprintf("Authorization: Bearer %s", p.api_key)
 	user_agent := fmt.tprintf("User-Agent: ap/%s", VERSION)
-	headers = curl.slist_append(headers, cstring("Content-Type: application/json"))
-	headers = curl.slist_append(headers, cstring("Accept: text/event-stream"))
-	headers = curl.slist_append(headers, strings.clone_to_cstring(user_agent, context.temp_allocator))
-	headers = curl.slist_append(headers, strings.clone_to_cstring(auth, context.temp_allocator))
-	if headers == nil {
-		return assembler_fail(&a, {kind = .Internal, message = "cannot allocate HTTP headers", retryable = false})
+	headers := [?]string {
+		"Content-Type: application/json",
+		"Accept: text/event-stream",
+		user_agent,
+		auth,
 	}
-	defer curl.slist_free_all(headers)
 
-	body_c := cstring(raw_data(body))
-	timeout_ms := c.long(p.llm_timeout_ms)
-	one := c.long(1)
-
-	curl.easy_setopt(h, .URL, strings.clone_to_cstring(p.base_url, context.temp_allocator))
-	curl.easy_setopt(h, .HTTPHEADER, headers)
-	curl.easy_setopt(h, .POST, one)
-	curl.easy_setopt(h, .POSTFIELDS, body_c)
-	curl.easy_setopt(h, .POSTFIELDSIZE, c.long(len(body)))
-	curl.easy_setopt(h, .WRITEFUNCTION, rawptr(curl_write_cb))
-	curl.easy_setopt(h, .WRITEDATA, rawptr(&ctx))
-	curl.easy_setopt(h, .HEADERFUNCTION, rawptr(curl_header_cb))
-	curl.easy_setopt(h, .HEADERDATA, rawptr(&ctx))
-	curl.easy_setopt(h, .XFERINFOFUNCTION, rawptr(curl_xferinfo_cb))
-	curl.easy_setopt(h, .XFERINFODATA, rawptr(&ctx))
-	curl.easy_setopt(h, .NOSIGNAL, one)
-	curl.easy_setopt(h, .ACCEPT_ENCODING, cstring("identity"))
-	curl.easy_setopt(h, .HTTP_VERSION, c.long(curl.HTTP_VERSION_1_1))
-	curl.easy_setopt(h, .CONNECTTIMEOUT_MS, c.long(30000))
-	curl.easy_setopt(h, .TIMEOUT_MS, timeout_ms)
-	curl.easy_setopt(h, .LOW_SPEED_LIMIT, one)
-	curl.easy_setopt(h, .LOW_SPEED_TIME, c.long(120))
-
-	res := curl.easy_perform(h)
-	status: c.long
-	curl.easy_getinfo(h, .RESPONSE_CODE, &status)
-	if ctx.status == 0 && status != 0 {
-		ctx.status = status
+	http_req := platform.Http_Stream_Request {
+		url = p.base_url,
+		headers = headers[:],
+		body = body,
+		total_timeout_ms = p.llm_timeout_ms,
+		first_byte_timeout_ms = int(platform.HTTP_FIRST_BYTE_TIMEOUT_MS),
+		cancel = cancel,
+		user = &ctx,
+		on_body = provider_body_cb,
 	}
+	res := platform.http_stream(&http_req)
 
 	if len(ctx.protocol_error) > 0 {
 		return assembler_fail(&a, {kind = .Protocol, message = ctx.protocol_error, retryable = false})
@@ -1022,17 +898,11 @@ provider_stream :: proc(
 	if a.failed {
 		return a.last_error
 	}
-	if platform.cancel_token_cancelled(cancel) {
-		return {kind = .Cancelled, message = "cancelled"}
+	if res.failure != .None {
+		return assembler_fail(&a, provider_transport_error(res))
 	}
-	if ctx.first_byte_timeout {
-		return assembler_fail(&a, {kind = .Timeout, message = "LLM first byte timeout", retryable = true})
-	}
-	if res != .E_OK {
-		return assembler_fail(&a, provider_network_error(res))
-	}
-	if status != 200 {
-		err := provider_http_error(int(status), string(ctx.raw[:]), ctx.retry_after_ms)
+	if res.status != 200 {
+		err := provider_http_error(res.status, string(ctx.raw[:]), res.retry_after_ms)
 		return assembler_fail(&a, err)
 	}
 
@@ -1057,4 +927,3 @@ provider_stream :: proc(
 	}
 	return assembler_finish(&a)
 }
-

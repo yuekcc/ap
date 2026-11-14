@@ -97,17 +97,13 @@ Odin 没有异步运行时。流式读取用阻塞 IO 加回调。
 
 响应必须是 SSE。非 200 响应的正文只用于生成错误信息，不进入 SSE 解析。
 
-HTTP 头回调：
-
-- 解析 `HTTP/` 状态行，只接受 200 到 599。
-- 解析 `Retry-After`，只接受整数秒，换算成毫秒。
-- 收到 200 时，把此前缓存的正文送入 SSE 解析器。
+HTTP 状态行与 `Retry-After` 由传输层解析，见下文「传输层」。`provider_stream` 只看两样东西：最终状态码，以及每段正文送达时的当前状态码。
 
 正文回调：
 
 - 状态为 200 时把字节送入 SSE 解析器。
 - 状态不是 200 时缓存正文，上限约 1MB。
-- 每个回调都更新收到数据的标记，供首字节超时判断。
+- 回调返回 false 表示放弃本次传输，用于 SSE 解析失败时立即中止。
 
 SSE 解析规则：
 
@@ -185,9 +181,10 @@ HTTP 错误正文按 `{"error":{"message","type","code"}}` 解析。`message` �
 | 500 及以上 | `server_error` | true |
 | 其它 4xx | `invalid_request` | false |
 | 其它非 200 | `server_error` | true |
-| 连接失败、其它 curl 错误 | `network` | true |
-| curl 超时类错误 | `timeout` | true |
+| 传输层连接失败、写失败等 | `network` | true |
+| 传输层总超时、低速超时 | `timeout` | true |
 | 首字节超过 120s | `timeout` | true |
+| 传输层无法发起请求（初始化、句柄、header 分配） | `internal` | false |
 | SSE 解析失败、行超长、参数 JSON 非法、结构非法 | `protocol` | false |
 | 用户取消 | `cancelled` | false |
 | 流在 `[DONE]` 前结束 | `network` | true |
@@ -204,7 +201,15 @@ HTTP 错误正文按 `{"error":{"message","type","code"}}` 解析。`message` �
 
 HTTP 头的 `Retry-After` 写入 `retry_after_ms`。循环层决定是否使用，见 [errors-and-cancellation.md](errors-and-cancellation.md)。
 
-## curl 传输
+## 传输层
+
+`provider_stream` 不直接操作 curl。传输层是 `ap-core/platform/http.odin` 的 `platform.http_stream`：它接收地址、header 行、请求体和超时，返回状态码、`Retry-After` 与失败分类，正文按块回调给调用方。SSE、错误正文缓存与 `Provider_Error` 归一都留在 engine。
+
+调用契约：
+
+- header 行先于正文到达，回调拿到的状态码是已经解析出的值；还没读到状态行时为 0。
+- 回调返回 false 立即中止传输，已收到的字节由调用方处理。
+- 取消标志在 curl 进度回调里轮询，命中后中止请求。
 
 HTTP 与 TLS 统一走 `vendor:curl`。Windows 链接 Odin 随附的静态 libcurl。Linux 与 macOS 链接系统 libcurl，需要开发包。
 
@@ -224,7 +229,7 @@ HTTP 与 TLS 统一走 `vendor:curl`。Windows 链接 Odin 随附的静态 libcu
 | `CURLOPT_LOW_SPEED_LIMIT` | 1 字节 |
 | `CURLOPT_LOW_SPEED_TIME` | 120 秒 |
 
-进度回调在取消标志置位时返回非 0，中止请求。没有收到任何正文且超过 120 秒时也中止，并归类为 `timeout`。
+进度回调在取消标志置位时返回非 0，中止请求。没有收到任何正文且超过 120 秒时也中止，归类为 `timeout`（首字节超时）。
 
 libcurl 的全局初始化不是线程安全的。首次调用用互斥锁串行完成初始化。
 

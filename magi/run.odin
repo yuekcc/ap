@@ -197,7 +197,7 @@ member_thread_main :: proc(data: rawptr) {
 }
 
 // 三名成员并行。每个成员只写自己的 vote 槽位；Env 在投票期间只读。
-// libcurl 的全局初始化在 provider 内串行化，见 engine/provider.odin。
+// libcurl 的全局初始化在平台传输层内串行化，见 ap-core/platform/http.odin。
 run_members :: proc(
 	env: ^apcore.Env,
 	request: Magi_Request,

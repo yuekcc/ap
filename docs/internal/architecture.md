@@ -29,7 +29,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | `apcore` | 接收 `Config`、定位 project、组装 `Session_Request`、暴露会话生命周期、日志入口 | 不读 argv、环境变量或 `settings.json(c)`，不写 stdout，不装信号，不决定退出码 |
 | `ap-core/engine` | session、loop、provider、context、transcript 的编排 | 不 import `apcore`、`ap-cli` 或前端 |
 | `ap-core/tool` | `Tool`、`Tool_Context`、`Tool_Result`、`Registry`、执行管线 | 不 import engine，不提供具体工具 |
-| `ap-core/platform` | 路径与 project hash、session 发现、blob、JSON 与文本、平台原语、进程树、取消 token、日志文件 | 不 import 任何本地包，不含 agent 逻辑 |
+| `ap-core/platform` | 路径与 project hash、session 发现、blob、JSON 与文本、平台原语、流式 HTTP 传输、进程树、取消 token、日志文件 | 不 import 任何本地包，不含 agent 与协议语义 |
 | `ap-core/protocol` | 事件 schema 与 wire 常量、宽松解析、`Line_Reader`、usage | 不 import 任何本地包，不含 IO、路径或 agent 逻辑 |
 | `ap-core/client` | spawn、拼 argv、逐行泵、取消、只读 project/session/blob、历史展示辅助 | 不 import engine 或 `apcore` 根包，不含 agent |
 | `ap-tui`（`aptui`） | 终端渲染、输入、编辑器、按键、terminal 控制、历史重放 | 不 import engine 或 platform，不含 agent |
@@ -43,7 +43,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | `session.odin` | 新会话、恢复、fork 的解析，冻结值与 `session_start`、`session_end` |
 | `loop.odin` | turn/step 状态机、重试决策、取消路径、工具执行编排、事件追加 |
 | `context.odin` | transcript 到 messages 的投影、system prompt 组装、blob 解引用 |
-| `provider.odin`、`sse.odin` | OpenAI chat completions 请求、SSE 解析、tool call 组装、usage、错误归一 |
+| `provider.odin`、`sse.odin` | OpenAI chat completions 请求、SSE 解析、tool call 组装、usage、错误归一；HTTP 传输在 `platform` |
 | `transcript.odin` | 事件追加与读取、最后一个 `session_start` 的定位、fork 与恢复 |
 | `errors.odin`、`config.odin` | 错误值、日志级别、`Settings` 与默认值 |
 | `prompts/system.md` | 编译期内嵌的基础 system prompt |
@@ -53,7 +53,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 依赖只能向下。箭头表示 import 方向：
 
 ```
-cmd/ap ──► ap-cli ──► apcore ──► engine ──┬──► provider ──► vendor:curl
+cmd/ap ──► ap-cli ──► apcore ──► engine ──┬──► provider ──► platform ──► vendor:curl
             │         │                  ├──► tool ──► platform、protocol
             │         └──► tool          └──► transcript ──► JSONL + blobs
             ├──► ap-cli/tools ──► tool、platform、protocol
@@ -277,7 +277,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error)
 ### 取消顺序
 
 1. 信号处理器记录退出码，并设置 `platform.Cancel_Token`。Unix 的 `SIGINT` 对应 130，`SIGTERM` 对应 143。Windows 的 Ctrl+C 与 Ctrl+Break 对应 130。1 秒内收到第二次信号时直接 `os.exit`。
-2. Provider 在 curl 进度回调与返回前轮询 token，命中后中止 HTTP 请求。
+2. 传输层（`platform.http_stream`）在 curl 进度回调与返回前轮询 token，命中后中止 HTTP 请求。
 3. 正在执行的工具轮询 token，终止子进程树，返回 `ok:false` 与 `cancelled`。
 4. Loop 写 `cancel` 事件。正在流式输出时补一条 `message_end(stop_reason="cancelled")`，然后写 `turn_end(stop_reason="cancelled")`。
 5. `Turn_Result.cancelled` 置位。CLI 用信号处理器记录的码映射退出码，缺省为 130，`session_close` 写 `session_end(reason="signal")`。
