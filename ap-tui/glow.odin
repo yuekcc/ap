@@ -70,5 +70,5 @@ run_glow :: proc(text: string, width: int, color: bool) -> (string, client.Error
 		message, _ := client.truncate_utf8(strings.trim_space(string(errout)), 200)
 		return "", client.errorf("glow exited with code %d: %s", state.exit_code, message)
 	}
-	return string(out), client.ok_error()
+	return strings.trim_left_space(string(out)), client.ok_error()
 }
