@@ -12,7 +12,7 @@ expect_row :: proc(t: ^testing.T, l: Layout, i, start, length: int) {
 		return
 	}
 	got := l.rows[i]
-	testing.expectf(t, got == Row{start = start, len = length}, "row %d: got %v, want {%d,%d}", i, got, start, length)
+	testing.expectf(t, got == Row{start = start, len_bytes = length}, "row %d: got %v, want {%d,%d}", i, got, start, length)
 }
 
 @(test)

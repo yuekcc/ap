@@ -7,7 +7,9 @@ import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:strconv"
 import "core:strings"
+import "core:sync"
 import "core:time"
 
 // HTTP API：路由表与全部 handler。约定见 docs/web.md「HTTP API」：
@@ -129,7 +131,15 @@ Api_Cancelled :: struct {
 
 Api_History :: struct {
 	events: []json.Value `json:"events"`,
+	// 返回的是尾部窗口：更早的事件因 limit / 字节上限被丢弃。
+	truncated: bool `json:"truncated"`,
 }
+
+// /api/history 的单次响应预算。transcript 可以很长，一次全量重放会把
+// 连接线程、内存和浏览器都拖垮。
+DEFAULT_HISTORY_LIMIT :: 1000
+MAX_HISTORY_LIMIT :: 5000
+MAX_HISTORY_BYTES :: 8 * 1024 * 1024
 
 // 用标准库 marshal 保证转义正确；body 落在请求级临时分配器里，
 // serve_connection 写完响应后统一回收。
@@ -201,6 +211,18 @@ query_param :: proc(query, name: string) -> (string, bool) {
 		return decoded, true
 	}
 	return "", false
+}
+
+query_int_param :: proc(query, name: string) -> (int, bool) {
+	value, has := query_param(query, name)
+	if !has {
+		return 0, false
+	}
+	parsed, ok := strconv.parse_int(value)
+	if !ok {
+		return 0, false
+	}
+	return parsed, true
 }
 
 platform_name :: proc() -> string {
@@ -436,7 +458,7 @@ session_entries :: proc(
 		if info, stat_err := os.stat(client.session_file(project, id), context.temp_allocator); stat_err == nil {
 			ts = time.time_to_unix_nano(info.modification_time) / 1_000_000
 		}
-		summary := session_transcript_summary(project, id, allocator)
+		summary := cached_session_summary(project, id, allocator)
 		append(&entries, Api_Session_Entry{
 			// id 来自 client.session_ids 的临时列表，helper 返回前会释放；必须克隆到
 			// 调用方 allocator，否则响应序列化时读到的是悬空字符串。
@@ -520,6 +542,86 @@ session_transcript_summary :: proc(
 	return out
 }
 
+// transcript 摘要缓存。/api/projects 每轮轮询都会给每个 session 拉一次；
+// 全量解析 transcript 只为数 turn_start 和找标题，长 session 下是主要的
+// CPU/IO 开销。文件 mtime + size 没变就复用上次结果。
+SUMMARY_CACHE_MAX_ENTRIES :: 512
+
+Session_Summary_Cache_Entry :: struct {
+	path:     string, // heap
+	mtime_ns: i64,
+	size:     i64,
+	turns:    int,
+	title:    string, // heap；空串表示还没有标题
+	readable: bool,
+}
+
+Session_Summary_Cache :: struct {
+	mu:      sync.Mutex,
+	entries: [dynamic]Session_Summary_Cache_Entry,
+}
+
+session_summary_cache: Session_Summary_Cache
+
+cached_session_summary :: proc(
+	project: client.Project,
+	session_id: string,
+	allocator := context.temp_allocator,
+) -> Session_Summary {
+	path := client.session_file(project, session_id)
+	info, stat_err := os.stat(path, context.temp_allocator)
+	if stat_err != nil {
+		return session_transcript_summary(project, session_id, allocator)
+	}
+	mtime_ns := time.time_to_unix_nano(info.modification_time)
+
+	sync.mutex_lock(&session_summary_cache.mu)
+	defer sync.mutex_unlock(&session_summary_cache.mu)
+
+	for &entry in session_summary_cache.entries {
+		if entry.path != path {
+			continue
+		}
+		if entry.mtime_ns == mtime_ns && entry.size == info.size {
+			return {
+				turns = entry.turns,
+				title = strings.clone(entry.title, allocator),
+				readable = entry.readable,
+			}
+		}
+		summary := session_transcript_summary(project, session_id, allocator)
+		delete(entry.title, runtime.heap_allocator())
+		entry.mtime_ns = mtime_ns
+		entry.size = info.size
+		entry.turns = summary.turns
+		entry.title = strings.clone(summary.title, runtime.heap_allocator())
+		entry.readable = summary.readable
+		return summary
+	}
+
+	summary := session_transcript_summary(project, session_id, allocator)
+	if len(session_summary_cache.entries) >= SUMMARY_CACHE_MAX_ENTRIES {
+		// 简单封顶：缓存是加速手段，不是事实来源，整体丢弃是安全的。
+		for &entry in session_summary_cache.entries {
+			delete(entry.path, runtime.heap_allocator())
+			delete(entry.title, runtime.heap_allocator())
+		}
+		clear(&session_summary_cache.entries)
+	}
+	append(
+		&session_summary_cache.entries,
+		Session_Summary_Cache_Entry {
+			path = strings.clone(path, runtime.heap_allocator()),
+			mtime_ns = mtime_ns,
+			size = info.size,
+			turns = summary.turns,
+			title = strings.clone(summary.title, runtime.heap_allocator()),
+			readable = summary.readable,
+		},
+	)
+	return summary
+}
+
 // ---------------------------------------------------------------------------
 // history：transcript 重放
 // ---------------------------------------------------------------------------
@@ -543,6 +645,23 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 		api_error(response, 400, "invalid_cwd", message)
 		return
 	}
+	limit := DEFAULT_HISTORY_LIMIT
+	if value, has := query_int_param(request.query, "limit"); has {
+		if value <= 0 {
+			api_error(response, 400, "invalid_request", "limit must be positive")
+			return
+		}
+		limit = min(value, MAX_HISTORY_LIMIT)
+	}
+	since_seq := -1 // 未指定时不过滤：seq 从 0 开始，用 0 会漏掉首条事件。
+	if value, has := query_int_param(request.query, "since_seq"); has {
+		if value < 0 {
+			api_error(response, 400, "invalid_request", "since_seq must be non-negative")
+			return
+		}
+		since_seq = value
+	}
+
 	data, read_err := client.read_transcript(project, session_id)
 	if !client.is_ok(read_err) {
 		api_error(response, 404, "session_not_found", read_err.message)
@@ -550,13 +669,32 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 	}
 	defer delete(data, context.allocator)
 
-	events := make([dynamic]json.Value, 0, 32, context.temp_allocator)
+	// 第一遍只挑行，不做 JSON 解析：超出 limit 的旧事件根本不应消耗
+	// blob 读取和解析预算。行本身是 data 的切片，不复制内容。
+	lines := make([dynamic]string, 0, 64, context.temp_allocator)
 	it := client.Line_Iterator{data = string(data)}
+	truncated := false
 	for {
 		line, more := client.next_line(&it)
 		if !more {
 			break
 		}
+		ev, parsed := protocol.parse_stream_event(line)
+		if !parsed || ev.seq <= since_seq {
+			continue
+		}
+		append(&lines, line)
+	}
+	if len(lines) > limit {
+		truncated = true
+		drop := len(lines) - limit
+		copy(lines[:], lines[drop:])
+		resize(&lines, limit)
+	}
+
+	events := make([dynamic]json.Value, 0, len(lines), context.temp_allocator)
+	budget_bytes := 0
+	for line in lines {
 		ev, parsed := protocol.parse_stream_event(line)
 		if !parsed {
 			continue
@@ -566,9 +704,27 @@ api_history :: proc(user: rawptr, request: ^Http_Request, response: ^Http_Respon
 			continue
 		}
 		history_enrich_event(&value, ev, project)
+		// 精确计字节：解析结果可能因为 blob 展开比原始行大很多。
+		encoded, enc_err := json.marshal(value, {}, context.temp_allocator)
+		if enc_err != nil {
+			continue
+		}
+		budget_bytes += len(encoded)
 		append(&events, value)
 	}
-	api_json(response, 200, Api_History{events = events[:]})
+	// 字节超限时同样丢最旧的事件，保留最新窗口。
+	for budget_bytes > MAX_HISTORY_BYTES && len(events) > 1 {
+		oldest := events[0]
+		encoded, enc_err := json.marshal(oldest, {}, context.temp_allocator)
+		if enc_err != nil {
+			break
+		}
+		budget_bytes -= len(encoded)
+		// 保留原有时间顺序：transcript 重放不能打乱事件次序。
+		ordered_remove(&events, 0)
+		truncated = true
+	}
+	api_json(response, 200, Api_History{events = events[:], truncated = truncated})
 }
 
 history_enrich_event :: proc(value: ^json.Value, ev: protocol.Stream_Event, project: client.Project) {
@@ -794,8 +950,7 @@ api_session_title :: proc(user: rawptr, request: ^Http_Request, response: ^Http_
 		api_error(response, 400, "invalid_json", "request body must be a JSON object")
 		return
 	}
-	// 这个 key 要活到子进程跑完：turn 泵会 free_all(temp)，请求体里的字符串
-	// 在那之后就失效了。
+	// key 要在 runner 锁与整轮子进程里使用；用 heap 持有，不依赖请求 arena。
 	key := strings.clone(strings.trim_space(body.session_key), context.allocator)
 	defer delete(key, context.allocator)
 	if len(key) == 0 {

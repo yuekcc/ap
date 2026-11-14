@@ -653,6 +653,7 @@ assembler_finish :: proc(a: ^Stream_Assembler) -> Provider_Error {
 	}
 
 	tool_calls := make([dynamic]Assembled_Tool_Call, 0, len(a.slots))
+	defer delete(tool_calls)
 	for &slot in a.slots {
 		if len(slot.id) == 0 || len(slot.name) == 0 {
 			return assembler_fail(
@@ -666,6 +667,10 @@ assembler_finish :: proc(a: ^Stream_Assembler) -> Provider_Error {
 		}
 		input, perr := json.parse_string(args_text, .JSON, true)
 		if perr != nil {
+			// 前面已解析的 input 树不会被 loop 接收，这里负责回收。
+			for call in tool_calls {
+				json.destroy_value(call.input)
+			}
 			return assembler_fail(
 				a,
 				{
@@ -680,6 +685,10 @@ assembler_finish :: proc(a: ^Stream_Assembler) -> Provider_Error {
 	}
 
 	if stop != .Tool_Use && len(tool_calls) > 0 {
+		// 这次响应不会被 loop 接收，input 树没人接手，必须在这里回收。
+		for call in tool_calls {
+			json.destroy_value(call.input)
+		}
 		return assembler_fail(
 			a,
 			{kind = .Protocol, message = "provider returned tool calls with a non-tool finish_reason", retryable = false},
@@ -820,6 +829,11 @@ curl_write_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawptr
 		if err != .None {
 			if !ctx.assembler.failed {
 				ctx.protocol_error = "SSE parse error"
+				if err == .Line_Too_Long {
+					ctx.protocol_error = "SSE line too long"
+				} else if err == .Event_Too_Long {
+					ctx.protocol_error = "SSE event too large"
+				}
 			}
 			ctx.feed_failed = true
 			return 0
@@ -864,6 +878,11 @@ curl_header_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawpt
 					clear(&ctx.raw)
 					if err != .None {
 						ctx.protocol_error = "SSE parse error"
+						if err == .Line_Too_Long {
+							ctx.protocol_error = "SSE line too long"
+						} else if err == .Event_Too_Long {
+							ctx.protocol_error = "SSE event too large"
+						}
 						ctx.feed_failed = true
 						return 0
 					}
@@ -1023,6 +1042,9 @@ provider_stream :: proc(
 	}
 	if sse_err == .Line_Too_Long {
 		return assembler_fail(&a, {kind = .Protocol, message = "SSE line too long", retryable = false})
+	}
+	if sse_err == .Event_Too_Long {
+		return assembler_fail(&a, {kind = .Protocol, message = "SSE event too large", retryable = false})
 	}
 	if sse_err != .None {
 		return assembler_fail(&a, {kind = .Protocol, message = "SSE parse error", retryable = false})

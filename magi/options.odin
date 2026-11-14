@@ -17,6 +17,9 @@ Output_Format :: enum {
 	Text,
 }
 
+// stdin 管道与 --input-file / --context-file 都是不可信输入，必须有硬上限。
+MAX_PROMPT_BYTES :: 8 * 1024 * 1024
+
 Options :: struct {
 	question:      Maybe(string),
 	context_text:  Maybe(string),
@@ -216,6 +219,9 @@ read_all_stdin :: proc() -> (string, apcore.Error) {
 		n, err := os.read(os.stdin, chunk[:])
 		if n > 0 {
 			append(&buf, ..chunk[:n])
+			if len(buf) > MAX_PROMPT_BYTES {
+				return "", apcore.errorf(.Usage, "request from stdin exceeds %d bytes", MAX_PROMPT_BYTES)
+			}
 		}
 		if err != nil {
 			if err == .EOF || err == .Broken_Pipe {
@@ -283,6 +289,10 @@ has_non_space :: proc(text: string) -> bool {
 }
 
 read_text_file :: proc(path, label: string) -> (string, apcore.Error) {
+	if info, serr := os.stat(path, context.temp_allocator); serr == nil &&
+	   info.size > i64(MAX_PROMPT_BYTES) {
+		return "", apcore.errorf(.Usage, "%s exceeds %d bytes: %s", label, MAX_PROMPT_BYTES, path)
+	}
 	data, err := os.read_entire_file_from_path(path, context.allocator)
 	if err != nil {
 		return "", apcore.errorf(.Usage, "cannot read %s %s: %v", label, path, err)

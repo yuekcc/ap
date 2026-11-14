@@ -94,20 +94,38 @@ spawn_child :: proc(
 	stderr_r, stderr_w: ^os.File
 
 	if stdin_data != nil {
+		// 只落平台临时目录：回落到 cwd 会把提示词明文写进正在被 agent 编辑的
+		// 仓库，而且文件名可预测。
 		base := os.get_env("TEMP", context.allocator)
 		if len(base) == 0 {
-			base = cwd
+			base = os.get_env("TMPDIR", context.allocator)
+		}
+		defer delete(base, context.allocator)
+		if len(base) == 0 {
+			return child, platform.errorf(
+				"cannot determine temporary directory for stdin; set TEMP or TMPDIR",
+			)
 		}
 		stdin_temp = fmt.tprintf("%s/.ap-stdin-%d-%d", base, os.get_pid(), time.time_to_unix_nano(time.now()))
-		if werr := os.write_entire_file_from_bytes(stdin_temp, stdin_data); werr != nil {
-			return child, platform.errorf("cannot write temporary stdin file: %v", werr)
+		// .Excl：同名文件已存在时直接失败，不能静默截断别人的文件。
+		file, ferr := os.open(stdin_temp, {.Read, .Write, .Create, .Excl})
+		if ferr != nil {
+			return child, platform.errorf("cannot create temporary stdin file: %v", ferr)
 		}
-		file, ferr := os.open(stdin_temp, {.Read, .Inheritable})
+		if !platform.write_all(file, stdin_data) {
+			os.close(file)
+			os.remove(stdin_temp)
+			stdin_temp = ""
+			return child, platform.errorf("cannot write temporary stdin file")
+		}
+		os.close(file)
+		// 子进程需要可继承的只读句柄。
+		stdin_file, ferr = os.open(stdin_temp, {.Read, .Inheritable})
 		if ferr != nil {
 			os.remove(stdin_temp)
+			stdin_temp = ""
 			return child, platform.errorf("cannot open temporary stdin file: %v", ferr)
 		}
-		stdin_file = file
 	}
 	r1, w1, e1 := os.pipe()
 	if e1 != nil {
@@ -191,6 +209,12 @@ read_available :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool
 run_child :: proc(opts: Run_Options) -> Run_Result {
 	started := time.tick_now()
 	result := Run_Result{exit_code = -1}
+	// 0 曾经等价于「无限等待」，子进程卡死时调用方会一起挂住。所有调用点都必须
+	// 给出明确的墙钟上限；需要长任务时把上限设大，而不是关掉它。
+	if opts.timeout_ms <= 0 {
+		result.error = "run_child requires a positive timeout_ms"
+		return result
+	}
 	child, serr := spawn_child(opts.command, opts.cwd, opts.env, opts.stdin_data)
 	if !platform.is_ok(serr) {
 		result.error = serr.message
@@ -255,7 +279,7 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 			kill_reason = 2
 			break
 		}
-		if opts.timeout_ms > 0 && time.tick_since(started) >= timeout {
+		if time.tick_since(started) >= timeout {
 			result.timed_out = true
 			kill_reason = 1
 			break
@@ -308,6 +332,9 @@ run_child :: proc(opts: Run_Options) -> Run_Result {
 	close_child_pipes(&child)
 	if child.job != 0 {
 		platform.register_job(child.job)
+		// 子进程已经结束：没有残留后代就立刻归还句柄，长 session 里不能每次
+		// bash/task 调用都泄漏一个 Job；还有后台进程时留给退出前的 cleanup_jobs。
+		platform.release_job(child.job)
 	}
 	result.stdout = stdout_buf[:]
 	result.stderr = stderr_buf[:]

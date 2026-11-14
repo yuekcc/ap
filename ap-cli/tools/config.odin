@@ -10,6 +10,8 @@ Tool_Config :: struct {
 	model:             string,
 	max_steps:         int,
 	tool_timeout_ms:   int,
+	// task 子代理的墙钟上限；子进程卡住时整轮 turn 不能一起挂死。
+	task_timeout_ms:   int,
 	max_capture_bytes: int,
 	image_input:       bool,
 	image_max_bytes:   int,

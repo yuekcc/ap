@@ -6,6 +6,7 @@
   "max_agent_depth": 1,
   "max_tokens": 65536,
   "tool_timeout_ms": 120000,
+  "task_timeout_ms": 1800000,
   "llm_timeout_ms": 600000,
   "blob_threshold_bytes": 102400,
   "max_capture_bytes": 67108864,

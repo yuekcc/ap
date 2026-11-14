@@ -80,7 +80,7 @@ handle_command :: proc(app: ^App, line: string) -> Command_Result {
 	return .Not_Command
 }
 
-run_input_loop :: proc(app: ^App, input: ^Input) {
+run_input_loop :: proc(app: ^App, input: ^Input, cancel: ^client.Cancel_Token) {
 	for {
 		text, eof := read_prompt(app, input)
 		if eof {
@@ -98,7 +98,7 @@ run_input_loop :: proc(app: ^App, input: ^Input) {
 			continue
 		case .Not_Command:
 		}
-		run_agent_turn(app, text)
+		run_agent_turn(app, text, cancel)
 		app.prompt_gap = true
 		free_all(context.temp_allocator)
 	}
@@ -181,6 +181,11 @@ run :: proc(args: []string) -> int {
 		}
 	}
 
+	// Ctrl+C 只取消正在跑的 turn；正常退出与崩溃两条路径都要收掉子进程树。
+	cancel: client.Cancel_Token
+	install_signal_handlers(&cancel)
+	defer client.cleanup_jobs()
+
 	print_banner(&app)
 	if len(app.session_id) > 0 {
 		if err := replay_session(&app, app.session_id); !client.is_ok(err) {
@@ -195,6 +200,6 @@ run :: proc(args: []string) -> int {
 	}
 	defer input_destroy(&input)
 
-	run_input_loop(&app, &input)
+	run_input_loop(&app, &input, &cancel)
 	return 0
 }

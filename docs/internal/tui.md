@@ -217,7 +217,7 @@ odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 
 - 终端 reflow（窗口缩放、重新布局已画内容）可能让编辑块错位。`lineedit` 在每次重绘时重新取尺寸；空闲时不主动重绘。
 - turn 运行期间不读 stdin。这期间的按键由终端留在输入缓冲里，turn 结束后会被当成下一条提示词。
-- turn 运行期间 Ctrl+C 是内核 `SIGINT`，会同时终止 `ap-tui` 和 `ap`。`ap-tui` 不会回到输入框。
+- turn 运行期间 Ctrl+C 不再直接杀掉 `ap-tui`：SIGINT/Ctrl+C 置 `Turn_Options.cancel`，子 `ap` 及其工具进程树被终止，本轮以 `cancelled` 结束并回到输入框。1 秒内第二次 Ctrl+C 直接退出，退出码 130。`run` 退出时（含异常路径）调用 `client.cleanup_jobs()`；Windows 的 Job 另设 `KILL_ON_JOB_CLOSE`，前端崩溃时子进程树也会被回收。
 - 不显示 reasoning，也没有 token 或 usage 状态行。
 - 输入框没有持久化 history、选中、撤销和鼠标支持。补全只覆盖斜杠命令。
 

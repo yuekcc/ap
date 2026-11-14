@@ -16,7 +16,17 @@ import "core:os"
 // 交接（handoff）拆成两半：引擎产交接文本并写 handoff 事件，这里拿文本
 // 创建新 session、打印 session id、决定退出码。
 
+// stdout 是机器通道：写失败（管道关闭、磁盘满）必须是非零退出，不能照常返回 0。
 run :: proc(args: []string) -> int {
+	code := run_inner(args)
+	if code == 0 && stdout_failed() {
+		apcore.log_error("cannot write to stdout")
+		return int(Exit_Code.Internal)
+	}
+	return code
+}
+
+run_inner :: proc(args: []string) -> int {
 	platform.setup_console()
 	normalized := platform.normalize_args(args)
 	opts, perr := parse_args(normalized)
@@ -255,7 +265,12 @@ run :: proc(args: []string) -> int {
 	}
 	if !apcore.is_ok(terr) {
 		apcore.log_error("%s", terr.message)
-		err_end_line, _ := apcore.session_close(&session, {reason = protocol.SESSION_END_ERROR, usage = {}})
+		err_end_line, close_err := apcore.session_close(&session, {reason = protocol.SESSION_END_ERROR, usage = {}})
+		if !apcore.is_ok(close_err) {
+			// session_end 没写进去，恢复侧会当成异常退出；错误码也要跟着升级。
+			apcore.log_error("%s", close_err.message)
+			return int(Exit_Code.Internal)
+		}
 		if out.format == .Stream_Json {
 			write_stdout(transmute([]byte)err_end_line)
 			write_stdout(transmute([]byte)string("\n"))
@@ -356,7 +371,11 @@ run_session_title :: proc(
 	title, terr := apcore.session_title_generate(session, cancel, emitter)
 	if !apcore.is_ok(terr) {
 		apcore.log_error("%s", terr.message)
-		end_line, _ := apcore.session_close(session, {reason = protocol.SESSION_END_ERROR})
+		end_line, close_err := apcore.session_close(session, {reason = protocol.SESSION_END_ERROR})
+		if !apcore.is_ok(close_err) {
+			apcore.log_error("%s", close_err.message)
+			return int(Exit_Code.Internal)
+		}
 		if out.format == .Stream_Json {
 			write_stdout(transmute([]byte)end_line)
 			write_stdout(transmute([]byte)string("\n"))
@@ -467,7 +486,11 @@ run_manual_handoff :: proc(
 	defer apcore.session_handoff_destroy(&handoff)
 
 	// session_close 会从 transcript 重算整份用量，已经包含交接这一次调用。
-	source_end, _ := apcore.session_close(source, {reason = protocol.SESSION_END_EXIT})
+	source_end, source_close_err := apcore.session_close(source, {reason = protocol.SESSION_END_EXIT})
+	if !apcore.is_ok(source_close_err) {
+		apcore.log_error("%s", source_close_err.message)
+		return int(Exit_Code.Internal)
+	}
 	if out.format == .Stream_Json {
 		write_stdout(transmute([]byte)source_end)
 		write_stdout(transmute([]byte)string("\n"))

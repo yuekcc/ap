@@ -34,7 +34,11 @@ write_text :: proc(r: ^Renderer, text: string) {
 	if len(text) == 0 {
 		return
 	}
-	_ = client.write_all(r.out, transmute([]byte)text)
+	if !client.write_all(r.out, transmute([]byte)text) {
+		// 写失败时终端实际状态没变，渲染器状态也不能跟着变，否则后续每个
+		// ensure_line_start 都基于错误的前提。
+		return
+	}
 	r.at_line_start = text[len(text) - 1] == '\n'
 }
 
@@ -42,6 +46,7 @@ write_escape :: proc(r: ^Renderer, code: string) {
 	if !r.color || len(code) == 0 {
 		return
 	}
+	// 颜色转义写失败不影响布局状态（at_line_start 只由可见文本更新）。
 	_ = client.write_all(r.out, transmute([]byte)code)
 }
 

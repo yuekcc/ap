@@ -25,11 +25,11 @@ valid_utf8 :: proc(data: []byte) -> bool {
 }
 
 // 把可能包含非法 UTF-8 的字节转成合法字符串，用于 JSON transcript。
-sanitize_utf8 :: proc(data: []byte) -> string {
+sanitize_utf8 :: proc(data: []byte, allocator := context.allocator) -> string {
 	if utf8.valid_string(string(data)) {
 		return string(data)
 	}
-	b := strings.builder_make()
+	b := strings.builder_make(allocator)
 	remaining := data
 	for len(remaining) > 0 {
 		r, size := utf8.decode_rune(remaining)

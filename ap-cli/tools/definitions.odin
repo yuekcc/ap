@@ -89,6 +89,9 @@ builtin_tools :: proc(cfg: ^Tool_Config) -> []tool.Tool {
 			tools[i].execute = execute_bash
 		case "task":
 			tools[i].execute = execute_task
+		case:
+			// 新增工具忘了加 case 时，execute 会是 nil，延迟到运行时才炸。
+			assert(false, "tool info without an execute implementation")
 		}
 	}
 	return tools

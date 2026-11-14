@@ -19,8 +19,12 @@ Output_State :: struct {
 output_write_json :: proc(obj: json.Object) {
 	data, err := platform.json_marshal_utf8(obj)
 	if err != nil {
+		// stdout 少一整条事件时不能还报成功。
+		apcore.log_error("cannot encode stream-json event: %v", err)
+		g_stdout_failed = true
 		return
 	}
+	defer delete(data)
 	write_stdout(data)
 	write_stdout(transmute([]byte)string("\n"))
 }
@@ -43,7 +47,12 @@ output_text_delta :: proc(user: rawptr, message_id, text: string) {
 	if out.format != .Stream_Json {
 		return
 	}
-	output_write_json(protocol.make_text_delta_event(message_id, text))
+	output_write_json(
+		protocol.make_text_delta_event(
+			message_id,
+			platform.sanitize_utf8(transmute([]byte)text, context.temp_allocator),
+		),
+	)
 }
 
 output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
@@ -51,7 +60,12 @@ output_reasoning_delta :: proc(user: rawptr, message_id, text: string) {
 	if out.format != .Stream_Json {
 		return
 	}
-	output_write_json(protocol.make_reasoning_delta_event(message_id, text))
+	output_write_json(
+		protocol.make_reasoning_delta_event(
+			message_id,
+			platform.sanitize_utf8(transmute([]byte)text, context.temp_allocator),
+		),
+	)
 }
 
 output_tool_delta :: proc(user: rawptr, index: int, id, name, args_delta: string) {
@@ -134,7 +148,10 @@ output_tool_update :: proc(user: rawptr, tool_call_id, chunk: string) {
 	switch out.format {
 	case .Stream_Json:
 		output_write_json(
-			protocol.make_tool_update_event(tool_call_id, platform.sanitize_utf8(transmute([]byte)chunk)),
+			protocol.make_tool_update_event(
+				tool_call_id,
+				platform.sanitize_utf8(transmute([]byte)chunk, context.temp_allocator),
+			),
 		)
 	case .Text:
 		console_tool_update(&out.console, chunk)
@@ -207,8 +224,11 @@ output_title :: proc(out: ^Output_State, session_id, title: string, usage: proto
 	}
 	data, err := platform.json_marshal_utf8(payload)
 	if err != nil {
+		apcore.log_error("cannot encode title payload: %v", err)
+		g_stdout_failed = true
 		return
 	}
+	defer delete(data)
 	write_stdout(data)
 	write_stdout(transmute([]byte)string("\n"))
 }
@@ -244,8 +264,11 @@ output_final :: proc(
 		payload.handoff = handoff
 		data, err := platform.json_marshal_utf8(payload)
 		if err != nil {
+			apcore.log_error("cannot encode final json payload: %v", err)
+			g_stdout_failed = true
 			return
 		}
+		defer delete(data)
 		write_stdout(data)
 		write_stdout(transmute([]byte)string("\n"))
 	case .Stream_Json:

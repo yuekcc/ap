@@ -101,18 +101,27 @@ file_enter_raw :: proc(ctx: rawptr) -> bool {
 	return true
 }
 
-file_leave_raw :: proc(ctx: rawptr) {
+file_leave_raw :: proc(ctx: rawptr) -> bool {
 	ft := cast(^File_Transport)ctx
+	ok := true
 	if ft.has_saved {
 		fd := posix.FD(os.fd(ft.input))
-		posix.tcsetattr(fd, .TCSANOW, &ft.saved)
-		ft.has_saved = false
+		if posix.tcsetattr(fd, .TCSANOW, &ft.saved) != .OK {
+			// 保留 has_saved：调用方可以重试，终端不能假装已经恢复。
+			ok = false
+		} else {
+			ft.has_saved = false
+		}
 	}
-	ft.entered = false
+	if ok {
+		ft.entered = false
+	}
+	return ok
 }
 
 file_destroy :: proc(ctx: rawptr) {
 	ft := cast(^File_Transport)ctx
-	file_leave_raw(ctx)
+	// 销毁路径没有调用方可以报告失败；leave_raw 自己已经写了诊断。
+	_ = file_leave_raw(ctx)
 	free(ft)
 }

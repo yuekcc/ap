@@ -167,7 +167,7 @@ stdout 包含两类事件：
 | --- | --- |
 | 嵌套 | `max_agent_depth` 默认 1。达到上限时从工具集移除 `task`，直接调用也会返回 `max_agent_depth reached; task is not available` |
 | 并发 | 父进程的工具串行执行，一次只跑一个子代理 |
-| 超时 | 不设超时。子代理自己的 LLM 超时与 bash 超时仍然生效，父进程靠取消终止子进程树 |
+| 超时 | 墙钟上限取 `task_timeout_ms`（默认 30 分钟）。子代理自己的 LLM 超时与 bash 超时仍然生效，父进程也可以取消并终止子进程树 |
 | 子进程没写 `session_start` | `ok:false`，错误附 stderr 尾部最多 2000 字节，不伪造 `child_session_id` |
 | 子进程退出码非 0 | `ok:false`，错误取最后一条 `error` 消息，没有时取 stderr 尾部 |
 | 子进程没有 `session_end` | `ok:false`，错误为 `subagent exited without session_end` |

@@ -21,7 +21,7 @@
 | 线程 | 职责 |
 | --- | --- |
 | accept 线程 | `core:net` 阻塞 accept，建立连接后交给连接线程 |
-| 连接线程 | 每个连接一个，处理 HTTP 请求、静态资源、API 或 SSE |
+| 连接线程 | 每个连接一个，处理 HTTP 请求、静态资源、API 或 SSE；同时最多 256 个（`MAX_CONNECTIONS`），超限的连接直接关闭 |
 | turn 线程 | 每轮 turn 一个，spawn `ap`、泵 stdout、广播事件、组装 `turn_done` |
 | heartbeat 线程 | 每 15 秒向 hub 投递一次注释行和 `ping` 事件 |
 | shutdown watcher | 轮询信号标志，执行收尾 |
@@ -53,7 +53,7 @@
 - 普通响应用 `Content-Length` 定长。304 不带 `Content-Length`。
 - SSE 用 chunked，并设置 `Connection: close`。
 - HTTP/1.1 默认 keep-alive。请求带 `Connection: close`、响应状态码大于等于 400、或 SSE 响应后关闭连接。
-- 连接空闲等待上限 30 秒。开始读取某个请求后改为 10 秒。读超时直接关闭连接，不写错误响应。
+- 连接空闲等待上限 30 秒。开始读取某个请求后改为 10 秒，并且整个请求另有 15 秒总期限（`REQUEST_TOTAL_TIMEOUT`）：慢速客户端靠每次 recv 重置超时无法长期占住连接线程。超过总期限返回 408 后关闭连接；单次读超时仍直接关闭、不写响应。
 - `/api/*` 的解析错误返回 `{"error":{"code","message"}}`。静态资源错误返回纯文本。
 - API 的 JSON 编码失败固定返回 500 `internal_error`。
 
@@ -67,6 +67,13 @@
 - MIME 按扩展名查表：html、htm、js、mjs、css、json、svg、png、ico、wasm，其余为 `application/octet-stream`。
 - `ETag` 是文件内容的 FNV-1a hash。命中 `If-None-Match` 返回 304。静态响应带 `Cache-Control: no-cache`。
 
+### 请求级内存所有权
+
+- `serve_connection` 每个请求建一个 `runtime.Arena`，在解析请求、调用 handler 和写响应的整个过程中把它作为 `context.temp_allocator`，响应写完立即销毁。请求字段、响应头和 JSON body 都从该 arena 分配。
+- handler 内同步调用的库**不得** `free_all(context.temp_allocator)`：那会回收请求级内存，之后写响应头会踩到已释放的 `Http_Header`。库只能重置自己持有的 arena。
+- `ap-core/client` 的 turn 泵每次调用 `turn_run` 都建自己的 arena，进出时替换并恢复 `context.temp_allocator`。
+- 需要跨请求存活的数据用 `runtime.heap_allocator()` 克隆（例如 runner 里的 session 字段），不能留在请求 arena 里。
+
 ## HTTP API
 
 请求和响应都是 JSON。错误统一为 `{"error": {"code": "...", "message": "..."}}`。
@@ -78,9 +85,9 @@
 | GET | `/api/session/current` | `?session_key=<key>` 可选 | `{session_key, session_id, cwd, running, turn}` | 带 key 返回该 session 的运行态。不带 key 返回最近活跃 session，仅作新标签页兜底 |
 | POST | `/api/session/new` | `{cwd?}` | `{session_id: null, session_key, cwd}` | 分配 slot，不落盘。`cwd` 决定 slot 所属 project |
 | GET | `/api/sessions` | `?cwd=<dir>` 可选 | `[{session_id, ts, turns, running}]` | 该 project 的 session 列表，按文件 mtime 倒序。`turns` 数 `turn_start` |
-| GET | `/api/projects` | – | `[{cwd, hash, latest_ts, sessions}]` | 枚举 `path.txt` 发现 project，按最近活动倒序。默认 project 有 session 时也会补进结果 |
 | POST | `/api/session/resume` | `{session_id, cwd?}` | `{session_id, session_key, cwd}` | 注册或切换运行态，不校验 transcript |
-| GET | `/api/history` | `?session_id=<id>&cwd=<dir>` | `{events: [...]}` | 重放 transcript，解析 blob 引用并截断工具结果 |
+| GET | `/api/projects` | – | `[{cwd, hash, latest_ts, sessions}]` | 枚举 `path.txt` 发现 project，按最近活动倒序。默认 project 有 session 时也会补进结果；session 摘要按 transcript 的 mtime/size 缓存 |
+| GET | `/api/history` | `?session_id=<id>&cwd=<dir>&since_seq=<n>&limit=<n>` | `{events: [...], truncated}` | 重放 transcript，解析 blob 引用并截断工具结果；默认返回最新 1000 条，最多 5000 条或 8 MiB |
 | GET | `/api/cwd` | – | `{cwd}` | 默认工作目录，不随 session 切换 |
 | POST | `/api/cwd/pick` | – | `200 {cwd}`、`409 cancelled`、`409 picker_busy`、`501 not_implemented`、`500 cwd_failed` 或 `500 picker_failed` | 弹系统目录选择框。只返回路径，不修改默认目录 |
 | POST | `/api/turn` | `{prompt, session_key?, cwd?, model?, agent?, max_steps?, max_tokens?}` | `202 {accepted: true, session_key}` | 启动一轮。同一 session 运行中返回 409 `turn_running` |
@@ -110,7 +117,7 @@
 
 `cwd` 的取值顺序是请求中的 `cwd`、该 session 已登记的 `cwd`、`ap-web` 默认目录。`session_key` 只用于定位运行态，不传给 `ap`。请求中的 `model`、`agent`、`max_steps`、`max_tokens` 会覆盖 `ap-web` 启动参数中的默认值。
 
-`GET /api/history` 逐行读 JSONL，并做以下增强：
+`GET /api/history` 的 `since_seq` 只返回 `seq` 更大事件，`limit` 取 1–5000，默认 1000。超出条数或 8 MiB 字节预算时返回**最新**的窗口并从头部丢弃旧事件，同时 `truncated` 为 `true`；事件顺序不变。逐行读 JSONL，并做以下增强：
 
 - `session_start.content_ref` 解析成 `content`。blob 缺失时用 `content_preview`。
 - `message_end` 文本块的 `text_ref` 解析成 `text`。

@@ -33,11 +33,18 @@ real_path :: proc(path: string) -> (string, Error) {
 		return "", errorf("GetFinalPathNameByHandleW failed: %s", path)
 	}
 	buf := make([]u16, n + 1, context.temp_allocator)
-	n = win32.GetFinalPathNameByHandleW(handle, cstring16(raw_data(buf)), u32(len(buf)), win32.VOLUME_NAME_DOS)
-	if n == 0 {
+	needed := win32.GetFinalPathNameByHandleW(
+		handle,
+		cstring16(raw_data(buf)),
+		u32(len(buf)),
+		win32.VOLUME_NAME_DOS,
+	)
+	// 失败时返回值是「需要的缓冲区长度」，不是内容长度；只把 <= len(buf)
+	// 的结果当成有效输出，否则 buf[:needed] 会越界。
+	if needed == 0 || needed > u32(len(buf)) {
 		return "", errorf("GetFinalPathNameByHandleW failed: %s", path)
 	}
-	s := win32.utf16_to_utf8(buf[:n], context.temp_allocator) or_else ""
+	s := win32.utf16_to_utf8(buf[:int(needed)], context.temp_allocator) or_else ""
 	unc_prefix := `\\?\UNC\`
 	win_prefix := `\\?\`
 	switch {

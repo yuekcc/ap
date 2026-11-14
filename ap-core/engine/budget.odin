@@ -93,7 +93,9 @@ estimate_tool_defs_tokens :: proc(defs: []Tool_Def) -> int {
 	for def in defs {
 		total += estimate_text_tokens(def.function.name)
 		total += estimate_text_tokens(def.function.description)
-		total += estimate_text_tokens(platform.json_canonical_string(def.function.parameters))
+		canonical := platform.json_canonical_string(def.function.parameters)
+		total += estimate_text_tokens(canonical)
+		delete(canonical)
 	}
 	return total
 }

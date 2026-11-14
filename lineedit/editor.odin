@@ -4,7 +4,7 @@ import "core:strings"
 import "core:unicode"
 import "core:unicode/utf8"
 
-MAX_INPUT :: 1 << 20
+MAX_INPUT_BYTES :: 1 << 20
 
 // 编辑模型：buffer 是 UTF-8 字节串，cursor 是始终落在 rune 边界上的字节偏移。
 // desired_col 只在连续上下移动之间保留可视列号，任何水平移动或编辑都会清掉它。
@@ -12,12 +12,12 @@ Editor :: struct {
 	buffer:      [dynamic]u8,
 	cursor:      int,
 	desired_col: int,
-	max_len:     int,
+	max_bytes:   int,
 }
 
-editor_init :: proc(e: ^Editor, max_len := MAX_INPUT) {
+editor_init :: proc(e: ^Editor, max_bytes := MAX_INPUT_BYTES) {
 	e^ = {}
-	e.max_len = max_len
+	e.max_bytes = max_bytes
 	e.buffer = make([dynamic]u8, 0, 256)
 	e.desired_col = -1
 }
@@ -41,7 +41,8 @@ editor_reset :: proc(e: ^Editor) {
 	e.desired_col = -1
 }
 
-// 直接设置光标时清掉垂直移动的期望列；位置夹到合法范围。
+// 直接设置光标时清掉垂直移动的期望列；位置夹到合法范围，并对齐到
+// rune 边界（文件头声明 cursor 永远落在边界上）。
 editor_set_cursor :: proc(e: ^Editor, pos: int) {
 	p := pos
 	if p < 0 {
@@ -50,11 +51,14 @@ editor_set_cursor :: proc(e: ^Editor, pos: int) {
 	if p > len(e.buffer) {
 		p = len(e.buffer)
 	}
+	for p > 0 && p < len(e.buffer) && (e.buffer[p] & 0xC0) == 0x80 {
+		p -= 1
+	}
 	e.cursor = p
 	e.desired_col = -1
 }
 
-// 插入文本。CRLF 和孤立 CR 归一成 LF；超过 max_len 时只插入能放下的完整 rune，
+// 插入文本。CRLF 和孤立 CR 归一成 LF；超过 max_bytes 时只插入能放下的完整 rune，
 // 返回 true 表示发生了截断。空输入返回 false。
 editor_insert_text :: proc(e: ^Editor, text: string) -> bool {
 	data := transmute([]u8)text
@@ -90,7 +94,7 @@ editor_insert_text :: proc(e: ^Editor, text: string) -> bool {
 		data = normalized[:]
 	}
 
-	available := e.max_len - len(e.buffer)
+	available := e.max_bytes - len(e.buffer)
 	if available <= 0 {
 		return true
 	}
@@ -345,7 +349,7 @@ editor_offset_for_column :: proc(buf: []u8, row: Row, desired: int) -> (offset: 
 		return row.start, 0
 	}
 	i := row.start
-	end := row.start + row.len
+	end := row.start + row.len_bytes
 	c := 0
 	for i < end {
 		it := utf8.decode_grapheme_iterator_make(string(buf[i:end]))

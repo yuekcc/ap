@@ -357,7 +357,7 @@ project_messages_with_slots_in :: proc(
 							type = "function",
 							function = Chat_Tool_Function {
 								name = name,
-								arguments = platform.json_arguments_string(input),
+								arguments = platform.json_arguments_string(input, allocator),
 							},
 						},
 					)
@@ -380,7 +380,10 @@ project_messages_with_slots_in :: proc(
 			append_chat_message(&messages, msg)
 
 			for call in msg.tool_calls {
-				end := results[call.id]
+				// 上面的 has_result 检查保证这里一定命中；断言把距离缩短到一行
+				// 以内，避免后续改动把「检查过」变成假设。
+				end, found := results[call.id]
+				assert(found)
 				content, rerr := tool_result_content_in(project, end, allocator)
 				if !is_ok(rerr) {
 					return nil, nil, rerr

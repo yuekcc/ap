@@ -8,15 +8,15 @@ DEFAULT_HISTORY_MAX_LEN :: 100
 // History 只负责条目和浏览位置。index == len(entries) 表示停在“当前草稿”。
 History :: struct {
 	entries:     [dynamic]string,
-	max_len:     int,
+	max_entries: int,
 	index:       int,
 	draft:       string,
 	draft_valid: bool,
 }
 
-history_init :: proc(h: ^History, max_len := DEFAULT_HISTORY_MAX_LEN) {
+history_init :: proc(h: ^History, max_entries := DEFAULT_HISTORY_MAX_LEN) {
 	h^ = {}
-	h.max_len = max_len
+	h.max_entries = max_entries
 	h.entries = make([dynamic]string, 0, 16)
 }
 
@@ -35,7 +35,7 @@ history_len :: proc(h: ^History) -> int {
 
 // 空行和与上一条完全相同的内容不入栈。返回是否真的加入。
 history_add :: proc(h: ^History, line: string) -> bool {
-	if len(line) == 0 || h.max_len <= 0 {
+	if len(line) == 0 || h.max_entries <= 0 {
 		return false
 	}
 	if len(h.entries) > 0 && h.entries[len(h.entries) - 1] == line {
@@ -47,7 +47,7 @@ history_add :: proc(h: ^History, line: string) -> bool {
 	}
 	append(&h.entries, cloned)
 
-	for len(h.entries) > h.max_len {
+	for len(h.entries) > h.max_entries {
 		delete(h.entries[0])
 		ordered_remove(&h.entries, 0)
 	}

@@ -42,8 +42,20 @@ write_all_to :: proc(handle: ^os.File, data: []byte) -> bool {
 	return platform.write_all(handle, data)
 }
 
+// stdout 是机器通道：写失败必须影响退出码，不能静默当作成功。
+g_stdout_failed: bool
+
 write_stdout :: proc(data: []byte) -> bool {
-	return write_all_to(os.stdout, data)
+	ok := write_all_to(os.stdout, data)
+	if !ok {
+		g_stdout_failed = true
+	}
+	return ok
+}
+
+// 机器通道是否发生过写失败。run 在返回前据此把 0 改成 Internal。
+stdout_failed :: proc() -> bool {
+	return g_stdout_failed
 }
 
 write_stderr :: proc(data: []byte) -> bool {

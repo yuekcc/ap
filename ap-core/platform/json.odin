@@ -193,35 +193,44 @@ json_unescape_unicode :: proc(data: []byte, allocator := context.allocator) -> [
 	return transmute([]byte)text
 }
 
-json_canonical_string :: proc(value: json.Value) -> string {
+// 返回值归调用方所有，需要用同一个 allocator 释放。
+json_canonical_string :: proc(value: json.Value, allocator := context.allocator) -> string {
+	b := strings.builder_make(allocator)
+	json_canonical_write(&b, value)
+	return strings.to_string(b)
+}
+
+// 直接写入调用方 builder：数组和对象不再逐层产生中间字符串。
+json_canonical_write :: proc(b: ^strings.Builder, value: json.Value) {
 	switch v in value {
 	case json.Null:
-		return "null"
+		strings.write_string(b, "null")
 	case json.Boolean:
-		return "true" if bool(v) else "false"
+		strings.write_string(b, "true" if bool(v) else "false")
 	case json.Integer:
-		return fmt.tprintf("%d", i64(v))
+		strings.write_string(b, fmt.tprintf("%d", i64(v)))
 	case json.Float:
-		return fmt.tprintf("%v", f64(v))
+		strings.write_string(b, fmt.tprintf("%v", f64(v)))
 	case json.String:
 		data, err := json_marshal_utf8(v)
 		if err == nil {
-			return string(data)
+			strings.write_bytes(b, data)
+			delete(data)
+		} else {
+			strings.write_string(b, `""`)
 		}
-		return `""`
 	case json.Array:
-		b := strings.builder_make()
-		strings.write_byte(&b, '[')
+		strings.write_byte(b, '[')
 		for item, i in v {
 			if i > 0 {
-				strings.write_byte(&b, ',')
+				strings.write_byte(b, ',')
 			}
-			strings.write_string(&b, json_canonical_string(item))
+			json_canonical_write(b, item)
 		}
-		strings.write_byte(&b, ']')
-		return strings.to_string(b)
+		strings.write_byte(b, ']')
 	case json.Object:
 		keys := make([dynamic]string, 0, len(v))
+		defer delete(keys)
 		for key in v {
 			append(&keys, key)
 		}
@@ -233,26 +242,23 @@ json_canonical_string :: proc(value: json.Value) -> string {
 				j -= 1
 			}
 		}
-		b := strings.builder_make()
-		strings.write_byte(&b, '{')
+		strings.write_byte(b, '{')
 		for key, i in keys {
 			if i > 0 {
-				strings.write_byte(&b, ',')
+				strings.write_byte(b, ',')
 			}
 			key_json, kerr := json_marshal_utf8(key)
 			if kerr == nil {
-				strings.write_string(&b, string(key_json))
+				strings.write_bytes(b, key_json)
 				delete(key_json)
 			} else {
-				strings.write_string(&b, `""`)
+				strings.write_string(b, `""`)
 			}
-			strings.write_byte(&b, ':')
-			strings.write_string(&b, json_canonical_string(v[key]))
+			strings.write_byte(b, ':')
+			json_canonical_write(b, v[key])
 		}
-		strings.write_byte(&b, '}')
-		return strings.to_string(b)
+		strings.write_byte(b, '}')
 	}
-	return "null"
 }
 
 json_value_or_empty_object :: proc(value: json.Value) -> json.Value {
@@ -264,6 +270,6 @@ json_value_or_empty_object :: proc(value: json.Value) -> json.Value {
 }
 
 // 工具参数进入 provider 请求前做规范化；错误日志与 transcript 不依赖该顺序。
-json_arguments_string :: proc(value: json.Value) -> string {
-	return json_canonical_string(json_value_or_empty_object(value))
+json_arguments_string :: proc(value: json.Value, allocator := context.allocator) -> string {
+	return json_canonical_string(json_value_or_empty_object(value), allocator)
 }

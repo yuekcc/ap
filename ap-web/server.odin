@@ -1,24 +1,33 @@
 package apweb
 
+import "base:runtime"
 import "core:fmt"
 import "core:net"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
 import "core:time"
 
 // HTTP/1.1 最小子集，约束见 docs/web.md「HTTP 层（手写）」。
 // 解析只接受内存 buffer，socket 读写通过 Transport 注入，测试可以完全不碰网络。
-MAX_HEADER_LINE :: 32 * 1024
-MAX_HEADERS :: 100
+MAX_HEADER_LINE  :: 32 * 1024
+MAX_HEADER_COUNT :: 100
 // 请求体上限要比 prompt 上限（1MB）略大，否则 JSON 包装会让「1MB prompt」
 // 在解析层就被 413 掉，API 的 prompt_too_large 错误体永远走不到。
 MAX_REQUEST_BODY :: 2 * 1024 * 1024
-READ_CHUNK :: 16 * 1024
+READ_CHUNK_BYTES :: 16 * 1024
 
 // 读超时（SO_RCVTIMEO）分两档：等新请求可以久一点，保持浏览器连接复用；
 // 一旦开始读某个请求，就必须在限期内收完，慢速客户端不能长期占住连接线程。
 IDLE_READ_TIMEOUT :: 30 * time.Second
 REQUEST_READ_TIMEOUT :: 10 * time.Second
+// 单个请求的总期限：读超时按每次 recv 重置，慢速客户端每 9 秒发 1 字节
+// 就能永久占住连接线程，必须另有总账。
+REQUEST_TOTAL_TIMEOUT :: 15 * time.Second
+// 每个连接一个线程：没有上限时 accept 循环能把线程与句柄耗尽。
+MAX_CONNECTIONS :: 256
+
+open_connections: i32
 
 Http_Method :: enum {
 	Get,
@@ -206,7 +215,7 @@ scan_incomplete_header :: proc(buffer: []byte) -> (status: int, message: string)
 				return 400, "request header line too long"
 			}
 			line_count += 1
-			if line_count > MAX_HEADERS + 1 {
+			if line_count > MAX_HEADER_COUNT + 1 {
 				return 400, "too many request headers"
 			}
 			line_start = i + 1
@@ -235,7 +244,7 @@ parse_request_bytes :: proc(
 	if len(lines) == 0 || len(lines[0]) == 0 {
 		return parse_fail(400, "empty request line")
 	}
-	if len(lines) - 1 > MAX_HEADERS {
+	if len(lines) - 1 > MAX_HEADER_COUNT {
 		return parse_fail(400, "too many request headers")
 	}
 	for line in lines {
@@ -532,6 +541,12 @@ is_api_target :: proc(target: string) -> bool {
 
 // 每连接一个状态机：读满头部 → 解析 → 交给 handler → 写出 → 保留 buffer 里
 // 多读到的下一请求字节。出错和 4xx/5xx 之后一律关连接。
+//
+// 每个请求有独立的 arena，作为该请求的 context.temp_allocator。handler 里
+// 同步跑的子进程泵（/api/session/title 的 turn）会频繁 free_all(temp)，所以
+// 泵必须换成自己的 arena，不能回收请求级分配。见 docs/web.md「请求级内存所有权」。
+REQUEST_ARENA_BLOCK_SIZE :: 64 * 1024
+
 serve_connection :: proc(
 	transport: Transport,
 	handler: Http_Handler,
@@ -539,72 +554,112 @@ serve_connection :: proc(
 ) {
 	buffer: [dynamic]u8
 	defer delete(buffer)
+	request_started := time.tick_now()
 
 	for {
-		parsed := parse_request_bytes(buffer[:])
-		switch parsed.state {
-		case .Incomplete:
-			if transport.set_read_timeout != nil {
-				timeout := IDLE_READ_TIMEOUT if len(buffer) == 0 else REQUEST_READ_TIMEOUT
-				_ = transport.set_read_timeout(transport.user, timeout)
-			}
-			chunk: [READ_CHUNK]u8
-			n, ok := transport.recv(transport.user, chunk[:])
-			if !ok || n <= 0 {
-				return
-			}
-			append(&buffer, ..chunk[:n])
-		case .Error:
-			write_error_response(
-				transport,
-				parsed.status,
-				parsed.message,
-				is_api_target(parsed.target),
-			)
+		arena: runtime.Arena
+		if runtime.arena_init(&arena, REQUEST_ARENA_BLOCK_SIZE, context.allocator) != nil {
+			write_error_response(transport, 500, "server allocation failed", true)
 			return
-		case .Complete:
-			request := parsed.request
-			if request.method == .Other {
-				write_error_response(
-					transport,
-					405,
-					"method not allowed",
-					is_api_target(request.target),
-				)
-				return
-			}
-
-			response := Http_Response {
-				status  = 200,
-				headers = make([dynamic]Http_Header, 0, 8, context.temp_allocator),
-			}
-			// 流式响应的 handler 需要直接写 socket（SSE 会持续到连接断开），
-			// 定长路径完全不受影响。
-			response.stream.transport = transport
-			handler(handler_user, &request, &response)
-			if response.stream.used {
-				if response.stream.started && !response.stream.ended {
-					response_stream_end(&response)
-				}
-				delete(response.stream.chunk_buf)
-				return
-			}
-			close := !request.keep_alive || response.close || response.status >= 400
-			if !write_response(transport, &response, close) {
-				return
-			}
-
-			remaining := len(buffer) - parsed.consumed
-			if remaining > 0 {
-				copy(buffer[:remaining], buffer[parsed.consumed:])
-			}
-			resize(&buffer, remaining)
-			free_all(context.temp_allocator)
-			if close {
-				return
-			}
+		}
+		previous_temp := context.temp_allocator
+		context.temp_allocator = runtime.arena_allocator(&arena)
+		keep_open := serve_request(transport, handler, handler_user, &buffer, &request_started)
+		context.temp_allocator = previous_temp
+		runtime.arena_destroy(&arena)
+		if !keep_open {
+			return
 		}
 	}
+}
+
+// 返回是否继续复用连接。请求级临时分配由调用方的 arena 统一回收。
+serve_request :: proc(
+	transport: Transport,
+	handler: Http_Handler,
+	handler_user: rawptr,
+	buffer: ^[dynamic]u8,
+	request_started: ^time.Tick,
+) -> bool {
+	parsed := parse_request_bytes(buffer[:])
+	switch parsed.state {
+	case .Incomplete:
+		// 空闲等新请求可以久一点；一旦收到请求首字节就开始计时。
+		if len(buffer) == 0 {
+			request_started^ = time.tick_now()
+		}
+		timeout := IDLE_READ_TIMEOUT
+		if len(buffer) > 0 {
+			elapsed := time.tick_since(request_started^)
+			if elapsed >= REQUEST_TOTAL_TIMEOUT {
+				write_error_response(transport, 408, "request timeout", false)
+				return false
+			}
+			timeout = min(REQUEST_READ_TIMEOUT, REQUEST_TOTAL_TIMEOUT - elapsed)
+		}
+		if transport.set_read_timeout != nil {
+			_ = transport.set_read_timeout(transport.user, timeout)
+		}
+		chunk: [READ_CHUNK_BYTES]u8
+		n, ok := transport.recv(transport.user, chunk[:])
+		if !ok || n <= 0 {
+			return false
+		}
+		append(buffer, ..chunk[:n])
+	case .Error:
+		write_error_response(
+			transport,
+			parsed.status,
+			parsed.message,
+			is_api_target(parsed.target),
+		)
+		return false
+	case .Complete:
+		request := parsed.request
+		if request.method == .Other {
+			write_error_response(
+				transport,
+				405,
+				"method not allowed",
+				is_api_target(request.target),
+			)
+			return false
+		}
+
+		response := Http_Response {
+			status  = 200,
+			headers = make([dynamic]Http_Header, 0, 8, context.temp_allocator),
+		}
+		// 流式响应的 handler 需要直接写 socket（SSE 会持续到连接断开），
+		// 定长路径完全不受影响。
+		response.stream.transport = transport
+		handler(handler_user, &request, &response)
+		if response.stream.used {
+			if response.stream.started && !response.stream.ended {
+				response_stream_end(&response)
+			}
+			delete(response.stream.chunk_buf)
+			return false
+		}
+		close := !request.keep_alive || response.close || response.status >= 400
+		if !write_response(transport, &response, close) {
+			return false
+		}
+
+		remaining := len(buffer) - parsed.consumed
+		if remaining > 0 {
+			copy(buffer[:remaining], buffer[parsed.consumed:])
+		}
+		resize(buffer, remaining)
+		if close {
+			return false
+		}
+		// 管线化：下一请求的首字节已经在 buffer 里，从现在开始计时。
+		if remaining > 0 {
+			request_started^ = time.tick_now()
+		}
+	}
+	return true
 }
 
 socket_transport :: proc(socket: ^net.TCP_Socket) -> Transport {
@@ -660,6 +715,7 @@ Client_Context :: struct {
 
 // 每连接一个线程；线程结束时释放 context 并关闭 socket。
 serve_client :: proc(user: rawptr) {
+	defer sync.atomic_sub(&open_connections, 1)
 	ctx := (^Client_Context)(user)
 	socket := ctx.socket
 	defer net.close(socket)

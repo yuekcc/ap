@@ -2,11 +2,14 @@ package engine
 
 import "core:strings"
 
-SSE_MAX_LINE :: 16 * 1024 * 1024
+SSE_MAX_LINE_BYTES :: 16 * 1024 * 1024
+// 只发 data: 行、从不发空行的流会跨行累加 p.data，必须有独立上限。
+SSE_MAX_EVENT_BYTES :: 8 * 1024 * 1024
 
 Sse_Error :: enum {
 	None,
 	Line_Too_Long,
+	Event_Too_Long,
 	Aborted,
 }
 
@@ -62,6 +65,9 @@ sse_parser_process_line :: proc(p: ^Sse_Parser, raw_line: []byte, handler: Sse_H
 			append(&p.data, '\n')
 		}
 		append(&p.data, ..value)
+		if len(p.data) > SSE_MAX_EVENT_BYTES {
+			return .Event_Too_Long, false
+		}
 	}
 	return .None, true
 }
@@ -76,7 +82,7 @@ sse_feed :: proc(p: ^Sse_Parser, chunk: []byte, handler: Sse_Handler, user: rawp
 			continue
 		}
 		append(&p.line, ..chunk[start:i])
-		if len(p.line) > SSE_MAX_LINE {
+		if len(p.line) > SSE_MAX_LINE_BYTES {
 			return .Line_Too_Long
 		}
 		err, keep_going := sse_parser_process_line(p, p.line[:], handler, user)
@@ -91,7 +97,7 @@ sse_feed :: proc(p: ^Sse_Parser, chunk: []byte, handler: Sse_Handler, user: rawp
 	}
 	if start < len(chunk) {
 		append(&p.line, ..chunk[start:])
-		if len(p.line) > SSE_MAX_LINE {
+		if len(p.line) > SSE_MAX_LINE_BYTES {
 			return .Line_Too_Long
 		}
 	}

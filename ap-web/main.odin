@@ -462,7 +462,10 @@ run :: proc(args: []string) -> int {
 		}
 	}
 
-	heartbeat_start(&app.heartbeat, &app.hub)
+	if !heartbeat_start(&app.heartbeat, &app.hub) {
+		fmt.eprintln("ap-web: cannot start heartbeat thread")
+		return 1
+	}
 	shutdown_configure(on_shutdown_signal, &app)
 	install_shutdown_signal_handler()
 	shutdown_watcher_start()
@@ -501,12 +504,19 @@ run :: proc(args: []string) -> int {
 			fmt.eprintln("ap-web: accept failed, stopping")
 			break
 		}
+		if sync.atomic_add(&open_connections, 1) > MAX_CONNECTIONS {
+			// 超限直接丢弃：不做慢速客户端也能占住的写响应。
+			sync.atomic_sub(&open_connections, 1)
+			close_client(client)
+			continue
+		}
 		ctx := new(Client_Context)
 		ctx^ = {
 			app    = &app,
 			socket = client,
 		}
 		if thread.create_and_start_with_data(ctx, serve_client, self_cleanup = true) == nil {
+			sync.atomic_sub(&open_connections, 1)
 			close_client(client)
 			free(ctx)
 		}

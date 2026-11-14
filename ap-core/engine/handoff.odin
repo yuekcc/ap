@@ -133,16 +133,15 @@ handoff_run :: proc(
 	var_bytes: Maybe(int)
 	var_preview: Maybe(string)
 	stored := text
-	content_bytes := len(text)
-	if content_bytes > req.settings.blob_threshold_bytes {
-		sha, berr := blob_write(req.project, transmute([]byte)text)
-		if !is_ok(berr) {
-			return result, {}, {kind = .Internal, message = berr.message}
-		}
+	blob, berr := content_or_blob(req.store, transmute([]byte)text)
+	if !is_ok(berr) {
+		return result, {}, {kind = .Internal, message = berr.message}
+	}
+	if blob.has_blob {
 		stored = ""
-		var_ref = sha
-		var_bytes = content_bytes
-		var_preview = platform.utf8_prefix(transmute([]byte)text, PREVIEW_BYTES)
+		var_ref = blob.ref
+		var_bytes = blob.bytes
+		var_preview = blob.preview
 	}
 
 	var_usage: Maybe(Usage)

@@ -341,8 +341,7 @@ allocator_probe_proc :: proc(
 }
 
 // 结果字符串必须来自 Turn_Options.allocator：runner 在另一个线程释放它们，
-// 不能假设分配线程的 context.allocator 恰好是 heap。
-@(test)
+// 不能假设分配线程的 context.allocator 恰好是 heap。@(test)
 test_turn_run_allocates_result_with_options_allocator :: proc(t: ^testing.T) {
 	dir := test_temp_dir("agent-allocator")
 	defer os.remove_all(dir)
@@ -378,4 +377,45 @@ test_turn_run_allocates_result_with_options_allocator :: proc(t: ^testing.T) {
 		!probe.live[raw_data(result.session_id)],
 		"session_id must be freeable with Turn_Options.allocator",
 	)
+}
+
+// turn 泵每行都会 free_all(temp)，但只能回收自己的 arena。调用方可能正拿着
+// 请求级 arena（ap-web 的 /api/session/title 同步跑 turn），泵不能把它重置掉。
+@(test)
+test_turn_run_preserves_caller_temp_allocator :: proc(t: ^testing.T) {
+	dir := test_temp_dir("agent-temp-arena")
+	defer os.remove_all(dir)
+
+	options := Turn_Options {
+		agent_bin  = fake_agent_path(t),
+		config_dir = dir,
+		cwd        = dir,
+	}
+	if len(options.agent_bin) == 0 {
+		return
+	}
+
+	arena: runtime.Arena
+	if runtime.arena_init(&arena, 4096, runtime.heap_allocator()) != nil {
+		testing.fail_now(t, "cannot init arena")
+	}
+	defer runtime.arena_destroy(&arena)
+	previous_temp := context.temp_allocator
+	context.temp_allocator = runtime.arena_allocator(&arena)
+	defer context.temp_allocator = previous_temp
+
+	sentinel := make([]byte, 128, context.temp_allocator)
+	for i in 0 ..< len(sentinel) {
+		sentinel[i] = 0xAB
+	}
+
+	turn_run(&options, "hello", {})
+
+	// 若泵重置了调用方 arena，这块内存会被后续解析结果复用并覆盖。
+	for i in 0 ..< len(sentinel) {
+		if sentinel[i] != 0xAB {
+			testing.expectf(t, false, "caller temp allocation was reset at byte %d", i)
+			return
+		}
+	}
 }

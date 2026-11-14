@@ -78,7 +78,7 @@ render_frame :: proc(r: ^Renderer, out: ^[dynamic]u8, e: ^Editor, cfg: Render_Co
 			render_write_spaces(out, cfg.prefix_width)
 		}
 		row := l.rows[idx]
-		render_write_text(out, string(buf[row.start:row.start + row.len]))
+		render_write_text(out, string(buf[row.start:row.start + row.len_bytes]))
 		if idx == l.cursor_row {
 			cursor_drawn = drawn
 		}
@@ -133,7 +133,7 @@ render_frame :: proc(r: ^Renderer, out: ^[dynamic]u8, e: ^Editor, cfg: Render_Co
 	// hints 画在最后一条逻辑行的右侧，不参与布局，也不移动光标。
 	if cfg.hint != "" && !cfg.mask && menu_budget == 0 && end == len(l.rows) {
 		last := l.rows[end - 1]
-		used := cfg.prefix_width + display_width(string(buf[last.start:last.start + last.len]))
+		used := cfg.prefix_width + display_width(string(buf[last.start:last.start + last.len_bytes]))
 		remaining := cols - used
 		if remaining > 0 {
 			if cfg.color {

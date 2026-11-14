@@ -258,7 +258,7 @@ tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 			command = exec_args,
 			cwd = ctx.cwd,
 			stdin_data = transmute([]byte)prompt,
-			timeout_ms = 0,
+			timeout_ms = cfg.task_timeout_ms,
 			max_capture_bytes = cfg.max_capture_bytes,
 			cancel = ctx.cancel,
 			on_stdout = task_stdout_chunk,
@@ -269,6 +269,13 @@ tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 	defer free_run_result(&run)
 	protocol.line_reader_flush(&state.lines)
 	task_flush_pending(&state)
+	if protocol.line_reader_failed(&state.lines) {
+		return task_fail_with_state(
+			&state,
+			run.duration_ms,
+			"subagent output line exceeds MAX_EVENT_LINE_BYTES",
+		)
+	}
 	if !run.spawned {
 		res := tool.tool_fail(run.error)
 		res.fatal = true
@@ -276,6 +283,13 @@ tool_task :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 	}
 	if run.cancelled {
 		return task_fail_with_state(&state, run.duration_ms, protocol.TOOL_ERROR_CANCELLED)
+	}
+	if run.timed_out {
+		return task_fail_with_state(
+			&state,
+			run.duration_ms,
+			fmt.tprintf("subagent timed out after %dms", cfg.task_timeout_ms),
+		)
 	}
 	if len(run.error) > 0 {
 		res := task_fail_with_state(&state, run.duration_ms, run.error)

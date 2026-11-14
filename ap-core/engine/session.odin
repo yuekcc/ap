@@ -333,15 +333,15 @@ session_open :: proc(req: Session_Request) -> (Session, Session_Info, Error) {
 		stored_content := resolved.system_prompt
 		var_ref: Maybe(string)
 		var_bytes: Maybe(int)
-		if len(resolved.system_prompt) > req.settings.blob_threshold_bytes {
-			sha, berr := blob_write(req.project, transmute([]byte)resolved.system_prompt)
-			if !is_ok(berr) {
-				transcript_close(&store)
-				return {}, {}, berr
-			}
+		blob, berr := content_or_blob(&store, transmute([]byte)resolved.system_prompt)
+		if !is_ok(berr) {
+			transcript_close(&store)
+			return {}, {}, berr
+		}
+		if blob.has_blob {
 			stored_content = ""
-			var_ref = sha
-			var_bytes = len(resolved.system_prompt)
+			var_ref = blob.ref
+			var_bytes = blob.bytes
 		}
 		start := Session_Start_Event {
 			content       = stored_content,

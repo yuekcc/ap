@@ -441,6 +441,32 @@ maybe_blob :: proc(store: ^Transcript_Store, data: []byte) -> (Blob_Fields, Erro
 	}, ok_error()
 }
 
+// 大内容转 blob 的唯一入口：阈值判断与 preview 规则只在这里定义，避免
+// 各个写入点各写一份三件套后慢慢漂移。
+Content_Or_Blob :: struct {
+	inline:   []byte, // 未超阈值时指向原文
+	ref:      Maybe(string),
+	bytes:    Maybe(int),
+	preview:  Maybe(string),
+	has_blob: bool,
+}
+
+content_or_blob :: proc(store: ^Transcript_Store, data: []byte) -> (Content_Or_Blob, Error) {
+	fields, berr := maybe_blob(store, data)
+	if !is_ok(berr) {
+		return {}, berr
+	}
+	if _, has_ref := fields.ref.?; has_ref {
+		return {
+			ref = fields.ref,
+			bytes = fields.bytes,
+			preview = fields.preview,
+			has_blob = true,
+		}, ok_error()
+	}
+	return {inline = data}, ok_error()
+}
+
 fork_transcript :: proc(
 	project: Project,
 	source_id, new_id: string,

@@ -8,6 +8,8 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:testing"
+import "core:thread"
+import "core:time"
 
 Fake_Response :: struct {
 	text:        string,
@@ -444,6 +446,125 @@ test_loop_retry_then_success :: proc(t: ^testing.T) {
 	loop_test_finish(&loop, dir)
 }
 
+Retry_Cancel_State :: struct {
+	token: ^platform.Cancel_Token,
+}
+
+retry_cancel_after_delay :: proc(user: rawptr) {
+	state := (^Retry_Cancel_State)(user)
+	time.sleep(100 * time.Millisecond)
+	platform.cancel_token_cancel(state.token)
+}
+
+// Retry-After 是不可信输入：服务端要 1 小时，本地只能退避到上限，且睡眠
+// 必须可取消。断言 turn 在 1s 内以 cancelled 结束。
+@(test)
+test_loop_retry_after_capped_and_cancellable :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-retry-after")
+	loop.sleep_fn = loop_default_sleep
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{
+				error = Provider_Error {
+					kind = .Rate_Limit,
+					message = "slow down",
+					retryable = true,
+					retry_after_ms = 3600 * 1000,
+				},
+			},
+			{text = "should not be reached", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	cancel_state := Retry_Cancel_State{token = loop.cancel}
+	handle := thread.create_and_start_with_data(rawptr(&cancel_state), retry_cancel_after_delay)
+	defer {
+		thread.join(handle)
+		thread.destroy(handle)
+	}
+
+	started := time.tick_now()
+	result := loop_run_turn(&loop, "retry after")
+	elapsed := time.tick_since(started)
+	testing.expect(t, result.cancelled)
+	testing.expect_value(t, result.stop_reason, STOP_REASON_CANCELLED)
+	testing.expect(t, elapsed < time.Second, "cancelled retry sleep should finish within 1s")
+	loop_test_finish(&loop, dir)
+}
+
+retry_clamped_slept_ms: int
+
+retry_clamped_sleep :: proc(ms: int) {
+	retry_clamped_slept_ms += ms
+}
+
+// 不取消时仍要遵守本地上限：3600s 的 Retry-After 合计只能睡到上限。
+@(test)
+test_loop_retry_after_clamped :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-retry-clamp")
+	retry_clamped_slept_ms = 0
+	loop.sleep_fn = retry_clamped_sleep
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{
+				error = Provider_Error {
+					kind = .Rate_Limit,
+					message = "slow down",
+					retryable = true,
+					retry_after_ms = 3600 * 1000,
+				},
+			},
+			{text = "recovered", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "retry after")
+	testing.expect_value(t, result.result_text, "recovered")
+	testing.expect_value(t, retry_clamped_slept_ms, RETRY_DELAY_MS_MAX)
+	loop_test_finish(&loop, dir)
+}
+
+// turn_end 是 transcript 的尾行：写失败时不能当成功返回，否则调用方会认为
+// 用量与上下文快照都已落盘。
+turn_end_fail_store: ^Transcript_Store
+
+provider_call_readonly_transcript :: proc(
+	p: ^Provider,
+	req: ^Chat_Message_Request,
+	sink: Stream_Sink,
+	cancel: ^platform.Cancel_Token,
+) -> Provider_Error {
+	err := fake_provider_call(p, req, sink, cancel)
+	store := turn_end_fail_store
+	if store != nil && store.file != nil {
+		if readonly, rerr := os.open(store.path, {.Read}); rerr == nil {
+			os.close(store.file)
+			store.file = readonly
+		}
+	}
+	return err
+}
+
+@(test)
+test_loop_turn_end_write_failure_is_fatal :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-turn-end-fail")
+	loop.provider_call = provider_call_readonly_transcript
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{text = "done", stop = .Stop},
+		},
+	}
+	fake_provider_state = &state
+	turn_end_fail_store = loop.store
+	defer turn_end_fail_store = nil
+
+	result := loop_run_turn(&loop, "hello")
+	testing.expect_value(t, result.error_kind, Error_Kind.Internal)
+	testing.expect(t, len(result.fatal_error) > 0)
+	testing.expect_value(t, result.stop_reason, "stop")
+	loop_test_finish(&loop, dir)
+}
+
 // 不允许交接时（--no-handoff，或子代理的 agent_depth > 0）维持现状：
 // 写 error、写 turn_end(context_too_long)、按 provider 错误结束。
 @(test)
@@ -565,6 +686,52 @@ test_loop_handoff_failure_falls_back :: proc(t: ^testing.T) {
 	testing.expect(t, !has_handoff)
 	last := events[len(events) - 1]
 	testing.expect_value(t, last.type, "turn_end")
+	loop_test_finish(&loop, dir)
+}
+
+loop_cancel_tool_exec :: proc(user: rawptr, args: json.Value, ctx: ^tool.Tool_Context) -> tool.Tool_Result {
+	platform.cancel_token_cancel(ctx.cancel)
+	return {ok = true, content = "cancelled by tool"}
+}
+
+// 取消的 turn 也要报出已产生的用量：stream-json 的 turn_end 与 transcript
+// 的 turn_end.usage 必须一致（P1-10）。
+@(test)
+test_loop_cancelled_turn_reports_usage :: proc(t: ^testing.T) {
+	loop, _, dir := loop_test_setup(t, "loop-cancel-usage")
+	tools := make([]tool.Tool, 1)
+	tools[0] = {
+		name = "cancel_tool",
+		description = "cancel",
+		parameters_json = `{"type":"object"}`,
+		execute = loop_cancel_tool_exec,
+	}
+	registry, reg_err := tool.registry_init(tools)
+	testing.expect(t, platform.is_ok(reg_err))
+	loop.registry = registry
+	active := make([]string, 1)
+	active[0] = "cancel_tool"
+	loop.active_tools = active
+
+	args := make(json.Object)
+	state := Fake_Provider {
+		responses = []Fake_Response {
+			{
+				tool_name = "cancel_tool",
+				tool_id = "call_cancel",
+				tool_input = args,
+				stop = .Tool_Use,
+				usage = Usage{input_tokens = 9, output_tokens = 4},
+			},
+		},
+	}
+	fake_provider_state = &state
+	result := loop_run_turn(&loop, "cancel")
+	testing.expect(t, result.cancelled)
+	testing.expect_value(t, result.stop_reason, STOP_REASON_CANCELLED)
+	testing.expect_value(t, result.usage.input_tokens.?, 9)
+	testing.expect_value(t, result.usage.output_tokens.?, 4)
+	testing.expect_value(t, result.session_usage.input_tokens.?, 9)
 	loop_test_finish(&loop, dir)
 }
 

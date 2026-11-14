@@ -809,18 +809,29 @@ runner_generate_title :: proc(
 HEARTBEAT_POLL_INTERVAL :: SSE_HEARTBEAT_INTERVAL / 15
 
 Heartbeat_State :: struct {
-	hub:   ^Sse_Hub,
-	stop:  i32,
-	timer: time.Tick,
+	hub:    ^Sse_Hub,
+	stop:   i32,
+	timer:  time.Tick,
+	// mu 保护 thread：app_shutdown 可能被信号 watcher 与主线程同时调用。
+	mu:     sync.Mutex,
+	thread: ^thread.Thread,
 }
 
-heartbeat_start :: proc(state: ^Heartbeat_State, hub: ^Sse_Hub) {
+// 返回 false 表示线程没起来。心跳线程读 Heartbeat_State（调用方栈上），
+// 关停必须 join，不能只置标志就让栈帧返回。
+heartbeat_start :: proc(state: ^Heartbeat_State, hub: ^Sse_Hub) -> bool {
 	state^ = {
-		hub   = hub,
-		stop  = 0,
-		timer = time.tick_now(),
+		hub    = hub,
+		stop   = 0,
+		timer  = time.tick_now(),
+		thread = nil,
 	}
-	_ = thread.create_and_start_with_data(rawptr(state), heartbeat_thread, self_cleanup = true, name = "sse-heartbeat")
+	handle := thread.create_and_start_with_data(rawptr(state), heartbeat_thread, name = "sse-heartbeat")
+	if handle == nil {
+		return false
+	}
+	state.thread = handle
+	return true
 }
 
 heartbeat_stop :: proc(state: ^Heartbeat_State) {
@@ -828,6 +839,14 @@ heartbeat_stop :: proc(state: ^Heartbeat_State) {
 		return
 	}
 	sync.atomic_store(&state.stop, 1)
+	sync.mutex_lock(&state.mu)
+	handle := state.thread
+	state.thread = nil
+	sync.mutex_unlock(&state.mu)
+	if handle != nil {
+		thread.join(handle)
+		thread.destroy(handle)
+	}
 }
 
 heartbeat_thread :: proc(user: rawptr) {

@@ -82,6 +82,9 @@ pick_directory_async :: proc(pick: Pick_Fn, pick_user: rawptr) -> Pick_Result {
 	if handle == nil {
 		return pick_error("cannot start the directory picker thread")
 	}
+	// join 之后必须销毁句柄：self_cleanup=false 的线程不会自己释放
+	// ^Thread 与平台线程句柄。
+	defer thread.destroy(handle)
 	thread.join(handle)
 	return job.result
 }

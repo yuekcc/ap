@@ -1,0 +1,44 @@
+#+build !windows
+package aptui
+
+import client "../ap-core/client"
+
+import "core:os"
+import "core:sync"
+import "core:sys/posix"
+import "core:time"
+
+// 信号处理器只写取消标志和退出码。前端不能直接 import platform，
+// Cancel_Token 由 client 转发。
+
+g_cancel_token: ^client.Cancel_Token
+g_signal_code: i32
+g_signal_tick: time.Tick
+
+tui_signal_handler :: proc "c" (sig: posix.Signal) {
+	code: i32 = 130
+	if sig == .SIGTERM {
+		code = 143
+	}
+	if sync.atomic_load(&g_signal_code) != 0 {
+		if time.tick_since(g_signal_tick) < time.Second {
+			os.exit(int(code))
+		}
+	}
+	sync.atomic_store(&g_signal_code, code)
+	g_signal_tick = time.tick_now()
+	if token := g_cancel_token; token != nil {
+		// 信号处理器没有 Odin context，不能调用普通 proc；直接写原子标志。
+		sync.atomic_store(&token.value, 1)
+	}
+}
+
+install_signal_handlers :: proc(token: ^client.Cancel_Token) {
+	g_cancel_token = token
+	act: posix.sigaction_t
+	act.sa_handler = tui_signal_handler
+	posix.sigemptyset(&act.sa_mask)
+	act.sa_flags = {}
+	posix.sigaction(.SIGINT, &act, nil)
+	posix.sigaction(.SIGTERM, &act, nil)
+}

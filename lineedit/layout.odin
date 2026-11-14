@@ -6,7 +6,7 @@ TAB_WIDTH :: 8
 
 Row :: struct {
 	start: int,
-	len:   int,
+	len_bytes: int,
 }
 
 Layout :: struct {
@@ -43,7 +43,7 @@ layout :: proc(buf: []u8, cursor, cols, prefix_width: int, allocator := context.
 		}
 
 		if text == "\n" {
-			append(&l.rows, Row{start = row_start, len = g.byte_index - row_start})
+			append(&l.rows, Row{start = row_start, len_bytes = g.byte_index - row_start})
 			row_start = g.byte_index + len(text)
 			col = 0
 			continue
@@ -58,18 +58,18 @@ layout :: proc(buf: []u8, cursor, cols, prefix_width: int, allocator := context.
 		}
 
 		if col > 0 && col + w > content_cols {
-			append(&l.rows, Row{start = row_start, len = g.byte_index - row_start})
+			append(&l.rows, Row{start = row_start, len_bytes = g.byte_index - row_start})
 			row_start = g.byte_index
 			col = 0
 		}
 		col += w
 	}
-	append(&l.rows, Row{start = row_start, len = len(buf) - row_start})
+	append(&l.rows, Row{start = row_start, len_bytes = len(buf) - row_start})
 
 	// 光标所在行：折行点属于下一行，硬换行前的光标留在本行行尾。
 	l.cursor_row = 0
 	for row, idx in l.rows {
-		end := row.start + row.len
+		end := row.start + row.len_bytes
 		if cur < end {
 			l.cursor_row = idx
 			break
@@ -86,7 +86,7 @@ layout :: proc(buf: []u8, cursor, cols, prefix_width: int, allocator := context.
 
 	// 光标列：只累计该行到 cursor 为止的 grapheme 宽度。
 	row := l.rows[l.cursor_row]
-	target := min(cur, row.start + row.len)
+	target := min(cur, row.start + row.len_bytes)
 	col = 0
 	if target > row.start {
 		part := string(buf[row.start:target])

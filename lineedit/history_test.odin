@@ -67,7 +67,7 @@ test_history_add_rules :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_history_max_len :: proc(t: ^testing.T) {
+test_history_max_entries :: proc(t: ^testing.T) {
 	h: History
 	history_init(&h, 2)
 	defer history_destroy(&h)

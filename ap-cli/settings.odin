@@ -15,7 +15,7 @@ import "core:strings"
 // JSONC 宽（单引号字符串、十六进制、NaN/Infinity），这里接受超集而不另写
 // 一个去注释的预处理器。
 
-known_setting_keys := [16]string {
+known_setting_keys := [17]string {
 	"model",
 	"base_url",
 	"api_key",
@@ -23,6 +23,7 @@ known_setting_keys := [16]string {
 	"max_agent_depth",
 	"max_tokens",
 	"tool_timeout_ms",
+	"task_timeout_ms",
 	"llm_timeout_ms",
 	"blob_threshold_bytes",
 	"max_capture_bytes",
@@ -163,6 +164,7 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 		tool = aptools.Tool_Config {
 			config_dir = config_dir,
 			tool_timeout_ms = 120000,
+			task_timeout_ms = 1800000,
 			max_capture_bytes = 67108864,
 			image_input = false,
 			image_max_bytes = 5242880,
@@ -227,6 +229,9 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if err := json_get_int(obj, loaded.path, "tool_timeout_ms", &loaded.tool.tool_timeout_ms); !apcore.is_ok(err) {
 		return loaded, err
 	}
+	if err := json_get_int(obj, loaded.path, "task_timeout_ms", &loaded.tool.task_timeout_ms); !apcore.is_ok(err) {
+		return loaded, err
+	}
 	if err := json_get_int(obj, loaded.path, "llm_timeout_ms", &loaded.sdk.llm_timeout_ms); !apcore.is_ok(err) {
 		return loaded, err
 	}
@@ -273,7 +278,9 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 	if loaded.sdk.max_tokens <= 0 {
 		return loaded, apcore.errorf(.Usage, "%s: max_tokens must be positive", loaded.path)
 	}
-	if loaded.tool.tool_timeout_ms <= 0 || loaded.sdk.llm_timeout_ms <= 0 {
+	if loaded.tool.tool_timeout_ms <= 0 ||
+	   loaded.tool.task_timeout_ms <= 0 ||
+	   loaded.sdk.llm_timeout_ms <= 0 {
 		return loaded, apcore.errorf(.Usage, "%s: timeouts must be positive", loaded.path)
 	}
 	if loaded.sdk.blob_threshold_bytes <= 0 ||

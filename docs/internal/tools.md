@@ -217,7 +217,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 
 - Unix 通过 PPid 递归收集当前进程及其后代。先对快照发 `SIGTERM`，2 秒后发 `SIGKILL`。没有独立进程组。
 - Windows 优先用 Job Object 的 `TerminateJobObject`。Job 不可用时退化为 `taskkill /PID <pid> /T /F`，最后再调用 `process_kill`。
-- 正常返回时不立即终止残留后代。Windows 上 Job 会在 turn 结束后由 `cleanup_jobs` 统一终止。Unix 上没有运行期登记，ap 退出后不再跟踪后台后代。
+- 正常返回时不立即终止残留后代。Windows 上没有残留后代的 Job 在调用结束时立刻归还句柄；仍有后台进程时继续登记，等 `cleanup_jobs` 在 ap 退出前统一终止。Unix 上没有运行期登记，ap 退出后不再跟踪后台后代。
 
 需要长期驻留的后台进程时，写 wrapper 脚本，自己记录 pid 并负责停止。当前没有 `run_in_background`、`bash_output` 或 `kill_shell`。
 
@@ -241,8 +241,8 @@ Windows 上的 Bash 注意事项：
 
 1. `prompt` 为空时返回 `ok:false`。
 2. 工具串行执行，因此同一时刻只有一个子代理。
-3. 不设超时。子代理自己的 `llm_timeout_ms` 和 bash 超时仍然生效，父进程靠取消终止子进程树。
-4. 子代理输出超过 `max_capture_bytes` 时终止子进程树并返回 `ok:false`。
+3. 墙钟上限取 `task_timeout_ms`（默认 30 分钟）；超时终止子进程树并返回 `ok:false`。子代理自己的 `llm_timeout_ms` 和 bash 超时仍然生效。
+4. 子代理输出超过 `max_capture_bytes` 时终止子进程树并返回 `ok:false`。提示词通过平台临时目录里的独占只读文件传给子进程（不落 cwd），调用结束即删除。
 5. 返回的 `content` 是子代理最后一条含文本的 assistant 消息。其余元数据放进 `metadata`，字段见 [subagents.md](subagents.md)。
 6. 子代理写文件不隔离，与父进程操作同一工作目录。
 
@@ -267,4 +267,4 @@ Windows 上的 Bash 注意事项：
 - [errors-and-cancellation.md](errors-and-cancellation.md)：工具错误分类、取消和超时。
 - [react-loop-and-session.md](react-loop-and-session.md)：`tool_execution_start` 与 `tool_execution_end` 的字段。
 - [context-management.md](context-management.md)：工具段在 system prompt 中的位置。
-- [cli-and-config.md](cli-and-config.md)：`tool_timeout_ms`、`max_capture_bytes`、`max_agent_depth` 与 `--print-system-prompt`。
+- [cli-and-config.md](cli-and-config.md)：`tool_timeout_ms`、`task_timeout_ms`、`max_capture_bytes`、`max_agent_depth` 与 `--print-system-prompt`。

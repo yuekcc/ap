@@ -120,6 +120,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [proposals/read-image.md](proposals/read-image.md) | `read_file` 图片输入、blob 引用与合成 user 消息的设计记录（已实现） | 设计记录 |
 | [proposals/cli-prompt-context-tools.md](proposals/cli-prompt-context-tools.md) | 上下文裁剪与工具开关的设计记录 | 设计记录 |
 | [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
+| [tigerstyle-review.md](tigerstyle-review.md) | 全仓 TigerStyle 评审：已核实的问题、修改建议与修复顺序 | 工作清单 |
 | [TODO.md](TODO.md) | docs 重写计划与验收清单 | 工作清单 |
 
 `refs/` 放外部协议原文，不是 ap 自己的规格，也不属于上面三类状态：

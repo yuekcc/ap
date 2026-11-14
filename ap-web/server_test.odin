@@ -44,7 +44,7 @@ test_parse_line_too_long :: proc(t: ^testing.T) {
 test_parse_too_many_headers :: proc(t: ^testing.T) {
 	b := strings.builder_make(context.temp_allocator)
 	strings.write_string(&b, "GET / HTTP/1.1\r\n")
-	for _ in 0 ..< MAX_HEADERS + 1 {
+	for _ in 0 ..< MAX_HEADER_COUNT + 1 {
 		strings.write_string(&b, "X-Test: v\r\n")
 	}
 	strings.write_string(&b, "\r\n")
@@ -388,7 +388,7 @@ test_serve_connection_eof_mid_request :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(transport.output), 0)
 }
 
-// 空闲 keep-alive 与半截请求用不同读超时：后者更短，慢速客户端不能长期占住连接线程。
+// 空闲 keep-alive 与半截请求用不同读超时：后者更短，且不能超过请求总期限。
 @(test)
 test_serve_connection_sets_idle_and_request_read_timeouts :: proc(t: ^testing.T) {
 	transport := test_transport("GET /a HTTP/1.1\r\nHost: x\r\n")
@@ -406,8 +406,10 @@ test_serve_connection_sets_idle_and_request_read_timeouts :: proc(t: ^testing.T)
 	testing.expect_value(t, transport.timeouts[0], IDLE_READ_TIMEOUT)
 	testing.expect(t, len(transport.timeouts) > 1)
 	for timeout in transport.timeouts[1:] {
-		testing.expect_value(t, timeout, REQUEST_READ_TIMEOUT)
+		testing.expect(t, timeout > 0)
+		testing.expect(t, timeout <= REQUEST_READ_TIMEOUT)
 	}
+	testing.expect(t, REQUEST_TOTAL_TIMEOUT >= REQUEST_READ_TIMEOUT)
 	testing.expect(t, IDLE_READ_TIMEOUT > REQUEST_READ_TIMEOUT)
 }
 

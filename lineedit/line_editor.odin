@@ -1,10 +1,13 @@
 package lineedit
 
+import "core:fmt"
 import "core:os"
 import "core:strings"
 
 PASTE_FLUSH_MS :: 150
 ESC_TIMEOUT_MS :: 20
+// 非 tty 的管道输入可能永不换行；单行缓冲必须有硬上限。
+MAX_PIPE_LINE_BYTES :: 8 * 1024 * 1024
 
 Read_Status :: enum {
 	Ok,
@@ -17,7 +20,7 @@ Read_Status :: enum {
 Hint_Proc :: proc(ctx: rawptr, line: string, cursor: int) -> string
 
 Config :: struct {
-	max_input:       int,
+	max_input_bytes:       int,
 	history_max:     int,
 	color:           bool,
 	mask:            bool,
@@ -29,7 +32,7 @@ Config :: struct {
 }
 
 DEFAULT_CONFIG :: Config {
-	max_input = MAX_INPUT,
+	max_input_bytes = MAX_INPUT_BYTES,
 	history_max = DEFAULT_HISTORY_MAX_LEN,
 	color = true,
 	bracketed_paste = true,
@@ -79,15 +82,15 @@ line_editor_init_transport :: proc(le: ^Line_Editor, transport: Transport, confi
 	le^ = {}
 	le.transport = transport
 	le.config = config
-	if le.config.max_input <= 0 {
-		le.config.max_input = MAX_INPUT
+	if le.config.max_input_bytes <= 0 {
+		le.config.max_input_bytes = MAX_INPUT_BYTES
 	}
 	if le.config.history_max < 0 {
 		le.config.history_max = 0
 	}
 
 	decoder_init(&le.decoder)
-	editor_init(&le.editor, le.config.max_input)
+	editor_init(&le.editor, le.config.max_input_bytes)
 	history_init(&le.history, le.config.history_max)
 	render_init(&le.renderer)
 	le.out = make([dynamic]u8, 0, 256)
@@ -128,7 +131,12 @@ line_editor_leave_raw :: proc(le: ^Line_Editor) {
 	if le.config.bracketed_paste {
 		line_editor_write_string(le, "\x1b[?2004l")
 	}
-	le.transport.leave_raw(le.transport.ctx)
+	// 恢复失败时保留 le.raw：下一次 leave_raw 还能重试，调用方也能看到
+	// 终端仍处于 raw 模式。
+	if !le.transport.leave_raw(le.transport.ctx) {
+		fmt.eprintln("lineedit: failed to restore terminal mode")
+		return
+	}
 	le.raw = false
 }
 
@@ -633,8 +641,12 @@ read_pipe_line :: proc(le: ^Line_Editor) -> (line: string, status: Read_Status) 
 		tmp: [4096]u8
 		n, _, eof := le.transport.read(le.transport.ctx, tmp[:], -1)
 		if n > 0 {
-			for j in 0 ..< n {
-				append(&le.pipe_buf, tmp[j])
+			append(&le.pipe_buf, ..tmp[:n])
+			scan := min(len(le.pipe_buf), MAX_PIPE_LINE_BYTES + 1)
+			if len(le.pipe_buf) > MAX_PIPE_LINE_BYTES &&
+			   strings.index_byte(transmute(string)le.pipe_buf[:scan], '\n') < 0 {
+				clear(&le.pipe_buf)
+				return "", .Error
 			}
 		}
 		if eof {

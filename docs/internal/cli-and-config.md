@@ -53,11 +53,13 @@
 - `--max-steps` 与 `--max-tokens` 必须是正整数。`--agent-depth` 必须是非负整数。
 - 新 session 的 `model` 与 `max_steps` 优先级是命令行 > agent 定义 > `settings.json`。`max_tokens` 只有命令行与 `settings.json` 两级，agent 定义没有该字段。不传 `--max-tokens` 时取 `settings.json`，两者都没有时为默认值 `65536`。
 - 不提供 `--add-dir`。相对路径只相对启动目录，绝对路径不受限制。
+- 同一个参数重复出现（例如 `-s a -s b`）按用法错误退出 2，不再静默采用后者。
+- 需要取值的参数后面如果跟的是另一个以 `-` 开头的参数，按缺值处理并退出 2；值本身以 `-` 开头时用 `--name=<value>` 的内联形式。
 - 参数非法、缺值或冲突时退出 2。
 
 ## 提示词来源
 
-`--print`、`--input-file`、`--print0` 三选一。正常运行必须且只能给一个。同时出现多个在解析参数时退出 2，一个都不给在读取提示词时退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt`、`--session-title` 不需要提示词。
+`--print`、`--input-file`、`--print0` 三选一。正常运行必须且只能给一个。同时出现多个在解析参数时退出 2，一个都不给在读取提示词时退出 2。stdin 与 `--input-file` 的单次提示词上限是 8 MiB（`MAX_PROMPT_BYTES`），超限退出 2。`--help`、`--version`、`--list-skills`、`--print-system-prompt`、`--session-title` 不需要提示词。
 
 - `--print`：参数即提示词。空字符串和非法 UTF-8 都退出 2。Windows 上若系统 ANSI 代码页不是 UTF-8，ap 会先用宽字符命令行重建参数，再转成 UTF-8。
 - `--input-file`：路径按启动目录解析，支持 `~`。文件必须存在、可读、非空且是合法 UTF-8。
@@ -109,7 +111,7 @@
 
 ## 输出
 
-stdout 是机器通道，只放结果或事件。日志、进度和工具输出全部走 stderr。三种格式都遵守这一条。
+stdout 是机器通道，只放结果或事件。日志、进度和工具输出全部走 stderr。三种格式都遵守这一条。stdout 写失败（管道关闭、磁盘满）或事件编码失败会让退出码变成 1，不会静默少输出再报成功。
 
 | 格式 | stdout | stderr |
 | --- | --- | --- |
@@ -228,6 +230,7 @@ continue with -s <session_id>
   "max_agent_depth": 1,                     // 子代理最大嵌套深度
   "max_tokens": 65536,                     // 单次响应上限
   "tool_timeout_ms": 120000,                // bash 默认超时
+  "task_timeout_ms": 1800000,               // task 子代理墙钟上限
   "llm_timeout_ms": 600000,                 // 单次 LLM 请求总超时
   "blob_threshold_bytes": 102400,           // 超过则写 blob
   "max_capture_bytes": 67108864,            // 单次工具输出硬上限
@@ -246,7 +249,7 @@ continue with -s <session_id>
 2. `api_key` 可以由 `AP_API_KEY` 覆盖。两处都没有时退出 2，`--print-system-prompt` 除外。
 3. `base_url` 缺省为官方地址，末尾斜杠会被去掉，空值报错。
 4. 未知字段忽略并警告。类型错误、非法取值都按配置错误退出 2。显式 `null` 按缺失处理。
-5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、两个超时和三个尺寸上限（`blob_threshold_bytes`、`max_capture_bytes`、`image_max_bytes`）必须为正。`max_agent_depth` 必须非负。
+5. 整数字段接受整数值的浮点数。`max_steps`、`max_tokens`、三个超时和三个尺寸上限（`blob_threshold_bytes`、`max_capture_bytes`、`image_max_bytes`）必须为正。`max_agent_depth` 必须非负。
 6. `context_window_tokens` 必须非负；`0` 表示不设预算，此时另外两个字段不参与计算。非零时必须大于 `max_tokens` 与 `handoff_max_tokens`，并且 `max_tokens + reserve` 必须小于窗口（`reserve = context_window_tokens * context_reserve_percent / 100`），否则预算公式的前两项必为负。`context_reserve_percent` 取 `0`–`100`，`handoff_max_tokens` 必须为正。这些冲突在启动时按配置错误退出 2。
 7. `ap-cli/settings.odin` 一次读取后拆成 SDK `Settings` 与 `aptools.Tool_Config`。
 
@@ -259,7 +262,7 @@ continue with -s <session_id>
 | `model`、`base_url`、`api_key` | SDK provider |
 | `max_steps`、`max_tokens`、`blob_threshold_bytes`、`stream_include_usage`、`context_window_tokens`、`context_reserve_percent`、`handoff_max_tokens` | SDK loop |
 | `llm_timeout_ms` | SDK provider |
-| `tool_timeout_ms`、`max_capture_bytes`、`image_input`、`image_max_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
+| `tool_timeout_ms`、`task_timeout_ms`、`max_capture_bytes`、`image_input`、`image_max_bytes`、`max_agent_depth` | 应用层 `Tool_Config` |
 
 配置文件路径不属于 SDK `Settings`，由 `ap-cli` 自己持有。
 

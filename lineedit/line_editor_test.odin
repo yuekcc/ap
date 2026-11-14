@@ -82,9 +82,10 @@ fake_enter_raw :: proc(ctx: rawptr) -> bool {
 	return true
 }
 
-fake_leave_raw :: proc(ctx: rawptr) {
+fake_leave_raw :: proc(ctx: rawptr) -> bool {
 	f := cast(^Fake_Term)ctx
 	f.raw = false
+	return true
 }
 
 new_fake_editor :: proc(

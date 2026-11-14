@@ -155,6 +155,21 @@ read_stream :: proc(file: ^os.File, buf: []byte) -> (data: []byte, done: bool) {
 turn_run :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callbacks) -> (result: Turn_Result) {
 	result.exit_code = -1
 	alloc := turn_allocator(options)
+
+	// 泵每读一行就 free_all(context.temp_allocator)，这只能回收本 turn 自己
+	// 的临时分配。调用方可能正拿着请求级 arena（ap-web 的 handler 同步起
+	// turn），所以进出本函数时替换并恢复 temp allocator。
+	pump_arena: runtime.Arena
+	if runtime.arena_init(&pump_arena, 64 * 1024, context.allocator) != nil {
+		result.exit_code = 1
+		result.stderr_preview = fmt.aprintf("cannot allocate turn arena", alloc)
+		return
+	}
+	defer runtime.arena_destroy(&pump_arena)
+	previous_temp := context.temp_allocator
+	context.temp_allocator = runtime.arena_allocator(&pump_arena)
+	defer context.temp_allocator = previous_temp
+
 	state: Pump_State
 	state.allocator = alloc
 	cb := callbacks
@@ -287,6 +302,20 @@ turn_run :: proc(options: ^Turn_Options, prompt: string, callbacks: Turn_Callbac
 				os.close(stderr_r)
 				stderr_open = false
 			}
+		}
+
+		// 子进程吐一条永不换行的输出时，行读取器会拒绝继续缓冲；这里必须
+		// 终止子进程，而不是安静地等它自己退出。
+		if protocol.line_reader_failed(&out_reader) || protocol.line_reader_failed(&err_reader) {
+			append_stderr_line(&state.stderr_log, "agent event line exceeds MAX_EVENT_LINE_BYTES")
+			platform.kill_process_tree(job, process)
+			_, werr := os.process_wait(process, 3000 * time.Millisecond)
+			if werr == os.General_Error.Timeout {
+				_ = os.process_kill(process)
+				_, _ = os.process_wait(process, 3000 * time.Millisecond)
+			}
+			exit_code = -1
+			exited = true
 		}
 
 		if !cancelled && platform.cancel_token_cancelled(options.cancel) {

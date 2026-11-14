@@ -103,6 +103,7 @@ tool_test_context :: proc(t: ^testing.T, name: string) -> Test_Tools {
 	cfg := new(Tool_Config)
 	cfg.config_dir = fmt.tprintf("%s/config", dir)
 	cfg.tool_timeout_ms = 120000
+	cfg.task_timeout_ms = 1800000
 	cfg.max_capture_bytes = 1024 * 1024
 	cfg.max_agent_depth = 1
 	bash, berr := platform.find_bash()
@@ -531,6 +532,17 @@ test_tool_definitions_are_valid :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(none), 0)
 	section := tool.registry_prompt_section(&registry, []string{})
 	testing.expect_value(t, section, "（本次没有可用工具）")
+}
+
+@(test)
+test_run_child_rejects_nonpositive_timeout :: proc(t: ^testing.T) {
+	result := run_child({
+		command = []string{"definitely-not-a-real-program"},
+		timeout_ms = 0,
+		max_capture_bytes = 1024,
+	})
+	testing.expect(t, !result.spawned)
+	testing.expect(t, test_contains(result.error, "timeout_ms"))
 }
 
 @(test)

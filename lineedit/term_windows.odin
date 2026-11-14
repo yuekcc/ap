@@ -1,6 +1,7 @@
 #+build windows
 package lineedit
 
+import "core:fmt"
 import "core:os"
 import "core:sys/windows"
 
@@ -113,21 +114,34 @@ file_enter_raw :: proc(ctx: rawptr) -> bool {
 	return true
 }
 
-file_leave_raw :: proc(ctx: rawptr) {
+file_leave_raw :: proc(ctx: rawptr) -> bool {
 	ft := cast(^File_Transport)ctx
+	ok := true
 	if ft.has_in {
-		windows.SetConsoleMode(windows.HANDLE(os.fd(ft.input)), ft.saved_in)
-		ft.has_in = false
+		if windows.SetConsoleMode(windows.HANDLE(os.fd(ft.input)), ft.saved_in) {
+			ft.has_in = false
+		} else {
+			ok = false
+		}
 	}
 	if ft.has_out {
-		windows.SetConsoleMode(windows.HANDLE(os.fd(ft.output)), ft.saved_out)
-		ft.has_out = false
+		if windows.SetConsoleMode(windows.HANDLE(os.fd(ft.output)), ft.saved_out) {
+			ft.has_out = false
+		} else {
+			ok = false
+		}
 	}
-	ft.entered = false
+	if ok {
+		ft.entered = false
+	} else {
+		fmt.eprintln("lineedit: cannot restore console mode; terminal may stay in raw mode")
+	}
+	return ok
 }
 
 file_destroy :: proc(ctx: rawptr) {
 	ft := cast(^File_Transport)ctx
-	file_leave_raw(ctx)
+	// 销毁路径没有调用方可以报告失败；leave_raw 自己已经写了诊断。
+	_ = file_leave_raw(ctx)
 	free(ft)
 }

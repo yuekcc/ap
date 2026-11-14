@@ -4,6 +4,7 @@ import client "../ap-core/client"
 import protocol "../ap-core/protocol"
 import "core:fmt"
 import "core:strings"
+import "core:sync"
 
 remember_session :: proc(app: ^App, session_id: string) {
 	if len(session_id) == 0 {
@@ -34,7 +35,9 @@ on_agent_stderr_line :: proc(user: rawptr, line: string) {
 }
 
 // 执行一个 turn：每轮都启动一个新的 ap 进程，stdout 读 stream-json，stderr 收集后按需展示。
-run_agent_turn :: proc(app: ^App, prompt: string) -> int {
+run_agent_turn :: proc(app: ^App, prompt: string, cancel: ^client.Cancel_Token) -> int {
+	// 上一轮可能被 Ctrl+C 置过位；新一轮从干净状态开始。
+	sync.atomic_store(&cancel.value, 0)
 	had_session := len(app.session_id) > 0
 	options := client.Turn_Options {
 		agent_bin  = app.agent_bin,
@@ -46,6 +49,7 @@ run_agent_turn :: proc(app: ^App, prompt: string) -> int {
 		max_steps  = app.options.max_steps,
 		max_tokens = app.options.max_tokens,
 		verbose    = app.options.verbose,
+		cancel     = cancel,
 	}
 	callbacks := client.Turn_Callbacks {
 		user       = app,

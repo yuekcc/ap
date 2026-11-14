@@ -47,7 +47,8 @@ legacy 是永久路径，kitty 只是渐进增强：
 - 不做 kitty 探测。终端支持时发 `CSI u`，不支持时发 legacy 字节；解码器同时接受两者。
 - 只有 `Decoder` 状态不完整时才使用超时：`ESC_TIMEOUT_MS = 20`，粘贴等待 `PASTE_FLUSH_MS = 150`。
 - 无法识别的序列产生 `Unsupported`，绝不会把转义字节插入正文。
-- 非 tty（管道/CI）不走 raw 和渲染，按行读取。
+- 非 tty（管道/CI）不走 raw 和渲染，按行读取。单行缓冲上限 8 MiB（`MAX_PIPE_LINE_BYTES`），超限返回 `Error`，不会无限增长。
+- `Transport.leave_raw` 返回是否成功恢复终端模式；失败时 `line_editor_leave_raw` 保留 `raw` 标志并写一条 stderr 诊断，下一次还能重试。
 
 ## 异步事件循环
 

@@ -186,7 +186,7 @@ test_editor_crlf_normalized :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_editor_max_len :: proc(t: ^testing.T) {
+test_editor_max_bytes :: proc(t: ^testing.T) {
 	e: Editor
 	editor_init(&e, 5)
 	defer editor_destroy(&e)
@@ -253,7 +253,7 @@ test_editor_offset_for_column_cjk :: proc(t: ^testing.T) {
 	text := "中中"
 	buf := transmute([]u8)text
 	// 第 3 列落在第一个汉字之后（宽度 2），下一个汉字会让列号变成 4。
-	offset, col := editor_offset_for_column(buf, Row{start = 0, len = len(buf)}, 3)
+	offset, col := editor_offset_for_column(buf, Row{start = 0, len_bytes = len(buf)}, 3)
 	testing.expect_value(t, offset, 3)
 	testing.expect_value(t, col, 2)
 }

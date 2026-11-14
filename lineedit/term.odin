@@ -8,6 +8,6 @@ Transport :: struct {
 	write:     proc(ctx: rawptr, data: []u8) -> bool,
 	size:      proc(ctx: rawptr) -> (cols, rows: int),
 	enter_raw: proc(ctx: rawptr) -> bool,
-	leave_raw: proc(ctx: rawptr),
+	leave_raw: proc(ctx: rawptr) -> bool,
 	destroy:   proc(ctx: rawptr),
 }

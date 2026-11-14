@@ -12,6 +12,10 @@ import "core:time"
 import uuid "core:encoding/uuid"
 
 MAX_LLM_RETRIES :: 5
+// Retry-After 也是不可信输入：服务端回 3600s 不能把 turn 挂一小时。
+RETRY_DELAY_MS_MAX :: 16000
+// 退避睡眠按片检查取消，最长 100ms 内响应 Ctrl+C。
+RETRY_SLEEP_SLICE_MS :: 100
 
 // ---- 每 step 的临时分配区 ----
 //
@@ -140,6 +144,21 @@ loop_default_sleep :: proc(ms: int) {
 	time.sleep(time.Duration(ms) * time.Millisecond)
 }
 
+// 分片睡眠，返回 false 表示中途被取消。sleep_fn 只是测试注入点，切片逻辑
+// 仍在引擎里，保证默认实现和测试替身都尊重取消。
+loop_sleep_cancellable :: proc(l: ^Loop, ms: int) -> bool {
+	remaining := ms
+	for remaining > 0 {
+		if platform.cancel_token_cancelled(l.cancel) {
+			return false
+		}
+		slice := min(remaining, RETRY_SLEEP_SLICE_MS)
+		l.sleep_fn(slice)
+		remaining -= slice
+	}
+	return !platform.cancel_token_cancelled(l.cancel)
+}
+
 // turn_end 覆盖一轮的量；handoff 与 session_title 是独立的一次模型调用
 // （manual handoff 没有 turn），都要累加，否则 session_end.usage 会漏掉它们。
 historical_usage_from_events :: proc(events: []Event) -> Usage {
@@ -251,6 +270,9 @@ loop_release_owned :: proc(l: ^Loop) {
 	for call in l.owned_calls {
 		delete(call.id)
 		delete(call.name)
+		// input 树由 provider 的 json.parse_string 用 context.allocator 建出来，
+		// 全仓只有这里负责回收。
+		json.destroy_value(call.input)
 	}
 	delete(l.owned_calls)
 	l.owned_calls = nil
@@ -312,17 +334,16 @@ loop_start_message :: proc(l: ^Loop, model: string) -> Error {
 // 大于阈值的内容写入 blob，失败时调用方决定是保留原文还是报错。
 make_text_block :: proc(l: ^Loop, text: string) -> (Content_Block, Error) {
 	block := Content_Block{type = BLOCK_TEXT, text = text}
-	if len(text) <= l.settings.blob_threshold_bytes {
-		return block, ok_error()
-	}
-	fields, berr := maybe_blob(l.store, transmute([]byte)text)
+	stored, berr := content_or_blob(l.store, transmute([]byte)text)
 	if !is_ok(berr) {
 		return block, berr
 	}
-	block.text = nil
-	block.text_ref = fields.ref
-	block.text_bytes = fields.bytes
-	block.text_preview = fields.preview
+	if stored.has_blob {
+		block.text = nil
+		block.text_ref = stored.ref
+		block.text_bytes = stored.bytes
+		block.text_preview = stored.preview
+	}
 	return block, ok_error()
 }
 
@@ -331,6 +352,7 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 		return err
 	}
 	blocks := make([dynamic]Content_Block, 0, 2)
+	defer delete(blocks)
 	if len(end.text) > 0 {
 		block, berr := make_text_block(l, end.text)
 		if !is_ok(berr) {
@@ -341,15 +363,16 @@ loop_write_message_end :: proc(l: ^Loop, end: Provider_Message_End) -> Error {
 	for call in end.tool_calls {
 		block := Content_Block{type = BLOCK_TOOL_USE, id = call.id, name = call.name}
 		args_text := platform.json_arguments_string(call.input)
-		if len(args_text) > l.settings.blob_threshold_bytes {
-			fields, berr := maybe_blob(l.store, transmute([]byte)args_text)
-			if !is_ok(berr) {
-				return berr
-			}
+		defer delete(args_text)
+		stored, berr := content_or_blob(l.store, transmute([]byte)args_text)
+		if !is_ok(berr) {
+			return berr
+		}
+		if stored.has_blob {
 			block.input = nil
-			block.input_ref = fields.ref
-			block.input_bytes = fields.bytes
-			block.input_preview = fields.preview
+			block.input_ref = stored.ref
+			block.input_bytes = stored.bytes
+			block.input_preview = stored.preview
 		} else {
 			block.input = call.input
 		}
@@ -496,6 +519,7 @@ loop_write_cancelled_message :: proc(l: ^Loop) {
 		return
 	}
 	blocks := make([dynamic]Content_Block, 0, 1)
+	defer delete(blocks)
 	if len(l.attempt_text) > 0 {
 		block, _ := make_text_block(l, string(l.attempt_text[:]))
 		append(&blocks, block)
@@ -512,6 +536,35 @@ loop_write_cancelled_message :: proc(l: ^Loop) {
 	}
 	_ = loop_append(l, ev, h)
 	l.message_started = false
+}
+
+// 所有退出点都要填 usage 与 session_usage。stream-json 的 turn_end 用量来自
+// 这里；取消路径漏填会让调用方看到 0 用量，与 transcript 不一致。
+loop_fill_usage :: proc(l: ^Loop, result: ^Loop_Result, num_steps: int) {
+	result.num_steps = num_steps
+	result.usage = l.turn_usage
+	result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+}
+
+// 可报告的终止路径：turn_end 写不进去就是致命错误，不能当成功返回。
+// transcript 是唯一事实来源，缺尾行意味着 usage 与上下文快照丢失。
+loop_finish_turn :: proc(l: ^Loop, result: ^Loop_Result, stop_reason: string, num_steps: int) -> bool {
+	result.stop_reason = stop_reason
+	loop_fill_usage(l, result, num_steps)
+	if err := loop_write_turn_end(l, stop_reason); !is_ok(err) {
+		result.error_kind = .Internal
+		result.fatal_error = err.message
+		return false
+	}
+	return true
+}
+
+// 已经在收尾的路径（取消、已决定失败）：没有别的通道能再报告写失败，
+// 记一条日志后继续返回结果，避免把原始终止原因盖掉。
+loop_try_write_turn_end :: proc(l: ^Loop, stop_reason: string) {
+	if err := loop_write_turn_end(l, stop_reason); !is_ok(err) {
+		log_error("cannot write turn_end(%s): %s", stop_reason, err.message)
+	}
 }
 
 loop_tool_update :: proc(user: rawptr, chunk: string) {
@@ -553,27 +606,27 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 	for call in l.pending_calls {
 		if platform.cancel_token_cancelled(l.cancel) {
 			_ = loop_write_cancel(l, SCOPE_STEP, l.current_tool_call_id)
-			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
+			loop_try_write_turn_end(l, STOP_REASON_CANCELLED)
 			return true, ok_error(), .None
 		}
 
 		l.current_tool_call_id = call.id
 		args_text := platform.json_arguments_string(call.input)
+		defer delete(args_text)
 		start_ev := Tool_Execution_Start_Event {
 			tool_call_id = call.id,
 			name = call.name,
 		}
-		if len(args_text) > l.settings.blob_threshold_bytes {
-			args_bytes: []byte = transmute([]byte)args_text
-			sha, berr := blob_write(l.project, args_bytes)
-			if !is_ok(berr) {
-				_ = loop_write_error(l, SCOPE_SESSION, .None, berr.message, false, 1)
-				return false, berr, .Tool
-			}
+		stored, berr := content_or_blob(l.store, transmute([]byte)args_text)
+		if !is_ok(berr) {
+			_ = loop_write_error(l, SCOPE_SESSION, .None, berr.message, false, 1)
+			return false, berr, .Tool
+		}
+		if stored.has_blob {
 			start_ev.args = nil
-			start_ev.args_ref = sha
-			start_ev.args_bytes = len(args_bytes)
-			start_ev.args_preview = platform.utf8_prefix(args_bytes, PREVIEW_BYTES)
+			start_ev.args_ref = stored.ref
+			start_ev.args_bytes = stored.bytes
+			start_ev.args_preview = stored.preview
 		} else {
 			start_ev.args = call.input
 		}
@@ -633,20 +686,17 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 			end_ev.content = nil
 			end_ev.images = nil
 		} else if res.ok {
-			if len(res.content) > l.settings.blob_threshold_bytes {
-				content_bytes: []byte = transmute([]byte)res.content
-				sha, berr := blob_write(l.project, content_bytes)
-				if !is_ok(berr) {
-					end_ev.ok = false
-					end_ev.error = "failed to persist output blob"
-					end_ev.content = nil
-					end_ev.images = nil
-				} else {
-					end_ev.content = nil
-					end_ev.content_ref = sha
-					end_ev.content_bytes = len(content_bytes)
-					end_ev.content_preview = platform.utf8_prefix(content_bytes, PREVIEW_BYTES)
-				}
+			content_blob, content_berr := content_or_blob(l.store, transmute([]byte)res.content)
+			if !is_ok(content_berr) {
+				end_ev.ok = false
+				end_ev.error = "failed to persist output blob"
+				end_ev.content = nil
+				end_ev.images = nil
+			} else if content_blob.has_blob {
+				end_ev.content = nil
+				end_ev.content_ref = content_blob.ref
+				end_ev.content_bytes = content_blob.bytes
+				end_ev.content_preview = content_blob.preview
 			} else {
 				end_ev.content = res.content
 			}
@@ -663,7 +713,7 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 		}
 		progress(l, .Block, "_%s %s (%dms)_", call.name, "ok" if end_ev.ok else "failed", res.duration_ms)
 		if was_cancelled {
-			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
+			loop_try_write_turn_end(l, STOP_REASON_CANCELLED)
 			return true, ok_error(), .None
 		}
 		if res.fatal {
@@ -718,20 +768,15 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if platform.cancel_token_cancelled(l.cancel) {
 			_ = loop_write_cancel(l, SCOPE_TURN, "")
 			loop_write_cancelled_message(l)
-			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
+			loop_try_write_turn_end(l, STOP_REASON_CANCELLED)
 			result.cancelled = true
 			result.stop_reason = STOP_REASON_CANCELLED
-			result.num_steps = step
-			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 		if step >= l.max_steps {
-			_ = loop_write_turn_end(l, STOP_REASON_MAX_STEPS)
-			result.stop_reason = STOP_REASON_MAX_STEPS
 			result.result_text = strings.clone(l.last_text)
-			result.num_steps = step
-			result.usage = l.turn_usage
-			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+			loop_finish_turn(l, &result, STOP_REASON_MAX_STEPS, step)
 			return result
 		}
 		step += 1
@@ -739,7 +784,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if err := loop_append(l, Step_Start_Event{header = h_step, step = step}, h_step); !is_ok(err) {
 			result.error_kind = .Internal
 			result.fatal_error = err.message
-			result.num_steps = step
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 		progress(l, .Block, "## Step %d", step)
@@ -759,7 +804,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_error(l, SCOPE_SESSION, .None, terr.message, false, 1)
 			result.error_kind = .Internal
 			result.fatal_error = terr.message
-			result.num_steps = step
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 		// 每个 step 计算一次预算决策：先看不省略的投影，超阈值才省略，
@@ -775,7 +820,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_error(l, SCOPE_SESSION, .None, message, false, 1)
 			result.error_kind = .Usage
 			result.fatal_error = message
-			result.num_steps = step
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 		calibration := calibration_percent_from(l.last_request_estimate, l.last_observed_input)
@@ -792,7 +837,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_error(l, SCOPE_SESSION, .None, cerr.message, false, 1)
 			result.error_kind = .Usage
 			result.fatal_error = cerr.message
-			result.num_steps = step
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 		loop_record_context(l, context_in, target)
@@ -839,7 +884,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				_ = loop_write_error(l, SCOPE_SESSION, .None, err.message, false, attempt)
 				result.error_kind = .Tool if err.kind == .Tool else .Internal
 				result.fatal_error = err.message
-				result.num_steps = step
+				loop_fill_usage(l, &result, step)
 				return result
 			}
 			if perr.kind == .None {
@@ -875,11 +920,12 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			_ = loop_write_error(l, SCOPE_LLM, perr.kind, perr.message, perr.retryable, attempt)
 			if perr.retryable && attempt <= MAX_LLM_RETRIES {
 				delay := 1000 * (1 << uint(attempt - 1))
-				if delay > 16000 {
-					delay = 16000
+				if delay > RETRY_DELAY_MS_MAX {
+					delay = RETRY_DELAY_MS_MAX
 				}
 				if retry_ms, ok := perr.retry_after_ms.?; ok && retry_ms > 0 {
-					delay = retry_ms
+					// 服务端建议可以更短，但不能突破本地上限。
+					delay = min(retry_ms, RETRY_DELAY_MS_MAX)
 				} else {
 					// 指数退避加一点抖动，避免多实例同时重试。
 					delay += int(time.time_to_unix_nano(time.now()) % 251)
@@ -888,7 +934,10 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				if l.attempt_had_text {
 					progress(l, .Line, "[retry] 上一次尝试已展示的文本作废")
 				}
-				l.sleep_fn(delay)
+				if !loop_sleep_cancellable(l, delay) {
+					cancelled = true
+					break
+				}
 				attempt += 1
 				continue
 			}
@@ -899,11 +948,10 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if cancelled {
 			_ = loop_write_cancel(l, SCOPE_STEP, l.current_message_id)
 			loop_write_cancelled_message(l)
-			_ = loop_write_turn_end(l, STOP_REASON_CANCELLED)
+			loop_try_write_turn_end(l, STOP_REASON_CANCELLED)
 			result.cancelled = true
 			result.stop_reason = STOP_REASON_CANCELLED
-			result.num_steps = step
-			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 		if context_too_long {
@@ -916,8 +964,7 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		if !success {
 			result.error_kind = .Provider
 			result.fatal_error = var_final_error.message
-			result.num_steps = step
-			result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+			loop_fill_usage(l, &result, step)
 			return result
 		}
 
@@ -928,27 +975,21 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 			if cancelled_tools {
 				result.cancelled = true
 				result.stop_reason = STOP_REASON_CANCELLED
-				result.num_steps = step
-				result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+				loop_fill_usage(l, &result, step)
 				return result
 			}
 			if !is_ok(terr2) {
 				result.error_kind = tool_error_kind
 				result.fatal_error = terr2.message
-				result.num_steps = step
-				result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+				loop_fill_usage(l, &result, step)
 				return result
 			}
 			continue
 		}
 
 		stop_reason := stop_reason_string(l.pending_stop)
-		_ = loop_write_turn_end(l, stop_reason)
-		result.stop_reason = stop_reason
 		result.result_text = strings.clone(l.last_text)
-		result.num_steps = step
-		result.usage = l.turn_usage
-		result.session_usage = usage_add(l.historical_usage, l.turn_usage)
+		loop_finish_turn(l, &result, stop_reason, step)
 		return result
 	}
 }
@@ -1042,13 +1083,11 @@ loop_context_exhausted :: proc(l: ^Loop, result: Loop_Result, step: int) -> Loop
 		false,
 		1,
 	)
-	_ = loop_write_turn_end(l, STOP_REASON_CONTEXT_TOO_LONG)
 	out.error_kind = .Provider
 	out.fatal_error = "context_too_long"
-	out.stop_reason = STOP_REASON_CONTEXT_TOO_LONG
 	out.result_text = strings.clone(l.last_text)
-	out.num_steps = step
-	out.session_usage = usage_add(l.historical_usage, l.turn_usage)
+	// turn_end 写不进去时 loop_finish_turn 会把 out 标成 Internal。
+	loop_finish_turn(l, &out, STOP_REASON_CONTEXT_TOO_LONG, step)
 	return out
 }
 
@@ -1095,14 +1134,11 @@ loop_handoff_turn :: proc(l: ^Loop, result: Loop_Result, step: int, reason: stri
 	}
 	// 事件行归 loop.events 所有，随 loop_destroy 释放。
 	append(&l.events, written)
-	_ = loop_write_turn_end(l, STOP_REASON_HANDOFF)
-	out.stop_reason = STOP_REASON_HANDOFF
 	out.handoff_content = handoff.content
 	out.handoff_reason = reason
 	out.handoff_usage = handoff.usage
 	out.result_text = strings.clone(l.last_text)
-	out.num_steps = step
-	out.usage = l.turn_usage
-	out.session_usage = usage_add(l.historical_usage, l.turn_usage)
+	// turn_end 缺失时不能把交接结果当成功，调用方会据此创建新 session。
+	loop_finish_turn(l, &out, STOP_REASON_HANDOFF, step)
 	return out
 }

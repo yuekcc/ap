@@ -12,6 +12,9 @@ Output_Format :: enum {
 	Stream_Json,
 }
 
+// 提示词是不可信输入（stdin 管道、--input-file）；单一请求必须有硬上限。
+MAX_PROMPT_BYTES :: 8 * 1024 * 1024
+
 Options :: struct {
 	session_id:           Maybe(string),
 	continue_session:     bool,
@@ -94,6 +97,9 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !session_id_safe(value) {
 				return opts, make_error(.Usage, "invalid session id %q", value)
 			}
+			if opts.session_id != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.session_id = value
 			i = n
 		case "-c", "--continue":
@@ -113,6 +119,9 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !is_ok(err) {
 				return opts, err
 			}
+			if opts.agent != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.agent = value
 			i = n
 		case "--input-file":
@@ -120,12 +129,18 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !is_ok(err) {
 				return opts, err
 			}
+			if opts.input_file != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.input_file = value
 			i = n
 		case "-p", "--print":
 			value, n, err := option_value(args, i, inline, has_inline, name)
 			if !is_ok(err) {
 				return opts, err
+			}
+			if opts.print_prompt != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
 			}
 			opts.print_prompt = value
 			i = n
@@ -140,12 +155,18 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !is_ok(err) {
 				return opts, err
 			}
+			if opts.config_dir != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.config_dir = value
 			i = n
 		case "--model":
 			value, n, err := option_value(args, i, inline, has_inline, name)
 			if !is_ok(err) {
 				return opts, err
+			}
+			if opts.model != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
 			}
 			opts.model = value
 			i = n
@@ -158,6 +179,9 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !ok || parsed <= 0 {
 				return opts, make_error(.Usage, "--max-steps must be a positive integer")
 			}
+			if opts.max_steps != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.max_steps = parsed
 			i = n
 		case "--max-tokens":
@@ -168,6 +192,9 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			parsed, ok := strconv.parse_int(value, 10)
 			if !ok || parsed <= 0 {
 				return opts, make_error(.Usage, "--max-tokens must be a positive integer")
+			}
+			if opts.max_tokens != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
 			}
 			opts.max_tokens = parsed
 			i = n
@@ -180,9 +207,15 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !ok || parsed < 0 {
 				return opts, make_error(.Usage, "--context-window must be a non-negative integer (0 disables the budget)")
 			}
+			if opts.context_window != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.context_window = parsed
 			i = n
 		case "--handoff":
+			if opts.handoff != nil {
+				return opts, make_error(.Usage, "--handoff given more than once")
+			}
 			// 无值形式是「只交接」；带值时那一段文本既是交接的聚焦提示，
 			// 也是新 session 的第一个 turn。下一个参数以 - 开头时视为旗标，
 			// 需要以 - 开头的提示词请用 --handoff=<文本>。
@@ -225,12 +258,18 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			if !session_id_safe(value) {
 				return opts, make_error(.Usage, "invalid parent session id %q", value)
 			}
+			if opts.parent_session_id != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
+			}
 			opts.parent_session_id = value
 			i = n
 		case "--parent-tool-call-id":
 			value, n, err := option_value(args, i, inline, has_inline, name)
 			if !is_ok(err) {
 				return opts, err
+			}
+			if opts.parent_tool_call_id != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
 			}
 			opts.parent_tool_call_id = value
 			i = n
@@ -242,6 +281,9 @@ parse_args :: proc(args: []string) -> (Options, Error) {
 			parsed, ok := strconv.parse_int(value, 10)
 			if !ok || parsed < 0 {
 				return opts, make_error(.Usage, "--agent-depth must be a non-negative integer")
+			}
+			if opts.agent_depth != nil {
+				return opts, make_error(.Usage, "%s given more than once", name)
 			}
 			opts.agent_depth = parsed
 			i = n
@@ -425,7 +467,18 @@ option_value :: proc(
 	if i + 1 >= len(args) {
 		return "", i, make_error(.Usage, "%s requires a value", name)
 	}
-	return args[i + 1], i + 2, ok_error()
+	next := args[i + 1]
+	// `ap --model --debug` 不能把下一个旗标当成值吞掉；需要以 - 开头的值时
+	// 用 --name=value 的内联形式。
+	if strings.has_prefix(next, "-") {
+		return "", i, make_error(
+			.Usage,
+			"%s requires a value (use %s=<value> for values starting with '-')",
+			name,
+			name,
+		)
+	}
+	return next, i + 2, ok_error()
 }
 
 read_all_stdin :: proc() -> (string, Error) {
@@ -435,6 +488,9 @@ read_all_stdin :: proc() -> (string, Error) {
 		n, err := os.read(os.stdin, chunk[:])
 		if n > 0 {
 			append(&buf, ..chunk[:n])
+			if len(buf) > MAX_PROMPT_BYTES {
+				return "", make_error(.Usage, "prompt from stdin exceeds %d bytes", MAX_PROMPT_BYTES)
+			}
 		}
 		if err != nil {
 			if err == .EOF || err == .Broken_Pipe {
@@ -475,6 +531,15 @@ read_prompt :: proc(opts: Options, cwd: string) -> (string, Error) {
 		resolved, rerr := platform.resolve_tool_path(cwd, path)
 		if !platform.is_ok(rerr) {
 			return "", make_error(.Usage, "%s", rerr.message)
+		}
+		if info, serr := os.stat(resolved, context.temp_allocator); serr == nil &&
+		   info.size > i64(MAX_PROMPT_BYTES) {
+			return "", make_error(
+				.Usage,
+				"--input-file exceeds %d bytes: %s",
+				MAX_PROMPT_BYTES,
+				resolved,
+			)
 		}
 		data, derr := os.read_entire_file_from_path(resolved, context.allocator)
 		if derr != nil {

@@ -5,11 +5,27 @@ import "core:strings"
 // 把管道里的字节流切成完整行；一行 stdout 就是一个 stream-json 事件。
 // 每次 feed 后压实缓冲，避免长 turn 的无界增长。
 // 行尾的单个 '\r' 会被去掉，Windows 的 CRLF 对调用方不可见。
+//
+// 子进程是不可信输入：吐一条永不换行的输出就能撑满内存，所以单行有硬上限。
+// 超限后置 failed 并清空缓冲；调用方应在轮询里检查并终止子进程。
+MAX_EVENT_LINE_BYTES :: 8 * 1024 * 1024
+
 Line_Reader :: struct {
 	buf:      [dynamic]u8,
 	start:    int,
 	callback: proc(user: rawptr, line: string),
 	user:     rawptr,
+	failed:   bool,
+}
+
+line_reader_failed :: proc(lr: ^Line_Reader) -> bool {
+	return lr.failed
+}
+
+line_reader_drop :: proc(lr: ^Line_Reader) {
+	lr.failed = true
+	resize(&lr.buf, 0)
+	lr.start = 0
 }
 
 trim_line_ending :: proc(line: string) -> string {
@@ -20,6 +36,9 @@ trim_line_ending :: proc(line: string) -> string {
 }
 
 line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
+	if lr.failed {
+		return
+	}
 	if len(chunk) > 0 {
 		append(&lr.buf, ..chunk)
 	}
@@ -27,7 +46,15 @@ line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
 		view := transmute(string)lr.buf[lr.start:]
 		idx := strings.index_byte(view, '\n')
 		if idx < 0 {
+			if len(view) > MAX_EVENT_LINE_BYTES {
+				line_reader_drop(lr)
+				return
+			}
 			break
+		}
+		if idx > MAX_EVENT_LINE_BYTES {
+			line_reader_drop(lr)
+			return
 		}
 		line := view[:idx]
 		lr.callback(lr.user, trim_line_ending(line))
@@ -45,6 +72,11 @@ line_reader_feed :: proc(lr: ^Line_Reader, chunk: []byte) {
 
 // 进程退出时把最后一截没有换行结尾的内容也交出去。
 line_reader_flush :: proc(lr: ^Line_Reader) {
+	if lr.failed {
+		resize(&lr.buf, 0)
+		lr.start = 0
+		return
+	}
 	if lr.start < len(lr.buf) {
 		lr.callback(lr.user, trim_line_ending(transmute(string)lr.buf[lr.start:]))
 	}

@@ -422,3 +422,19 @@ test_assembler_feed_does_not_leak_per_chunk :: proc(t: ^testing.T) {
 		retained / CHUNKS,
 	)
 }
+
+// 只发 data: 行、不发空行的流会跨行累加；事件必须有独立上限。
+@(test)
+test_sse_parser_rejects_oversized_event :: proc(t: ^testing.T) {
+	p: Sse_Parser
+	sse_parser_init(&p)
+	defer sse_parser_destroy(&p)
+
+	chunk := make([]byte, SSE_MAX_EVENT_BYTES + 8, context.temp_allocator)
+	for i in 0 ..< len(chunk) {
+		chunk[i] = 'a'
+	}
+	copy(chunk, "data: ")
+	chunk[len(chunk) - 1] = '\n'
+	testing.expect_value(t, sse_feed(&p, chunk, sse_test_handler, nil), Sse_Error.Event_Too_Long)
+}

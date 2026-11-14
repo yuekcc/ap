@@ -386,6 +386,56 @@ test_api_projects_and_cwd_scoped_endpoints :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(api_response_text(&bad), `"code":"invalid_cwd"`))
 }
 
+// /api/history 不能被超长 transcript 拖垮：默认返回尾部窗口，limit 与
+// since_seq 可控，丢弃旧事件时保持时间顺序。
+@(test)
+test_api_history_tail_window_and_since_seq :: proc(t: ^testing.T) {
+	dir := test_temp_dir("api-history-window")
+	defer os.remove_all(dir)
+
+	app: App
+	api_fixture_setup(t, &app, dir)
+	defer sse_hub_destroy(&app.hub)
+	defer runner_shutdown(&app)
+
+	b := strings.builder_make(context.temp_allocator)
+	for i in 0 ..< 8 {
+		strings.write_string(&b, `{"v":1,"seq":`)
+		strings.write_string(&b, fmt.aprintf("%d", i))
+		strings.write_string(&b, `,"ts":`)
+		strings.write_string(&b, fmt.aprintf("%d", i))
+		strings.write_string(&b, `,"type":"user_message","content":"m`)
+		strings.write_string(&b, fmt.aprintf("%d", i))
+		strings.write_string(&b, `"}`)
+		strings.write_byte(&b, '\n')
+	}
+	test_write_file(client.session_file(app.project, "ses_window"), strings.to_string(b))
+
+	response := api_call(&app, .Get, "/api/history", "session_id=ses_window&limit=3")
+	testing.expect_value(t, response.status, 200)
+	history: Api_History
+	err := json.unmarshal(response.body, &history, json.DEFAULT_SPECIFICATION, context.temp_allocator)
+	testing.expectf(t, err == nil, "cannot parse history: %v", err)
+	testing.expect_value(t, len(history.events), 3)
+	testing.expect(t, history.truncated)
+	if len(history.events) != 3 {
+		return
+	}
+	// 尾部窗口保留最新 3 条，顺序不变。
+	for i in 0 ..< 3 {
+		obj := history.events[i].(json.Object)
+		content, _ := protocol.json_string_field(obj, "content")
+		testing.expect_value(t, content, fmt.tprintf("m%d", 5 + i))
+	}
+
+	response2 := api_call(&app, .Get, "/api/history", "session_id=ses_window&since_seq=5")
+	history2: Api_History
+	err2 := json.unmarshal(response2.body, &history2, json.DEFAULT_SPECIFICATION, context.temp_allocator)
+	testing.expectf(t, err2 == nil, "cannot parse history: %v", err2)
+	testing.expect_value(t, len(history2.events), 2)
+	testing.expect(t, !history2.truncated)
+}
+
 HISTORY_BLOB_TEXT :: "resolved text\n"
 HISTORY_ARGS_BLOB :: `{"file_path":"x.txt"}`
 

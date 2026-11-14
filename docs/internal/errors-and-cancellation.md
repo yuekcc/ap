@@ -27,8 +27,8 @@ Loop 只看 `Provider_Error.retryable`，不重新按 kind 分类。Provider 把
 
 1. `MAX_LLM_RETRIES` 为 5。首次调用算 attempt 1。`attempt` 为 1 到 5 时可再重试，最多共 6 次调用。
 2. 退避延迟是 `1000 * 2^(attempt-1)` 毫秒，上限 16000 毫秒。再加 0 到 250 毫秒抖动。
-3. HTTP 头带 `Retry-After` 时，直接用它覆盖延迟，不再加抖动，也不受 16000 毫秒上限约束。
-4. 退避用阻塞 sleep。取消标志在 sleep 期间不会打断等待。sleep 结束后，下一次 provider 调用会立即看到取消。
+3. HTTP 头带 `Retry-After` 时用它覆盖延迟（不再加抖动），但仍受 16000 毫秒上限约束：`delay = min(retry_after_ms, 16000)`。
+4. 退避 sleep 按 100ms 分片，每片检查取消标志；命中后走正常的取消路径，不再发起下一次调用。
 5. 每次失败都写一条 `error(scope=llm)`。可重试失败在 `attempt` 为 1 到 5 时继续下一次，第 6 次失败后停止。最终那次的 `retryable` 仍可能为 true。
 6. 重试不写新的 `step_start`，不增加 step，也不影响 `max_steps`。
 7. 已经收到的文本在重试时作废。废弃的尝试不写 `message_end`，可能留下没有结束的 `message_start`，投影时忽略。stderr 会提示该段文本已作废。
@@ -74,6 +74,8 @@ bash 超时与输出超限会先终止整棵进程树，再返回 `ok=false`。�
 
 `ap` 没有交互式取消入口，取消只来自信号。Unix 注册 SIGINT 与 SIGTERM。Windows 注册 Ctrl+C 与 Ctrl+Break。信号处理器只写原子取消标志和退出码，不调用普通过程，也不直接操作 curl。
 
+前端各自安装同一套处理器并持有自己的 `Cancel_Token`：`ap-tui` 在启动时装 SIGINT/Ctrl+C，执行 turn 时传入 `Turn_Options.cancel`，Ctrl+C 只取消当前 turn，1 秒内第二次直接退出；`ap-web` 的信号处理器触发关停流程，转成 runner 的取消。
+
 | 输入 | 行为 |
 | --- | --- |
 | 第一次 SIGINT 或 Ctrl+C | 置取消标志，记录 130 |
@@ -99,7 +101,7 @@ bash 超时与输出超限会先终止整棵进程树，再返回 `ok=false`。�
 
 `cancel.target_id` 取当前记录的消息或工具调用 id，可能为 null。取消路径结束时，`ap-cli` 写 `session_end(reason=signal)`。如果 `session_end` 也写不进去，退出码改为 1。
 
-取消标志不能打断重试 sleep。`Retry-After` 很大时，退出会相应延后。第二次信号的 1 秒强退是这条延迟路径的兜底。
+退避 sleep 最多 100ms 内响应取消。`Retry-After` 很大时延迟也被钳到 16 秒上限；第二次信号的 1 秒强退仍保留，用于连分片 sleep 也不响应的极端情况。
 
 ## 超时
 

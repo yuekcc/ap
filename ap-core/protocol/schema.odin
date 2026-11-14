@@ -19,6 +19,15 @@ Event_Header :: struct {
 	type: string `json:"type"`,
 }
 
+// 信封字段顺序是 wire 格式的一部分：header 必须是类型化事件的第一个字段，
+// transcript 写入方依赖「先输出 header、再平铺字段」。下面的断言把这条
+// 隐性约定变成编译期约束。
+#assert(offset_of(Event_Header, v) == 0)
+#assert(offset_of(Event_Header, seq) > offset_of(Event_Header, v))
+#assert(offset_of(Event_Header, ts) > offset_of(Event_Header, seq))
+#assert(offset_of(Event_Header, type) > offset_of(Event_Header, ts))
+#assert(SCHEMA_VERSION > 0)
+
 // transcript 与 stream 事件共用的 usage 结构。
 Usage :: struct {
 	input_tokens:     Maybe(int) `json:"input_tokens"`,
