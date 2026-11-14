@@ -27,6 +27,7 @@ print_commands :: proc() {
 		`交互命令:
   /new       丢弃当前 session，下一条提示词开始新 session
   /session   显示当前 session id
+  /copy      复制最后一条 assistant 消息到系统剪贴板（OSC 52）
   /help      显示本帮助
   /quit      退出（/exit 同义）
 `,
@@ -41,7 +42,7 @@ print_banner :: proc(app: ^App) {
 	} else {
 		renderer_note(app, "session: new")
 	}
-	renderer_note(app, "commands: /help · /new · /session · /quit")
+	renderer_note(app, "commands: /help · /new · /session · /copy · /quit")
 }
 
 // 仅用于非 TTY / raw mode 不可用的回退路径；TTY 下由 lineedit 画 `› `。
@@ -76,6 +77,9 @@ handle_command :: proc(app: ^App, line: string) -> Command_Result {
 		} else {
 			renderer_note(app, "session: new（尚未发送提示词）")
 		}
+		return .Handled
+	case "/copy":
+		copy_last_message(app)
 		return .Handled
 	}
 	return .Not_Command

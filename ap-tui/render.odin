@@ -29,6 +29,8 @@ Renderer :: struct {
 	message_had_text_delta: bool,
 	tool_active:           bool,
 	glow:                  Glow_Config,
+	// 最后一条 assistant 消息的原始 Markdown，供 /copy 使用。
+	last_assistant_text:   string,
 }
 
 write_text :: proc(r: ^Renderer, text: string) {
@@ -111,6 +113,22 @@ message_text :: proc(r: ^Renderer, ev: protocol.Stream_Event) -> string {
 		strings.write_string(&b, text)
 	}
 	return strings.to_string(b)
+}
+
+// 记住最后一条 assistant 文本供 /copy。没有正文的消息（例如整轮只有工具
+// 调用）不覆盖上一条，避免 /copy 因为最近一条为空而失效。
+remember_assistant_text :: proc(r: ^Renderer, text: string) {
+	if len(text) == 0 {
+		return
+	}
+	cloned, err := strings.clone(text, context.allocator)
+	if err != nil {
+		return
+	}
+	if len(r.last_assistant_text) > 0 {
+		delete(r.last_assistant_text, context.allocator)
+	}
+	r.last_assistant_text = cloned
 }
 
 // glow 模式下 assistant 文本不再逐 delta 输出：等 message_end 拿到完整
@@ -249,11 +267,13 @@ render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) 
 			// reasoning 在 phase 1 不展示。
 		}
 	case protocol.EVENT_MESSAGE_END:
+		text := message_text(r, ev)
+		remember_assistant_text(r, text)
 		if r.glow.enabled {
-			assistant_markdown(r, message_text(r, ev))
+			assistant_markdown(r, text)
 		} else if mode == .History || !r.message_had_text_delta {
-			for text in client.message_texts(ev, r.project) {
-				assistant_text(r, text)
+			for part in client.message_texts(ev, r.project) {
+				assistant_text(r, part)
 			}
 		}
 		finish_assistant(r)

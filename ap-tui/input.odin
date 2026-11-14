@@ -21,6 +21,7 @@ Tui_Command :: struct {
 TUI_COMMANDS := [?]Tui_Command {
 	{"/new", "丢弃当前 session，下一条提示词新建 session"},
 	{"/session", "显示当前 session id"},
+	{"/copy", "复制最后一条 assistant 消息到系统剪贴板（OSC 52）"},
 	{"/help", "显示命令列表"},
 	{"/quit", "退出"},
 	{"/exit", "退出（/quit 同义）"},

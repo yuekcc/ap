@@ -429,3 +429,101 @@ test_render_handoff_turn_end_is_silent :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, !strings.contains(out, "turn ended: handoff"))
 }
+
+@(test)
+test_osc52_sequence :: proc(t: ^testing.T) {
+	seq, err := osc52_sequence("hello\n")
+	testing.expect_value(t, err.message, "")
+	testing.expect_value(t, seq, "\x1b]52;c;aGVsbG8K\x1b\\")
+}
+
+@(test)
+test_write_osc52_to_file :: proc(t: ^testing.T) {
+	dir := test_temp_dir("osc52")
+	defer os.remove_all(dir)
+
+	path := fmt.aprintf("%s/out.bin", dir)
+	file, ferr := os.open(path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	err := write_osc52(file, "hi")
+	os.close(file)
+	testing.expect_value(t, err.message, "")
+
+	data, _ := os.read_entire_file_from_path(path, context.allocator)
+	testing.expect_value(t, string(data), "\x1b]52;c;aGk=\x1b\\")
+}
+
+// /copy 用原始 Markdown，而不是 glow 渲染结果；空消息不覆盖上一条。
+@(test)
+test_render_tracks_last_assistant_text :: proc(t: ^testing.T) {
+	dir := test_temp_dir("last_text")
+	defer os.remove_all(dir)
+	project := client.Project {
+		config_dir = dir,
+		root       = dir,
+		hash       = "test",
+		dir        = dir,
+		blobs_dir  = fmt.aprintf("%s/blobs", dir),
+	}
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	r := Renderer {
+		out           = file,
+		color         = false,
+		project       = &project,
+		at_line_start = true,
+		glow          = Glow_Config{enabled = true, render = fake_glow_render},
+	}
+	defer {
+		if len(r.last_assistant_text) > 0 {
+			delete(r.last_assistant_text, context.allocator)
+		}
+	}
+	events := [?]string {
+		`{"type":"message_start","message_id":"m1"}`,
+		`{"type":"message_update","message_id":"m1","delta":{"text":"first"}}`,
+		`{"type":"message_end","message_id":"m1","content":[{"type":"text","text":"first\n"}]}`,
+		`{"type":"message_end","message_id":"m2","content":[]}`,
+		`{"type":"message_start","message_id":"m3"}`,
+		`{"type":"message_end","message_id":"m3","content":[{"type":"text","text":"# second\n\nbody\n"}]}`,
+	}
+	for line in events {
+		ev, ok := protocol.parse_stream_event(line)
+		if !ok {
+			continue
+		}
+		render_event(&r, ev, .Live)
+		free_all(context.temp_allocator)
+	}
+	os.close(file)
+	testing.expect_value(t, r.last_assistant_text, "# second\n\nbody\n")
+}
+
+@(test)
+test_copy_command_without_message :: proc(t: ^testing.T) {
+	dir := test_temp_dir("copy_cmd")
+	defer os.remove_all(dir)
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	app := App {
+		renderer = {out = file, at_line_start = true},
+	}
+	testing.expect_value(t, handle_command(&app, "/copy"), Command_Result.Handled)
+	os.close(file)
+
+	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
+	testing.expect(t, strings.contains(string(data), "nothing to copy"))
+}

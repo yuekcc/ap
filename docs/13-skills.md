@@ -67,7 +67,7 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 /release-notes 帮我生成 v1.2.0 的发布说明
 ```
 
-如果 `/<skill_name>` 能完全匹配某个技能，模型会按该技能的 `SKILL.md` 执行。终端界面里的 `/new`、`/session`、`/help`、`/quit` 是界面命令，不是技能；其他 `/...` 会作为普通提示词发送。
+如果 `/<skill_name>` 能完全匹配某个技能，模型会按该技能的 `SKILL.md` 执行。终端界面里的 `/new`、`/session`、`/copy`、`/help`、`/quit` 是界面命令，不是技能；其他 `/...` 会作为普通提示词发送。
 
 ## 关闭技能
 

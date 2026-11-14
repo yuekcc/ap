@@ -104,6 +104,7 @@ ap-tui [options]
 - 工具结束另起一行并缩进两格，写 `✓` 或 `✗`、耗时、退出码，失败时再附错误信息。错误压成单行并截到 200 字节。一次工具调用占调用行和状态行两行。状态行不随参数行一起折行，避免长参数被终端硬折行后状态落在行首。
 - 工具输出不渲染：`tool_execution_update` 增量被忽略，`tool_execution_end` 的结果（含图片）也不展示。完整结果留在 transcript，由 web 界面和 `ap` 恢复使用。
 - `message_end` 只在没有收到过文本 delta 时补全文，避免重复。
+- 每个 `message_end`（实时和历史重放都算）把文本块按空行拼接后保存为「最后一条 assistant 文本」，供 `/copy` 使用。没有正文的消息不覆盖上一条；文本用 `context.allocator` 复制，`/copy` 发送的是原始 Markdown 而不是 glow 输出。
 - `error` 中 `retryable=true` 显示为黄色警告，否则显示为红色错误，并带上 `scope`。
 - `cancel` 显示为 `cancelled [<scope>]`。
 - `turn_end.stop_reason` 为空或 `stop` 时不提示。`tool_use` 也按正常结束处理，这是防御性兼容；正常的 `turn_end` 不会带 `tool_use`。其他值打印 `turn ended: <reason>`。
@@ -176,8 +177,16 @@ stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前�
 | --- | --- |
 | `/new` | 丢弃当前 session id，下一条提示词新建 session |
 | `/session` | 显示当前 session id。没有 id 时显示“尚未发送提示词” |
+| `/copy` | 用 OSC 52 把最后一条 assistant 文本写进系统剪贴板 |
 | `/help` | 显示命令列表 |
 | `/quit`、`/exit` | 退出 |
+
+`/copy` 的实现要点：
+
+- 序列是 `ESC ] 52 ; c ; <base64(text)> ESC \`，写到 `os.stdout`。`ap-tui` 不调用系统剪贴板 API，也不 import 额外依赖；OSC 52 由终端模拟器解释，SSH 和 tmux（`set-clipboard on`）下同样可用。
+- 只在 `terminal.is_terminal(os.stdout)` 为真时发送；非 TTY 下写进去只会污染管道。
+- 没有 assistant 文本时提示 `nothing to copy`。没有发送长度上限；部分终端会丢弃过长的 OSC 52。终端拒绝或忽略时 `ap-tui` 无从得知，仍报告已复制。
+- 复制目标在进程内跨 session 保留，`/new` 不清空。
 
 未知的 `/...` 不当作命令，按普通提示词发送。因此可以直接发送绝对路径等内容。
 
@@ -211,7 +220,7 @@ odin test ap-tui -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 测试覆盖下面几类行为。
 
 - `lineedit`：decoder（Kitty/legacy/分片/粘贴/非法 UTF-8/超时）、编辑模型、grapheme 折行、渲染、history、completion、mask/hints、异步 `feed`。
-- `ap-tui`：实时流、历史重放、工具输出截断、错误与 turn 结束、session 解析、`prompt_gap`。
+- `ap-tui`：实时流、历史重放、工具输出截断、错误与 turn 结束、session 解析、`prompt_gap`、glow 渲染与回退、最后一条 assistant 文本的记录与 OSC 52 序列。
 
 真实终端行为（Windows Terminal、Ghostty 等）靠手动验收。
 
