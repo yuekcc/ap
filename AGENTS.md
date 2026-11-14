@@ -18,7 +18,7 @@ ap 是用 Odin 写的 coding agent。`ap` 本体是一次性 CLI：一条提示�
 ## 构建与测试
 
 ```sh
-./build.sh                 # 构建前端、检查依赖边、编译四个入口
+./build.sh                 # 构建前端并编译四个入口
 ./test.sh                  # 全部 Odin 测试 + tools/check-deps.sh
 tools/check-deps.sh        # 只检查包边界
 tools/check-deps.sh --self-test   # 验证检查器本身能抓到违规

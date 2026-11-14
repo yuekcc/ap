@@ -79,7 +79,7 @@ tools/check-deps.ps1
 tools/check-deps.ps1 -SelfTest
 ```
 
-正常检查通过时输出 `check-deps: ok`，退出码为 0。每发现一条违规就打印文件名与路径，并返回非 0。`build.sh` 在编译四个入口之前调用它，`test.sh` 在全部 Odin 测试之后调用它。`tools/check-deps.ps1` 可以在 PowerShell 中单独运行。仓库没有 `build.ps1` 或 `test.ps1`。
+正常检查通过时输出 `check-deps: ok`，退出码为 0。每发现一条违规就打印文件名与路径，并返回非 0。`test.sh` 在全部 Odin 测试之后调用它；`build.sh` 只负责编译，不重复跑边界检查。`tools/check-deps.ps1` 可以在 PowerShell 中单独运行。仓库没有 `build.ps1` 或 `test.ps1`。
 
 ### 正常检查做两件事
 

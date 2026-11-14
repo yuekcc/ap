@@ -228,9 +228,10 @@ npm --prefix ap-web run watch
 构建脚本按下面的顺序执行。
 
 1. 找到 `npx` 时先执行 `npm --prefix ap-web run build` 刷新 `dist/`。找不到时使用本地已有的 `dist/`，两者都没有则报错退出。
-2. 执行 `tools/check-deps.sh`。
-3. 依次构建 `cmd/ap`、`cmd/ap-tui`、`cmd/ap-web`、`cmd/magi-cli`，产物在 `build/`。
-4. Windows 的产物带 `.exe`。
+2. 依次构建 `cmd/ap`、`cmd/ap-tui`、`cmd/ap-web`、`cmd/magi-cli`，产物在 `build/`。
+3. Windows 的产物带 `.exe`。
+
+包边界检查不在构建脚本里，由 `./test.sh` 在测试之后统一跑一次，避免同一套 `odin build` 执行两遍。
 
 `#load_directory("dist")` 在编译期读取 `ap-web/dist/`。目录不存在时编译失败。这就是前端构建必须先于 Odin 构建、且新克隆的仓库要先跑一次前端构建的原因。
 
