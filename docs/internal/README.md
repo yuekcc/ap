@@ -118,6 +118,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [proposals/cli-explicit-prompt-source.md](proposals/cli-explicit-prompt-source.md) | 提示词三选一的设计记录 | 设计记录 |
 | [proposals/context-budget-and-handoff.md](proposals/context-budget-and-handoff.md) | token 预算、工具结果省略与 handoff 的设计记录（已实现，决策理由保留） | 设计记录 |
 | [proposals/read-image.md](proposals/read-image.md) | `read_file` 图片输入、blob 引用与合成 user 消息的设计记录（已实现） | 设计记录 |
+| [proposals/hooks.md](proposals/hooks.md) | 工具与 turn 生命周期 hook 的协议、配置与分层决策（草案，未实现） | 设计记录 |
 | [proposals/cli-prompt-context-tools.md](proposals/cli-prompt-context-tools.md) | 上下文裁剪与工具开关的设计记录 | 设计记录 |
 | [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
 | [tigerstyle-review.md](tigerstyle-review.md) | 全仓 TigerStyle 评审：已核实的问题、修改建议与修复顺序 | 工作清单 |
