@@ -96,7 +96,7 @@ target  = 1048576 - 65536 - 52428 = 930412
 }
 ```
 
-开启后，`ap-tui` 把 assistant 的 Markdown 文本交给 `glow` 渲染后再显示，工具调用和工具结果不受影响。`glow` 必须在 `PATH` 中；调用失败时退回原始文本，并在本次进程内关闭 glow。详细行为见 [终端界面 ap-tui](10-tui.md)。
+开启后，`ap-tui` 把 assistant 的 Markdown 文本交给 `glow` 渲染后再显示，工具调用和工具结果不受影响。`glow` 是 Charm 的终端 Markdown 渲染器（[首页](https://github.com/charmbracelet/glow)），必须自行安装并在 `PATH` 中；调用失败时退回原始文本，并在本次进程内关闭 glow。详细行为见 [终端界面 ap-tui](10-tui.md)。
 
 ## 图片
 

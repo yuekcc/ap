@@ -52,6 +52,8 @@
 
 ## Markdown 渲染（glow）
 
+[glow](https://github.com/charmbracelet/glow) 是一个终端 Markdown 渲染器。`ap-tui` 不内置渲染，而是调用 `PATH` 中的 `glow` 命令渲染 assistant 的 Markdown。
+
 默认情况下，assistant 文本按模型返回的原始文本显示。想让 Markdown 经过 `glow` 渲染，在 `$AP_CONFIG/settings.json` 里开启：
 
 ```json
@@ -62,7 +64,7 @@
 }
 ```
 
-`tui` 段只由 `ap-tui` 读取，`ap` 和 `magi` 会忽略它。`glow` 需要在 `PATH` 中。
+`tui` 段只由 `ap-tui` 读取，`ap` 和 `magi` 会忽略它。`glow` 需要自行安装并能在 `PATH` 中找到，安装方式见 [glow 首页](https://github.com/charmbracelet/glow)。
 
 开启后的行为：
 
