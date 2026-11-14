@@ -96,6 +96,10 @@ ap-tui [options]
 - 使用普通终端滚动区，不使用 alternate screen。输出保留在 scrollback 中。
 - 用户消息和输入框使用 `› ` 前缀。非 TTY 回退路径打印 `> `。
 - assistant 文本使用 `● ` 前缀。文本 delta 实时输出。
+- `settings.json(c)` 的 `tui.enable_glow = true` 打开 glow 渲染。此时 `message_update` 的 delta 不上屏，`message_end` 的文本块拼成 Markdown 后交给外部 `glow`，再把 stdout 原样写到 `● ` 之后。渲染宽度取终端宽度减 2，颜色开关映射为 `-s dark` / `-s notty`。
+- glow 从临时 Markdown 文件读 stdin，使用 `os.process_exec` 捕获 stdout；临时文件在调用结束后删除。`ap-tui` 不 import `ap-cli`，只通过 `client.settings_path` 定位配置文件并自行解析 `tui` 段。
+- glow 不存在、退出码非 0 或写入失败时退回原始文本，并把本次进程内的 glow 关闭，避免每条消息重复起进程和报错。
+- 历史重放同样经过 glow；重放发生在 lineedit 初始化之前，使用 glow 自己的默认宽度。
 - 工具调用使用 `◆ ` 前缀，后接工具名和参数。参数压成单行并截到约 240 字节。
 - 工具结束另起一行并缩进两格，写 `✓` 或 `✗`、耗时、退出码，失败时再附错误信息。错误压成单行并截到 200 字节。一次工具调用占调用行和状态行两行。状态行不随参数行一起折行，避免长参数被终端硬折行后状态落在行首。
 - 工具输出不渲染：`tool_execution_update` 增量被忽略，`tool_execution_end` 的结果（含图片）也不展示。完整结果留在 transcript，由 web 界面和 `ap` 恢复使用。

@@ -83,6 +83,21 @@ default_config_dir :: proc(cli_config_dir: Maybe(string)) -> (string, Error) {
 	return canonicalize_path(joined, false)
 }
 
+SETTINGS_FILE_NAMES := [2]string{"settings.jsonc", "settings.json"}
+
+// 找到实际使用的配置文件。返回空串表示候选都不存在。
+// .jsonc 优先：它是显式选择加入的注释版本，同时存在时不应被 .json 静默覆盖。
+settings_path :: proc(config_dir: string) -> string {
+	for name in SETTINGS_FILE_NAMES {
+		// 调用方会把结果存进 Loaded_Settings，不能用临时分配器。
+		path := fmt.aprintf("%s/%s", config_dir, name)
+		if os.exists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
 Project :: struct {
 	config_dir: string,
 	root:       string,

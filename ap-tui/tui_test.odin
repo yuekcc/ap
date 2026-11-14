@@ -40,6 +40,7 @@ test_render_to_file :: proc(
 	t: ^testing.T,
 	events: []string,
 	mode: Event_Mode,
+	glow: Glow_Config = {},
 ) -> string {
 	dir := test_temp_dir("render")
 	defer os.remove_all(dir)
@@ -65,6 +66,7 @@ test_render_to_file :: proc(
 		color         = false,
 		project       = &project,
 		at_line_start = true,
+		glow          = glow,
 	}
 	for line in events {
 		ev, ok := protocol.parse_stream_event(line)
@@ -78,6 +80,67 @@ test_render_to_file :: proc(
 	os.close(file)
 	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
 	return string(data)
+}
+
+fake_glow_render :: proc(text: string, width: int, color: bool) -> (string, client.Error) {
+	_ = width
+	_ = color
+	return fmt.aprintf("[glow] %s", strings.trim_space(text)), client.ok_error()
+}
+
+fake_glow_fail :: proc(text: string, width: int, color: bool) -> (string, client.Error) {
+	_, _, _ = text, width, color
+	return "", client.errorf("boom")
+}
+
+@(test)
+test_glow_renders_message_end_once :: proc(t: ^testing.T) {
+	out := test_render_to_file(
+		t,
+		{
+			`{"type":"message_start","message_id":"m1"}`,
+			`{"type":"message_update","message_id":"m1","delta":{"text":"hello"}}`,
+			`{"type":"message_update","message_id":"m1","delta":{"text":" world\n"}}`,
+			`{"type":"message_end","message_id":"m1","content":[{"type":"text","text":"hello world\n"}]}`,
+		},
+		.Live,
+		Glow_Config{enabled = true, render = fake_glow_render},
+	)
+	// delta 不上屏，只在 message_end 渲染一次。
+	testing.expect(t, strings.contains(out, "● [glow] hello world"))
+	testing.expect_value(t, strings.count(out, "hello world"), 1)
+}
+
+@(test)
+test_glow_renders_history_message :: proc(t: ^testing.T) {
+	out := test_render_to_file(
+		t,
+		{
+			`{"type":"user_message","content":"do it"}`,
+			`{"type":"message_end","message_id":"m1","content":[{"type":"text","text":"answer\n"}]}`,
+		},
+		.History,
+		Glow_Config{enabled = true, render = fake_glow_render},
+	)
+	testing.expect(t, strings.contains(out, "› do it"))
+	testing.expect(t, strings.contains(out, "● [glow] answer"))
+}
+
+@(test)
+test_glow_failure_falls_back_to_raw_once :: proc(t: ^testing.T) {
+	out := test_render_to_file(
+		t,
+		{
+			`{"type":"message_end","message_id":"m1","content":[{"type":"text","text":"hello\n"}]}`,
+			`{"type":"message_end","message_id":"m2","content":[{"type":"text","text":"world\n"}]}`,
+		},
+		.Live,
+		Glow_Config{enabled = true, render = fake_glow_fail},
+	)
+	testing.expect(t, strings.contains(out, "● hello"))
+	testing.expect(t, strings.contains(out, "● world"))
+	// 第一次失败后关闭本进程内的 glow，不再重复报错。
+	testing.expect_value(t, strings.count(out, "glow failed"), 1)
 }
 
 @(test)

@@ -56,6 +56,18 @@ test_settings_tool_fields_are_split_out :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_settings_tui_section_is_accepted :: proc(t: ^testing.T) {
+	dir := cli_temp_dir(t, "settings-tui")
+	defer os.remove_all(dir)
+	settings_write_file(
+		fmt.tprintf("%s/settings.json", dir),
+		`{"model":"m","api_key":"k","tui":{"enable_glow":true}}`,
+	)
+	_, err := load_settings(dir)
+	testing.expect_value(t, err.kind, apcore.Error_Kind.None)
+}
+
+@(test)
 test_settings_missing_file_has_hint :: proc(t: ^testing.T) {
 	dir := cli_temp_dir(t, "settings-missing")
 	defer os.remove_all(dir)

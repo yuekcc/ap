@@ -50,6 +50,29 @@
 
 工具输出不在终端渲染，只保留命令行、耗时和结果状态。完整结果在 transcript 里，需要时用 [浏览器界面](11-web.md) 查看。
 
+## Markdown 渲染（glow）
+
+默认情况下，assistant 文本按模型返回的原始文本显示。想让 Markdown 经过 `glow` 渲染，在 `$AP_CONFIG/settings.json` 里开启：
+
+```json
+{
+  "tui": {
+    "enable_glow": true
+  }
+}
+```
+
+`tui` 段只由 `ap-tui` 读取，`ap` 和 `magi` 会忽略它。`glow` 需要在 `PATH` 中。
+
+开启后的行为：
+
+- assistant 文本等到消息完整结束后再交给 `glow` 渲染，因此不再逐 token 流式出现。工具调用和工具状态仍然实时显示。
+- 终端可查询宽度时，渲染宽度跟随终端宽度；否则用 glow 的默认宽度。
+- `--no-color` 或 `NO_COLOR` 生效时，`glow` 使用无色样式。
+- `glow` 不存在或渲染失败时，退回原始文本，并在本次 `ap-tui` 进程内关闭 glow，不会影响会话和工具执行。
+
+工具输出仍然不在终端渲染，见上一节。
+
 ## 输入框按键
 
 | 按键 | 行为 |
@@ -110,6 +133,7 @@
 - 运行中按 Ctrl+C 是内核信号，会同时终止 `ap-tui` 和 `ap`，不会回到输入框。
 - 不显示 reasoning，也没有 token 或 usage 状态行。
 - 不显示工具输出，需要看结果时去 web 界面或 transcript。
+- 开启 `tui.enable_glow` 后，assistant 文本在消息结束后才出现，不再实时流式输出。
 - 输入框没有持久化 history、选中、撤销和鼠标支持。补全只覆盖斜杠命令；history 只在当前进程内保留。
 - 终端缩放可能导致编辑块错位。下一次按键重绘时会按新尺寸重新布局。
 

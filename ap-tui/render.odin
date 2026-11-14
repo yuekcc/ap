@@ -28,6 +28,7 @@ Renderer :: struct {
 	assistant_active:      bool,
 	message_had_text_delta: bool,
 	tool_active:           bool,
+	glow:                  Glow_Config,
 }
 
 write_text :: proc(r: ^Renderer, text: string) {
@@ -90,6 +91,54 @@ assistant_text :: proc(r: ^Renderer, text: string) {
 		r.assistant_active = true
 	}
 	write_text(r, text)
+}
+
+// message_text 把 message_end 里的文本块拼成一段 Markdown。多个文本块之间
+// 空一行，让 glow 按独立段落渲染。
+message_text :: proc(r: ^Renderer, ev: protocol.Stream_Event) -> string {
+	texts := client.message_texts(ev, r.project)
+	if len(texts) == 0 {
+		return ""
+	}
+	if len(texts) == 1 {
+		return texts[0]
+	}
+	b := strings.builder_make(context.temp_allocator)
+	for text, i in texts {
+		if i > 0 {
+			strings.write_string(&b, "\n\n")
+		}
+		strings.write_string(&b, text)
+	}
+	return strings.to_string(b)
+}
+
+// glow 模式下 assistant 文本不再逐 delta 输出：等 message_end 拿到完整
+// Markdown 后一次渲染。失败时退回原始文本，并关闭本次进程内的开关，
+// 避免每条消息都白起一次进程、重复报错。
+assistant_markdown :: proc(r: ^Renderer, text: string) {
+	if len(text) == 0 {
+		return
+	}
+	render := r.glow.render
+	if render == nil {
+		render = run_glow
+	}
+	rendered, err := render(text, r.glow.width, r.color)
+	if !client.is_ok(err) {
+		r.glow.enabled = false
+		note(r, fmt.tprintf("glow failed; showing raw output: %s", err.message))
+		assistant_text(r, text)
+		return
+	}
+	body := strings.trim(rendered, "\r\n")
+	if len(body) == 0 {
+		return
+	}
+	ensure_line_start(r)
+	paint(r, BOLD + GREEN, "● ")
+	write_text(r, body)
+	ensure_line_start(r)
 }
 
 finish_assistant :: proc(r: ^Renderer) {
@@ -191,13 +240,18 @@ render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) 
 	case protocol.EVENT_MESSAGE_UPDATE:
 		if mode == .Live {
 			if text, ok := ev.delta.text.?; ok && len(text) > 0 {
-				assistant_text(r, text)
+				// glow 模式只收集最终文本，原始 delta 不直接上屏。
+				if !r.glow.enabled {
+					assistant_text(r, text)
+				}
 				r.message_had_text_delta = true
 			}
 			// reasoning 在 phase 1 不展示。
 		}
 	case protocol.EVENT_MESSAGE_END:
-		if mode == .History || !r.message_had_text_delta {
+		if r.glow.enabled {
+			assistant_markdown(r, message_text(r, ev))
+		} else if mode == .History || !r.message_had_text_delta {
 			for text in client.message_texts(ev, r.project) {
 				assistant_text(r, text)
 			}

@@ -34,6 +34,7 @@ $AP_CONFIG/settings.jsonc
 | `context_window_tokens` | `1048576` | 模型上下文窗口；`0` 关闭预算 |
 | `context_reserve_percent` | `5` | 余量占窗口的百分比，取值 0 到 100 |
 | `handoff_max_tokens` | `16384` | 生成交接文档那次调用的输出上限 |
+| `tui.enable_glow` | `false` | `ap-tui` 是否用外部 `glow` 渲染 assistant 文本 |
 
 ## 规则
 
@@ -46,6 +47,7 @@ $AP_CONFIG/settings.jsonc
 7. `max_agent_depth` 必须非负。
 8. `context_window_tokens` 必须非负。`0` 表示不设预算。
 9. 非零窗口必须大于 `max_tokens` 和 `handoff_max_tokens`，并且 `max_tokens + reserve` 必须小于窗口。
+10. `tui` 段由前端自行读取和校验，`ap` 不读取也不校验它的内部取值。
 
 `reserve` 的计算方式是：
 
@@ -81,6 +83,20 @@ target  = 1048576 - 65536 - 52428 = 930412
   "handoff_max_tokens": 4096
 }
 ```
+
+## TUI
+
+`tui` 段只由 `ap-tui` 读取，`ap` 和 `magi` 会忽略它。
+
+```json
+{
+  "tui": {
+    "enable_glow": true
+  }
+}
+```
+
+开启后，`ap-tui` 把 assistant 的 Markdown 文本交给 `glow` 渲染后再显示，工具调用和工具结果不受影响。`glow` 必须在 `PATH` 中；调用失败时退回原始文本，并在本次进程内关闭 glow。详细行为见 [终端界面 ap-tui](10-tui.md)。
 
 ## 图片
 

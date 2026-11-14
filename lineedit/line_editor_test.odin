@@ -747,6 +747,10 @@ test_line_editor_resize :: proc(t: ^testing.T) {
 	before := f.writes
 	testing.expect(t, line_editor_resize(&le))
 	testing.expect(t, f.writes > before)
+
+	cols, rows := line_editor_terminal_size(&le)
+	testing.expect_value(t, cols, 80)
+	testing.expect_value(t, rows, 24)
 }
 
 @(test)

@@ -43,6 +43,21 @@ test_project_path_conflict_is_reported :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_settings_path_prefers_jsonc :: proc(t: ^testing.T) {
+	dir := test_temp_dir("settings-path")
+	defer test_cleanup(dir)
+
+	testing.expect_value(t, settings_path(dir), "")
+	test_write_file(fmt.tprintf("%s/settings.json", dir), `{}`)
+	json_path := fmt.tprintf("%s/settings.json", dir)
+	testing.expect_value(t, settings_path(dir), json_path)
+
+	test_write_file(fmt.tprintf("%s/settings.jsonc", dir), `{}`)
+	jsonc_path := fmt.tprintf("%s/settings.jsonc", dir)
+	testing.expect_value(t, settings_path(dir), jsonc_path)
+}
+
+@(test)
 test_path_normalization_hash_stable :: proc(t: ^testing.T) {
 	dir := test_temp_dir("hash-stable")
 	defer test_cleanup(dir)

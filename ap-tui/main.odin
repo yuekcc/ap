@@ -1,6 +1,7 @@
 package aptui
 
 import client "../ap-core/client"
+import lineedit "../lineedit"
 
 import "core:fmt"
 import "core:os"
@@ -142,6 +143,7 @@ run :: proc(args: []string) -> int {
 		fmt.eprintln("ap-tui: ", aerr.message)
 		return 2
 	}
+	tui_settings, settings_warning := load_tui_settings(project.config_dir)
 
 	color := !opts.no_color &&
 		terminal.is_terminal(os.stdout) &&
@@ -156,6 +158,7 @@ run :: proc(args: []string) -> int {
 			color = color,
 			project = &project,
 			at_line_start = true,
+			glow = {enabled = tui_settings.enable_glow},
 		},
 	}
 
@@ -187,6 +190,9 @@ run :: proc(args: []string) -> int {
 	defer client.cleanup_jobs()
 
 	print_banner(&app)
+	if len(settings_warning) > 0 {
+		renderer_note(&app, settings_warning)
+	}
 	if len(app.session_id) > 0 {
 		if err := replay_session(&app, app.session_id); !client.is_ok(err) {
 			renderer_note(&app, err.message)
@@ -199,6 +205,12 @@ run :: proc(args: []string) -> int {
 		return 1
 	}
 	defer input_destroy(&input)
+
+	// 实时渲染才拿得到真实终端宽度；历史重放发生在 input 初始化之前，
+	// 使用 glow 自己的默认宽度。
+	if cols, _ := lineedit.line_editor_terminal_size(&input.editor); cols > 20 {
+		app.renderer.glow.width = cols - 2
+	}
 
 	run_input_loop(&app, &input, &cancel)
 	return 0

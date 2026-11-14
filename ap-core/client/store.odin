@@ -13,6 +13,7 @@ sha256_hex :: platform.sha256_hex
 normalize_slashes :: platform.normalize_slashes
 canonicalize_path :: platform.canonicalize_path
 default_config_dir :: platform.default_config_dir
+settings_path :: platform.settings_path
 locate_project :: platform.locate_project
 session_file :: platform.session_file
 blob_file :: platform.blob_file

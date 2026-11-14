@@ -1,6 +1,7 @@
 package magi
 
 import apcore "../ap-core"
+import platform "../ap-core/platform"
 
 import "core:encoding/json"
 import "core:fmt"
@@ -67,25 +68,13 @@ json_get_bool :: proc(obj: json.Object, path, key: string, out: ^bool) -> apcore
 	return apcore.ok_error()
 }
 
-// 与 ap-cli 相同的候选顺序：两者同时存在时只用 .jsonc。
-SETTINGS_FILE_NAMES := [2]string{"settings.jsonc", "settings.json"}
-
-find_settings_path :: proc(config_dir: string) -> string {
-	for name in SETTINGS_FILE_NAMES {
-		path := fmt.tprintf("%s/%s", config_dir, name)
-		if os.exists(path) {
-			return path
-		}
-	}
-	return ""
-}
-
 load_settings :: proc(config_dir: string) -> (Loaded_Settings, apcore.Error) {
 	loaded := Loaded_Settings {
 		sdk  = apcore.settings_defaults(),
 		path = fmt.tprintf("%s/settings.json", config_dir),
 	}
-	if found := find_settings_path(config_dir); len(found) > 0 {
+	// 与 ap-cli 相同的候选顺序：两者同时存在时只用 .jsonc。
+	if found := platform.settings_path(config_dir); len(found) > 0 {
 		loaded.path = found
 	}
 

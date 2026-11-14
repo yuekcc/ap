@@ -77,6 +77,7 @@ legacy 是永久路径，kitty 只是渐进增强：
 ## 所有权
 
 - `line_editor_read_line` 返回的 string 由调用方 `delete`。
+- `line_editor_terminal_size` 只查询终端尺寸，不触发重绘；`ap-tui` 用它给 glow 传渲染宽度。
 - `Completion.text` / `Completion.description` 由补全回调用 `context.allocator` 分配，编辑器用完后 `delete`。候选按“替换当前 token”解释。
 - `Hint_Proc` 返回的 string 只在当前帧内有效，编辑器不释放。
 - `Transport.destroy` 由 `line_editor_destroy` 调用；fake transport 可以留空。

@@ -244,6 +244,14 @@ line_editor_resize :: proc(le: ^Line_Editor) -> bool {
 	return true
 }
 
+// 查询终端尺寸，不触发重绘。未初始化时返回 0。
+line_editor_terminal_size :: proc(le: ^Line_Editor) -> (cols, rows: int) {
+	if le == nil || !le.inited || le.transport.size == nil {
+		return 0, 0
+	}
+	return le.transport.size(le.transport.ctx)
+}
+
 // 隐藏当前编辑块，允许调用方在中间打印异步输出；随后用 show 重新画出来。
 // 异步输出最好以 \r\n 结尾，否则 show 会从当前光标位置继续画。
 line_editor_hide :: proc(le: ^Line_Editor) -> bool {

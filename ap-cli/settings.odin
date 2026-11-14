@@ -1,6 +1,7 @@
 package apcli
 
 import apcore "../ap-core"
+import platform "../ap-core/platform"
 import aptools "tools"
 
 import "core:encoding/json"
@@ -15,7 +16,7 @@ import "core:strings"
 // JSONC 宽（单引号字符串、十六进制、NaN/Infinity），这里接受超集而不另写
 // 一个去注释的预处理器。
 
-known_setting_keys := [17]string {
+known_setting_keys := [18]string {
 	"model",
 	"base_url",
 	"api_key",
@@ -33,6 +34,7 @@ known_setting_keys := [17]string {
 	"context_window_tokens",
 	"context_reserve_percent",
 	"handoff_max_tokens",
+	"tui",
 }
 
 Loaded_Settings :: struct {
@@ -143,21 +145,6 @@ validate_context_budget :: proc(settings: apcore.Settings) -> apcore.Error {
 	return apcore.ok_error()
 }
 
-// 配置文件候选后缀，按优先级排列：两者同时存在时只用 .jsonc。
-SETTINGS_FILE_NAMES := [2]string{"settings.jsonc", "settings.json"}
-
-// 找到实际使用的配置文件。返回空串表示两个候选都不存在；此时报错指向
-// settings.json，因为示例和文档都是从它出发的。
-find_settings_path :: proc(config_dir: string) -> string {
-	for name in SETTINGS_FILE_NAMES {
-		path := fmt.tprintf("%s/%s", config_dir, name)
-		if os.exists(path) {
-			return path
-		}
-	}
-	return ""
-}
-
 load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Settings, apcore.Error) {
 	loaded := Loaded_Settings {
 		sdk = apcore.settings_defaults(),
@@ -173,7 +160,8 @@ load_settings :: proc(config_dir: string, require_api_key := true) -> (Loaded_Se
 		path = fmt.tprintf("%s/settings.json", config_dir),
 	}
 	// .jsonc 优先：它是显式选择加入的注释版本，同时存在时不应被 .json 静默覆盖。
-	if found := find_settings_path(config_dir); len(found) > 0 {
+	// 两个候选都不存在时报错仍指向 settings.json，因为示例和文档从它出发。
+	if found := platform.settings_path(config_dir); len(found) > 0 {
 		loaded.path = found
 	}
 	data, derr := os.read_entire_file_from_path(loaded.path, context.allocator)
