@@ -66,7 +66,7 @@ run_agent_turn :: proc(app: ^App, prompt: string, cancel: ^client.Cancel_Token) 
 	ensure_line_start(&app.renderer)
 
 	if !had_session && len(app.session_id) > 0 {
-		renderer_note(app, fmt.tprintf("session: %s", app.session_id))
+		renderer_note(app, fmt.tprintf("\n---\n\nusing session: %s", app.session_id))
 	}
 
 	if exit_code != 0 {
