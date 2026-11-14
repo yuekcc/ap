@@ -50,21 +50,79 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 
 ## 依赖方向
 
-依赖只能向下。箭头表示 import 方向：
+依赖只能向下。箭头表示 import 方向，粒度为包：
 
+```mermaid
+flowchart TD
+    subgraph CMD["cmd/* 入口 · package main"]
+        C_AP["cmd/ap"]
+        C_TUI["cmd/ap-tui"]
+        C_WEB["cmd/ap-web"]
+        C_MAGI["cmd/magi-cli"]
+    end
+
+    subgraph FRONT["前端库"]
+        APTUI["ap-tui · aptui"]
+        APWEB["ap-web · apweb"]
+    end
+
+    subgraph HOST["宿主 / 组装根"]
+        APCLI["ap-cli · apcli"]
+        APTOOLS["ap-cli/tools · aptools"]
+        APSKILLS["ap-cli/skills · apskills"]
+        MAGI["magi"]
+    end
+
+    subgraph CORE["ap-core"]
+        APCORE["ap-core · apcore<br/>SDK 门面"]
+        ENGINE["ap-core/engine · engine"]
+        TOOL["ap-core/tool · tool"]
+        CLIENT["ap-core/client · client"]
+        PROTO["ap-core/protocol · protocol"]
+        PLAT["ap-core/platform · platform"]
+    end
+
+    LIB["lineedit<br/>独立库，只依赖标准库"]
+
+    C_AP --> APCLI
+    C_TUI --> APTUI
+    C_WEB --> APWEB
+    C_MAGI --> MAGI
+
+    APCLI --> APCORE
+    APCLI --> APTOOLS
+    APCLI --> APSKILLS
+    APCLI --> TOOL
+    APCLI --> PROTO
+    APCLI --> PLAT
+    APTOOLS --> TOOL
+    APTOOLS --> PROTO
+    APTOOLS --> PLAT
+    APSKILLS --> PLAT
+
+    MAGI --> APCORE
+    MAGI --> PLAT
+
+    APCORE --> ENGINE
+    APCORE --> TOOL
+    APCORE --> PROTO
+    APCORE --> PLAT
+    ENGINE --> TOOL
+    ENGINE --> PROTO
+    ENGINE --> PLAT
+    TOOL --> PROTO
+    TOOL --> PLAT
+    CLIENT --> PROTO
+    CLIENT --> PLAT
+
+    APTUI --> CLIENT
+    APTUI --> PROTO
+    APTUI --> LIB
+    APWEB --> CLIENT
+    APWEB --> PROTO
 ```
-cmd/ap ──► ap-cli ──► apcore ──► engine ──┬──► provider ──► platform ──► vendor:curl
-            │         │                  ├──► tool ──► platform、protocol
-            │         └──► tool          └──► transcript ──► JSONL + blobs
-            ├──► ap-cli/tools ──► tool、platform、protocol
-            └──► ap-cli/skills ──► platform
 
-cmd/ap-tui ──► ap-tui ──┐
-cmd/ap-web ──► ap-web ──┴──► ap-core/client ──► platform、protocol
-
-cmd/magi-cli ──► magi ──► apcore ──► engine
-                        └──► platform
-```
+图上没有画出的本地 import 边都是禁止的。`lineedit` 不参与 ap 的宿主依赖图，`ap-web` 不能用它；`platform` 与 `protocol` 的本地依赖为空，叶子方向只到 `core:`、`base:`、`vendor:`。
 
 维持这条方向的五条规则：
 
