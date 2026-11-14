@@ -42,6 +42,10 @@ test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", asy
 	);
 	assert.ok(html.includes("markdown-body"), "markdown output must use github-markdown-css scope");
 	assert.ok(
+		html.includes(':data-streaming="item.ended ? null : \'true\'"'),
+		"streaming messages are marked so mermaid waits for the final text",
+	);
+	assert.ok(
 		html.includes('class="tool__output"') && html.includes('x-text="item.streamed || item.result"'),
 		"tool output must stay plain text",
 	);
@@ -433,5 +437,21 @@ test("当前工作空间与当前会话带 aria-current，动态错误用 alert 
 	assert.ok(
 		html.includes(':role="item.tone === \'error\' ? \'alert\' : null"'),
 		"错误提示立刻被读屏播报，普通提示不打断",
+	);
+});
+
+test("mermaid 图表有独立样式，减少动态规则不碰 SVG 元素", async () => {
+	const css = await readFile(stylesPath, "utf8");
+	assert.ok(css.includes(".mermaid-block svg"), "mermaid 图表需要自己的尺寸约束");
+	assert.ok(css.includes(".mermaid-block__error"), "渲染失败要能显示错误提示");
+	assert.ok(css.includes(".mermaid-block__source"), "占位块保留源码样式");
+
+	const mediaStart = css.indexOf("@media (prefers-reduced-motion: reduce)");
+	assert.ok(mediaStart > 0, "styles.css keeps the reduced-motion query");
+	const mediaEnd = css.indexOf("\n}", mediaStart);
+	const block = css.slice(mediaStart, mediaEnd);
+	assert.ok(
+		block.includes("*:not(svg):not(svg *)"),
+		"给 SVG 元素加 transition-duration 会让 Chrome 的 getBBox 返回错误尺寸，mermaid 图表会被撑大",
 	);
 });

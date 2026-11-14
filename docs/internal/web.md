@@ -181,11 +181,11 @@ Unix 上的实现如下。
 
 前端依赖下面这些包。
 
-- `alpinejs`、`markdown-exit`、`github-markdown-css`。
+- `alpinejs`、`markdown-exit`、`github-markdown-css`、`mermaid`。
 - 构建期依赖 `esbuild`。
 - `EventSource` 和 `fetch` 使用浏览器原生实现。
 - `build.mjs` 的目标是 Chrome 110、Edge 110、Firefox 110、Safari 16。不写 polyfill 和厂商前缀。
-- `dist/` 的产物是 `index.html`、`app.js`、`styles.css`。
+- `dist/` 的产物是 `index.html`、`app.js`、`styles.css`、`mermaid.js`。`mermaid.js` 单独打包、按需加载，`index.html` 不直接引用它。
 
 样式遵循下面的基线。
 
@@ -206,6 +206,8 @@ Unix 上的实现如下。
 - `tool_execution_start` 建卡片。`tool_execution_update` 增量追加。`tool_execution_end` 标记状态、耗时和退出码。非流式结果超过 200 行或 20000 字节时截断。
 - 用户输入和工具输出用 `textContent` 写入。只有 assistant 文本走 Markdown。
 - Markdown 用 `markdown-exit`，设置 `html: false`、`linkify: true`、`breaks: true`。原始 HTML 被转义，`javascript:` 和 `data:` 链接不会变成可点链接。外链带 `target="_blank"` 和 `rel="noopener noreferrer"`。图片设置 `loading="lazy"` 和 `referrerpolicy="no-referrer"`。
+- 语言标记为 `mermaid` 的围栏先渲染成保留源码的占位块，消息结束后由 `mermaid-blocks.js` 用 MutationObserver + 防抖把占位块换成 SVG。mermaid 本体在 `dist/mermaid.js`，第一次出现图表时才加载；渲染失败时保留源码并显示一行错误。`securityLevel` 固定为 `strict`，图表里的 `%%{init}%%` 或 frontmatter 不允许覆盖它。
+- 减少动态偏好下的全局过渡规则排除 `svg` 及其后代：给 SVG 元素加 `transition-duration` 会让 Chrome 的 `getBBox` 返回错误尺寸，mermaid 会把图表撑到几千像素。
 - 顶部工作空间标签按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在标签条里本地合成一个空组。
 - 左栏只展示当前工作空间的对话记录，按 session 列表的 `ts` 在浏览器本地时区分成「今天 / 昨天 / 前天 / 更早」，空组不渲染；切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
 - 每个标签页持有自己的 `session_key`，SSE 按该 key 过滤。

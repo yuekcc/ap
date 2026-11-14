@@ -7,11 +7,31 @@ import { MarkdownExit } from "markdown-exit";
 const CACHE_LIMIT = 128;
 const cache = new Map();
 
+export const MERMAID_BLOCK_CLASS = "mermaid-block";
+export const MERMAID_PENDING_STATE = "pending";
+
 const md = new MarkdownExit({
 	html: false,
 	linkify: true,
 	breaks: true,
 });
+
+// 围栏语言名，忽略 ```mermaid 后面的 meta。
+export function fenceLanguage(info) {
+	return String(info ?? "").trim().split(/\s+/, 1)[0].toLowerCase();
+}
+
+// ```mermaid 先渲染成占位块：mermaid 本体单独打包在 dist/mermaid.js，页面真的
+// 出现图表时才加载（见 mermaid-blocks.js）。源码留在 <code> 里，渲染成功前就是
+// 普通代码块，渲染失败也能直接看到原文；源码同样经过 HTML 转义。
+const renderFence = md.renderer.rules.fence;
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+	const token = tokens[idx];
+	if (fenceLanguage(token.info) !== "mermaid") {
+		return renderFence(tokens, idx, options, env, self);
+	}
+	return `<div class="${MERMAID_BLOCK_CLASS}" data-mermaid-state="${MERMAID_PENDING_STATE}"><pre class="${MERMAID_BLOCK_CLASS}__source"><code class="language-mermaid">${md.utils.escapeHtml(token.content)}</code></pre></div>`;
+};
 
 md.renderer.rules.link_open = (tokens, idx, options, _env, self) => {
 	tokens[idx].attrSet("target", "_blank");

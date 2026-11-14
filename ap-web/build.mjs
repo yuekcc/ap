@@ -1,6 +1,7 @@
 // ap-web 前端构建：frontend/main.js -> dist/app.js（含 Alpine，bundle + minify），
 // 从同一个 bundle 抽出 dist/styles.css，并把 index.html 写进 dist/（图标在这一步内联）。
-// dist/ 是提交进仓库的产物，Odin 侧 #load_directory("dist") 在编译期直接读它。
+// frontend/mermaid-renderer.js 另打成 dist/mermaid.js，页面第一次出现图表时才加载。
+// dist/ 不提交进仓库，Odin 侧 #load_directory("dist") 在编译期直接读它。
 import { build, context } from "esbuild";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -63,7 +64,7 @@ const staticAssets = {
 			if (result.errors.length > 0) return;
 			await collectCss();
 			await copyIndex();
-			console.log("[ap-web] dist 已更新：index.html + app.js + styles.css");
+			console.log("[ap-web] dist 已更新：index.html + app.js + styles.css（mermaid.js 另行输出）");
 		});
 	},
 };
@@ -82,12 +83,24 @@ const options = {
 	plugins: [staticAssets],
 };
 
+// mermaid 单独打一个 chunk：index.html 不直接引用它，mermaid-blocks.js 在第一次
+// 出现图表时才往页面里插 <script src="/mermaid.js">，避免每次打开页面都解析
+// 好几 MB 的图表代码。globalName 让这个 IIFE 暴露成 window.apMermaid。
+const mermaidOptions = {
+	...options,
+	entryPoints: ["frontend/mermaid-renderer.js"],
+	outfile: path.join(dist, "mermaid.js"),
+	globalName: "apMermaid",
+	plugins: [],
+};
+
 await mkdir(dist, { recursive: true });
 
 if (watch) {
-	const ctx = await context(options);
-	await ctx.watch();
+	const contexts = await Promise.all([context(options), context(mermaidOptions)]);
+	for (const ctx of contexts) await ctx.watch();
 	console.log("[ap-web] watching frontend/（Ctrl+C 退出）");
 } else {
 	await build(options);
+	await build(mermaidOptions);
 }

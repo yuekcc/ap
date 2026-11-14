@@ -6,6 +6,7 @@
 // sessionStorage 记住本标签页的 {key, id, cwd}，刷新后优先按真实 id + cwd 恢复。
 import { api, eventsUrl } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
+import { watchMermaid } from "./mermaid-blocks.js";
 import {
 	formatDuration,
 	projectName as projectDisplayName,
@@ -67,7 +68,19 @@ export function registerApp(Alpine) {
 			const store = this.$store.ap;
 			this.restoreSidebar();
 			store.reset(null);
+			this.$nextTick(() => this.watchMermaidBlocks());
 			this.boot();
+		},
+
+		// mermaid 图表是异步换成 SVG 的；换完高度变了，用户本来贴底时继续跟上。
+		watchMermaidBlocks() {
+			const root = this.$refs.messages;
+			if (!root) return;
+			watchMermaid(root, {
+				onRendered: () => {
+					if (this.$store.ap.atBottom) this.autoScroll(true);
+				},
+			});
 		},
 
 		// 侧栏折叠只改布局，不影响当前会话；宽度变化后贴底才需要重新跟随。

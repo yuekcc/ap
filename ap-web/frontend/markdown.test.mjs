@@ -61,3 +61,27 @@ test("重复渲染同一段文本走缓存且结果一致", () => {
 	const text = "## 缓存\n\n- a";
 	assert.equal(renderMarkdown(text), renderMarkdown(text));
 });
+
+test("mermaid 围栏渲染成占位块，源码先作为代码块展示", () => {
+	const html = renderMarkdown("```mermaid\nflowchart LR\n  A[Start] --> B{Works?}\n```");
+	assert.match(html, /<div class="mermaid-block" data-mermaid-state="pending">/);
+	assert.match(html, /<pre class="mermaid-block__source"><code class="language-mermaid">/);
+	assert.ok(html.includes("A[Start] --&gt; B{Works?}"), "source stays escaped text");
+});
+
+test("mermaid 源码里的 HTML 同样被转义", () => {
+	const html = renderMarkdown("```mermaid\nlabel <script>alert(1)</script>\n```");
+	assert.ok(!html.includes("<script"), "script in mermaid source must not survive");
+	assert.ok(html.includes("&lt;script&gt;"), "mermaid source is escaped");
+});
+
+test("mermaid 围栏大小写与额外 info 仍识别为图表", () => {
+	const html = renderMarkdown("```Mermaid title=demo\nflowchart LR\n  A --> B\n```");
+	assert.match(html, /class="mermaid-block"/);
+});
+
+test("普通围栏不会变成 mermaid 占位块", () => {
+	const html = renderMarkdown("```js\nconst a = 1;\n```");
+	assert.ok(!html.includes("mermaid-block"));
+	assert.match(html, /<pre><code class="language-js">/);
+});

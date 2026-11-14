@@ -972,6 +972,33 @@ body {
   background: var(--bg);
 }
 
+/* Mermaid 图表：渲染成功前是源码代码块，失败时保留源码并给一行提示。 */
+.mermaid-block {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.msg__text--markdown .mermaid-block__source {
+  margin: 0;
+}
+
+.mermaid-block[data-mermaid-state="error"] .mermaid-block__source {
+  border-color: var(--warn);
+}
+
+.mermaid-block__error {
+  margin: 6px 0 0;
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.mermaid-block svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
 /* ------------------------------------------------------------------------- */
 /* 工具调用                                                                  */
 /* ------------------------------------------------------------------------- */
@@ -1406,8 +1433,11 @@ body {
   }
 }
 
+/* 减少动态时统一砍掉动画和过渡。SVG 内部必须排除：给 SVG 元素加
+   transition-duration 会让 Chrome 的 getBBox 返回错误尺寸，mermaid 量图表
+   文字时会把整张图撑到几千像素。 */
 @media (prefers-reduced-motion: reduce) {
-  *,
+  *:not(svg):not(svg *),
   *::before,
   *::after {
     animation-duration: 0.01ms !important;

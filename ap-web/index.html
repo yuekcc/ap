@@ -188,6 +188,7 @@
                   <div
                     class="msg__text msg__text--markdown markdown-body"
                     :class="{ 'is-streaming': !item.ended }"
+                    :data-streaming="item.ended ? null : 'true'"
                     x-html="renderMarkdown(item.text)"
                   ></div>
                 </article>
