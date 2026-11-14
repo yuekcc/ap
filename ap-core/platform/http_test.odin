@@ -292,3 +292,71 @@ test_http_stream_connection_refused :: proc(t: ^testing.T) {
 
 	testing.expect_value(t, res.failure, Http_Failure.Network)
 }
+
+Cancel_After :: struct {
+	token:    ^Cancel_Token,
+	delay_ms: int,
+}
+
+cancel_after_thread :: proc(data: rawptr) {
+	job := (^Cancel_After)(data)
+	time.sleep(time.Duration(job.delay_ms) * time.Millisecond)
+	cancel_token_cancel(job.token)
+}
+
+// 传输中的取消依赖进度回调轮询，只有它真的被调用，取消才能中断在途请求。
+@(test)
+test_http_stream_cancel_during_request :: proc(t: ^testing.T) {
+	server := test_server_start(t, {
+		status_line = "HTTP/1.1 200 OK",
+		parts = {"data: [DONE]\n\n"},
+		head_delay_ms = 1500,
+	})
+	defer test_server_stop(server)
+
+	cancel: Cancel_Token
+	job := Cancel_After {
+		token    = &cancel,
+		delay_ms = 100,
+	}
+	handle := thread.create_and_start_with_data(&job, cancel_after_thread)
+
+	started := time.tick_now()
+	res := http_stream(&{
+		url = test_server_url(server),
+		body = transmute([]byte)string("{}"),
+		total_timeout_ms = 30000,
+		cancel = &cancel,
+	})
+	elapsed := time.tick_since(started)
+	if handle != nil {
+		thread.join(handle)
+		thread.destroy(handle)
+	}
+
+	testing.expect_value(t, res.failure, Http_Failure.Cancelled)
+	testing.expect(t, elapsed < 1200 * time.Millisecond, "cancel did not abort the in-flight request")
+}
+
+@(test)
+test_http_stream_first_byte_timeout :: proc(t: ^testing.T) {
+	server := test_server_start(t, {
+		status_line = "HTTP/1.1 200 OK",
+		parts = {"data: [DONE]\n\n"},
+		head_delay_ms = 1500,
+	})
+	defer test_server_stop(server)
+
+	cancel: Cancel_Token
+	started := time.tick_now()
+	res := http_stream(&{
+		url = test_server_url(server),
+		body = transmute([]byte)string("{}"),
+		total_timeout_ms = 30000,
+		first_byte_timeout_ms = 100,
+		cancel = &cancel,
+	})
+
+	testing.expect_value(t, res.failure, Http_Failure.First_Byte_Timeout)
+	testing.expect(t, time.tick_since(started) < 1200 * time.Millisecond, "first byte timeout did not abort early")
+}

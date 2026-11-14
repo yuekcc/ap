@@ -222,6 +222,7 @@ HTTP 与 TLS 统一走 `vendor:curl`。Windows 链接 Odin 随附的静态 libcu
 | `CURLOPT_HEADERFUNCTION` | 解析状态码与 `Retry-After` |
 | `CURLOPT_XFERINFOFUNCTION` | 轮询取消与首字节超时 |
 | `CURLOPT_NOSIGNAL` | 禁止 libcurl 安装信号处理器 |
+| `CURLOPT_NOPROGRESS` | `0`，否则 libcurl 不调用 `XFERINFOFUNCTION` |
 | `CURLOPT_ACCEPT_ENCODING` | `identity`，避免 SSE 被压缩缓冲 |
 | `CURLOPT_HTTP_VERSION` | 固定 HTTP/1.1 |
 | `CURLOPT_CONNECTTIMEOUT_MS` | 30000 |
@@ -229,7 +230,7 @@ HTTP 与 TLS 统一走 `vendor:curl`。Windows 链接 Odin 随附的静态 libcu
 | `CURLOPT_LOW_SPEED_LIMIT` | 1 字节 |
 | `CURLOPT_LOW_SPEED_TIME` | 120 秒 |
 
-进度回调在取消标志置位时返回非 0，中止请求。没有收到任何正文且超过 120 秒时也中止，归类为 `timeout`（首字节超时）。
+进度回调在取消标志置位时返回非 0，中止请求。没有收到任何正文且超过 120 秒时也中止，归类为 `timeout`（首字节超时）。`NOPROGRESS` 保持默认值时进度回调不会被调用，取消与首字节超时都会失效。
 
 libcurl 的全局初始化不是线程安全的。首次调用用互斥锁串行完成初始化。
 

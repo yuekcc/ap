@@ -190,6 +190,8 @@ http_stream :: proc(req: ^Http_Stream_Request) -> Http_Stream_Result {
 	curl.easy_setopt(h, .XFERINFOFUNCTION, rawptr(http_xferinfo_cb))
 	curl.easy_setopt(h, .XFERINFODATA, rawptr(&state))
 	curl.easy_setopt(h, .NOSIGNAL, one)
+	// 只有关掉进度条，libcurl 才会调用 XFERINFOFUNCTION；取消与首字节超时都靠它。
+	curl.easy_setopt(h, .NOPROGRESS, c.long(0))
 	// SSE 不能落进 libcurl 的压缩缓冲，否则增量会被攒成整块。
 	curl.easy_setopt(h, .ACCEPT_ENCODING, cstring("identity"))
 	curl.easy_setopt(h, .HTTP_VERSION, c.long(curl.HTTP_VERSION_1_1))
