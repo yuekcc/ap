@@ -6,6 +6,7 @@ import protocol "../ap-core/protocol"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:time"
 
 RESET      :: "\x1b[0m"
 BOLD       :: "\x1b[1m"
@@ -212,6 +213,38 @@ tool_end :: proc(r: ^Renderer, ok: bool, err: string, duration_ms: Maybe(int), e
 	}
 	ensure_line_start(r)
 	r.tool_active = false
+}
+
+// 整轮耗时的可读形式。一轮可能跑几分钟，按粒度换单位，避免出现
+// 六位数毫秒这种难读的数。
+format_elapsed :: proc(elapsed: time.Duration) -> string {
+	// 先转成纯整数：fmt 认出 Duration 时会自己补单位，%d 会打出 "3ns"。
+	d := i64(elapsed)
+	if d < 0 {
+		d = 0
+	}
+	ms := d / i64(time.Millisecond)
+	if ms < 1000 {
+		return fmt.tprintf("%dms", ms)
+	}
+	seconds := d / i64(time.Second)
+	if seconds < 60 {
+		tenths := (d % i64(time.Second)) / i64(100 * time.Millisecond)
+		return fmt.tprintf("%d.%ds", seconds, tenths)
+	}
+	if seconds < 3600 {
+		return fmt.tprintf("%dm%02ds", seconds / 60, seconds % 60)
+	}
+	return fmt.tprintf("%dh%02dm", seconds / 3600, (seconds % 3600) / 60)
+}
+
+// 每轮结束的一行纯文本：首轮顺带报出新 session，其余轮只报耗时。
+// 不加符号，方便复制和在记录里阅读。
+turn_summary_line :: proc(new_session_id: string, elapsed: time.Duration) -> string {
+	if len(new_session_id) > 0 {
+		return fmt.tprintf("using session: %s (%s)", new_session_id, format_elapsed(elapsed))
+	}
+	return fmt.tprintf("turn %s", format_elapsed(elapsed))
 }
 
 render_error :: proc(r: ^Renderer, scope, message: string, retryable: bool) {

@@ -527,3 +527,24 @@ test_copy_command_without_message :: proc(t: ^testing.T) {
 	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
 	testing.expect(t, strings.contains(string(data), "nothing to copy"))
 }
+
+@(test)
+test_format_elapsed :: proc(t: ^testing.T) {
+	testing.expect_value(t, format_elapsed(0), "0ms")
+	testing.expect_value(t, format_elapsed(842 * time.Millisecond), "842ms")
+	testing.expect_value(t, format_elapsed(3480 * time.Millisecond), "3.4s")
+	testing.expect_value(t, format_elapsed(65 * time.Second), "1m05s")
+	testing.expect_value(t, format_elapsed(3725 * time.Second), "1h02m")
+	// 时钟回拨等异常输入不能显示负数。
+	testing.expect_value(t, format_elapsed(-5 * time.Second), "0ms")
+}
+
+@(test)
+test_turn_summary_line :: proc(t: ^testing.T) {
+	testing.expect_value(t, turn_summary_line("", 3480 * time.Millisecond), "turn 3.4s")
+	testing.expect_value(
+		t,
+		turn_summary_line("ses_x", 15 * time.Millisecond),
+		"using session: ses_x (15ms)",
+	)
+}

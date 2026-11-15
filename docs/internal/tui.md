@@ -108,6 +108,7 @@ ap-tui [options]
 - `error` 中 `retryable=true` 显示为黄色警告，否则显示为红色错误，并带上 `scope`。
 - `cancel` 显示为 `cancelled [<scope>]`。
 - `turn_end.stop_reason` 为空或 `stop` 时不提示。`tool_use` 也按正常结束处理，这是防御性兼容；正常的 `turn_end` 不会带 `tool_use`。其他值打印 `turn ended: <reason>`。
+- 每轮 `ap` 子进程退出后打印一行耗时，计时从 spawn 开始到进程退出结束，覆盖事件流、stderr 收集和异常退出。首轮并入新 session 提示，写成 `using session: <id> (3.4s)`；其余轮写成 `turn 3.4s`。粒度随长度切换：`842ms`、`3.4s`、`1m05s`、`1h02m`。取消的 turn 同样打印。历史重放不启动子进程，不打印耗时。
 - 每轮 turn 结束后先空一行，再画下一条提示符。
 - ANSI 颜色在 stdout 不是 TTY、设置了 `NO_COLOR` 或传了 `--no-color` 时关闭。
 - reasoning delta 不展示。

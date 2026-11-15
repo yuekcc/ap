@@ -5,6 +5,7 @@ import protocol "../ap-core/protocol"
 import "core:fmt"
 import "core:strings"
 import "core:sync"
+import "core:time"
 
 remember_session :: proc(app: ^App, session_id: string) {
 	if len(session_id) == 0 {
@@ -56,7 +57,9 @@ run_agent_turn :: proc(app: ^App, prompt: string, cancel: ^client.Cancel_Token) 
 		on_event   = on_agent_event,
 		on_stderr  = on_agent_stderr_line,
 	}
+	started := time.tick_now()
 	result := client.turn_run(&options, prompt, callbacks)
+	elapsed := time.tick_since(started)
 	exit_code := result.exit_code
 	if len(result.session_id) > 0 {
 		delete(result.session_id, context.allocator)
@@ -65,8 +68,11 @@ run_agent_turn :: proc(app: ^App, prompt: string, cancel: ^client.Cancel_Token) 
 	finish_assistant(&app.renderer)
 	ensure_line_start(&app.renderer)
 
+	// 测的是整个 ap 子进程的生命周期：spawn、事件流和退出都算在一轮里。
 	if !had_session && len(app.session_id) > 0 {
-		renderer_note(app, fmt.tprintf("\n---\n\nusing session: %s", app.session_id))
+		renderer_note(app, fmt.tprintf("\n---\n\n%s", turn_summary_line(app.session_id, elapsed)))
+	} else {
+		renderer_note(app, turn_summary_line("", elapsed))
 	}
 
 	if exit_code != 0 {
