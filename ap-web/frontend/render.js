@@ -225,7 +225,6 @@ export function sessionTime(ts) {
 // Array#sort 在现代引擎里稳定，同分项保持原有先后，刷新不会来回抖。
 
 export const SORT_ORDERS = ["recent", "name"];
-
 function timeValue(ts) {
 	const value = Number(ts);
 	return Number.isFinite(value) && value > 0 ? value : 0;
@@ -257,6 +256,40 @@ export function sortSessions(sessions, order = "recent") {
 		);
 	}
 	return list.sort((a, b) => timeValue(b?.ts) - timeValue(a?.ts));
+}
+
+// ---- 栏宽 ----
+// 两个侧栏可以拖动改宽度。边界值写在这里，store 和 CSS 都用同一套数字，
+// 拖动、键盘调整和恢复持久化偏好都走 clampPanelWidth。
+
+export const PANEL_MIN_W = 176;
+export const PANEL_MAX_W = 420;
+export const PANEL_DEFAULT_W = 224;
+
+// 超出边界的值收到最近的边界；不是数字时退回默认宽度，
+// 不把 NaN 写进样式，否则整栏会碎。
+export function clampPanelWidth(value, min = PANEL_MIN_W, max = PANEL_MAX_W) {
+	const width = Number(value);
+	if (!Number.isFinite(width)) return Math.min(Math.max(PANEL_DEFAULT_W, min), max);
+	return Math.min(Math.max(Math.round(width), min), max);
+}
+
+// localStorage 里的栏宽偏好：任何一段缺失或非法就回落默认值，
+// 不影响另一半（用户可能只拖过其中一栏）。
+export function parseSplitPrefs(raw) {
+	let saved = null;
+	try {
+		saved = typeof raw === "string" ? JSON.parse(raw) : null;
+	} catch {
+		saved = null;
+	}
+	const read = (key) => {
+		const value = saved && typeof saved === "object" ? Number(saved[key]) : NaN;
+		return Number.isFinite(value) && value > 0
+			? clampPanelWidth(value)
+			: PANEL_DEFAULT_W;
+	};
+	return { rail: read("rail"), sessions: read("sessions") };
 }
 
 export function messageTexts(event) {

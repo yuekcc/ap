@@ -8,7 +8,12 @@ import { api, eventsUrl } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import { watchMermaid } from "./mermaid-blocks.js";
 import {
+	PANEL_DEFAULT_W,
+	PANEL_MAX_W,
+	PANEL_MIN_W,
+	clampPanelWidth,
 	formatDuration,
+	parseSplitPrefs,
 	projectName as projectDisplayName,
 	sessionTime,
 	sessionTitle,
@@ -24,6 +29,11 @@ const SORT_STORAGE_KEY = "ap-web:sort";
 // 布局分档：宽屏三栏、窄屏折叠工作空间栏、紧凑屏两个侧栏都是浮层。
 const NARROW_QUERY = "(max-width: 1100px)";
 const COMPACT_QUERY = "(max-width: 820px)";
+// 两个侧栏的宽度偏好（像素）：拖动或键盘调整后存 localStorage。
+const SPLIT_STORAGE_KEY = "ap-web:split";
+// 键盘一次调 16px，Shift+方向键走 64px。
+const RESIZE_STEP_PX = 16;
+const RESIZE_STEP_LARGE_PX = 64;
 // 离底部多近算「贴底」：留一点余量，滚轮多走一格不至于立刻弹按钮。
 const BOTTOM_GAP_PX = 32;
 
@@ -47,6 +57,10 @@ export function registerApp(Alpine) {
 		scrollHandle: 0,
 		// 排序菜单是瞬态 UI，不持久化。
 		sortOpen: false,
+		// 正在拖动的侧栏（"rail" / "sessions" / 空），只影响拖动期间的光标。
+		resizing: "",
+		// 按下时记下这一栏的左边界，拖动中按指针位置换算宽度。
+		resizeOriginX: 0,
 
 		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
 		renderMarkdown,
@@ -76,6 +90,7 @@ export function registerApp(Alpine) {
 			const store = this.$store.ap;
 			this.restoreRail();
 			this.restoreSort();
+			this.restoreSplit();
 			this.watchLayout();
 			store.reset(null);
 			this.$nextTick(() => this.watchMermaidBlocks());
@@ -177,6 +192,98 @@ export function registerApp(Alpine) {
 			} catch {
 				this.$store.ap.setSortOrder("recent");
 			}
+		},
+
+		// 侧栏宽度的拖动入口：角色是 window splitter，指针和键盘都能调。
+		startResize(event, panel) {
+			if (event.button !== 0 || this.$store.ap.layoutMode !== "wide") return;
+			const element = document.querySelector(panel === "rail" ? ".rail" : ".sessions-col");
+			if (!element) return;
+			// 拖宽度时不要顺带选中文本。
+			event.preventDefault();
+			this.resizing = panel;
+			this.resizeOriginX = element.getBoundingClientRect().left;
+			// 监听挂到 window 而不是分隔条自己：指针一旦离开那条 10px 的命中区，
+			// 事件就不再回到这个元素，拖到正文上方也得继续算宽度。
+			const onMove = (moveEvent) => this.onResizeMove(moveEvent);
+			const onEnd = (endEvent) => {
+				window.removeEventListener("pointermove", onMove);
+				window.removeEventListener("pointerup", onEnd);
+				window.removeEventListener("pointercancel", onEnd);
+				this.endResize(endEvent);
+			};
+			window.addEventListener("pointermove", onMove);
+			window.addEventListener("pointerup", onEnd);
+			window.addEventListener("pointercancel", onEnd);
+		},
+
+		onResizeMove(event) {
+			if (!this.resizing) return;
+			this.applyPanelWidth(this.resizing, event.clientX - this.resizeOriginX);
+			this.$nextTick(() => this.autoScroll());
+		},
+
+		endResize() {
+			if (!this.resizing) return;
+			this.resizing = "";
+			this.persistSplit();
+		},
+
+		onResizeKey(event, panel) {
+			const store = this.$store.ap;
+			const current = panel === "rail" ? store.railWidth : store.sessionsWidth;
+			const step = event.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+			let next = null;
+			if (event.key === "ArrowLeft") next = current - step;
+			else if (event.key === "ArrowRight") next = current + step;
+			else if (event.key === "Home") next = PANEL_MIN_W;
+			else if (event.key === "End") next = this.panelMaxWidth();
+			if (next === null) return;
+			event.preventDefault();
+			this.applyPanelWidth(panel, next);
+			this.persistSplit();
+		},
+
+		// 双击分隔条回到默认宽度，省得用户把栏拖坏了没法复位。
+		resetPanelWidth(panel) {
+			this.applyPanelWidth(panel, PANEL_DEFAULT_W);
+			this.persistSplit();
+		},
+
+		// 屏幕变窄时上限跟着收，否则两个侧栏会把正文挤没。
+		panelMaxWidth() {
+			return Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, Math.round(innerWidth * 0.35)));
+		},
+
+		applyPanelWidth(panel, width) {
+			const store = this.$store.ap;
+			const value = clampPanelWidth(width, PANEL_MIN_W, this.panelMaxWidth());
+			if (panel === "rail") store.setRailWidth(value);
+			else store.setSessionsWidth(value);
+		},
+
+		persistSplit() {
+			const store = this.$store.ap;
+			try {
+				localStorage.setItem(
+					SPLIT_STORAGE_KEY,
+					JSON.stringify({ rail: store.railWidth, sessions: store.sessionsWidth }),
+				);
+			} catch {
+				// 不记忆也不影响本次拖动。
+			}
+		},
+
+		restoreSplit() {
+			let raw = null;
+			try {
+				raw = localStorage.getItem(SPLIT_STORAGE_KEY);
+			} catch {
+				raw = null;
+			}
+			const prefs = parseSplitPrefs(raw);
+			this.$store.ap.setRailWidth(prefs.rail);
+			this.$store.ap.setSessionsWidth(prefs.sessions);
 		},
 
 		// 「当前修改的文件」只显示文件名，点击复制完整路径。

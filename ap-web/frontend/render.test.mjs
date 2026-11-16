@@ -9,8 +9,13 @@ import {
 	createState,
 	formatArgs,
 	formatDuration,
+	PANEL_DEFAULT_W,
+	PANEL_MAX_W,
+	PANEL_MIN_W,
+	clampPanelWidth,
 	fileName,
 	formatTokenCount,
+	parseSplitPrefs,
 	ingestHistory,
 	previewContent,
 	projectName,
@@ -97,6 +102,42 @@ test("列表排序在最近活动与名称之间切换，且不改动入参数�
 		["b", "a", "c"],
 	);
 	assert.deepEqual(sortSessions([], "name"), [], "空列表不报错");
+});
+
+test("栏宽限制在边界内，非法值退回默认宽度", () => {
+	assert.equal(clampPanelWidth(300), 300);
+	assert.equal(clampPanelWidth("300"), 300);
+	assert.equal(clampPanelWidth(10), PANEL_MIN_W, "太窄的栏收到底线");
+	assert.equal(clampPanelWidth(9999), PANEL_MAX_W, "太宽的栏收上线");
+	assert.equal(clampPanelWidth(300.6), 301, "像素取整");
+	// 拖动时 clientX 可能算出 NaN（指针中断），不能把 NaN 写进样式。
+	assert.equal(clampPanelWidth(Number.NaN), PANEL_DEFAULT_W);
+	assert.equal(clampPanelWidth(undefined), PANEL_DEFAULT_W);
+	assert.equal(clampPanelWidth(120, 100, 200), 120, "边界可以按当前视口另行传入");
+});
+
+test("栏宽偏好只解析出合法的一半，坏数据不连累另一栏", () => {
+	assert.deepEqual(parseSplitPrefs(null), {
+		rail: PANEL_DEFAULT_W,
+		sessions: PANEL_DEFAULT_W,
+	});
+	assert.deepEqual(parseSplitPrefs("不是 JSON"), {
+		rail: PANEL_DEFAULT_W,
+		sessions: PANEL_DEFAULT_W,
+	});
+	assert.deepEqual(parseSplitPrefs(JSON.stringify({ rail: 260, sessions: 300 })), {
+		rail: 260,
+		sessions: 300,
+	});
+	// 一栏合法一栏越界：合法的保留，越界的收回默认值。
+	assert.deepEqual(parseSplitPrefs(JSON.stringify({ rail: 5000 })), {
+		rail: PANEL_MAX_W,
+		sessions: PANEL_DEFAULT_W,
+	});
+	assert.deepEqual(parseSplitPrefs(JSON.stringify({ rail: -10, sessions: "x" })), {
+		rail: PANEL_DEFAULT_W,
+		sessions: PANEL_DEFAULT_W,
+	});
 });
 
 test("token chip 的悬停提示带上模型、agent 与各分项", () => {

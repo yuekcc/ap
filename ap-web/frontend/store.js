@@ -4,11 +4,13 @@
 // - 提供 render reducer 的薄入口（handleEvent / ingestHistory / handleTurnDone）。
 import Alpine from "alpinejs";
 import {
+	PANEL_DEFAULT_W,
 	SORT_ORDERS,
 	appendNotice,
 	appendUserMessage,
 	applyEvent,
 	applyTurnDone,
+	clampPanelWidth,
 	createState,
 	fileName,
 	formatTokenCount,
@@ -58,6 +60,9 @@ export function createStore() {
 		layoutMode: "wide",
 		// 列表排序偏好：recent（最近活动）/ name（名称）。
 		sortOrder: "recent",
+		// 两个侧栏的像素宽度；用户拖动后写到 :root 的 --rail-w / --sessions-w。
+		railWidth: PANEL_DEFAULT_W,
+		sessionsWidth: PANEL_DEFAULT_W,
 		// 消息区是否贴着底部；决定「回到底部」按钮是否露出。
 		atBottom: true,
 
@@ -342,6 +347,14 @@ export function createStore() {
 
 		setSortOrder(order) {
 			this.sortOrder = SORT_ORDERS.includes(order) ? order : "recent";
+		},
+
+		setRailWidth(width) {
+			this.railWidth = clampPanelWidth(width);
+		},
+
+		setSessionsWidth(width) {
+			this.sessionsWidth = clampPanelWidth(width);
 		},
 
 		setAtBottom(atBottom) {

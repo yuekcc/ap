@@ -17,7 +17,9 @@
   :class="{
     'app--rail-hidden': !$store.ap.railVisible,
     'app--sessions-hidden': !$store.ap.sessionsVisible,
+    'app--resizing': resizing !== '',
   }"
+  :style="`--rail-w: ${$store.ap.railWidth}px; --sessions-w: ${$store.ap.sessionsWidth}px`"
 >
   <aside class="rail" id="workspace-rail" aria-label="工作空间">
     <div class="rail__head">
@@ -96,6 +98,23 @@
       </template>
     </nav>
   </aside>
+
+  <!-- 栏宽分隔条：tabindex 加 role="separator"，指针拖动和方向键都能调。 -->
+  <div
+    class="resizer"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="工作空间栏宽度"
+    aria-valuemin="176"
+    aria-valuemax="420"
+    :aria-valuenow="$store.ap.railWidth"
+    tabindex="0"
+    title="拖动调整宽度 · 双击恢复默认"
+    x-show="$store.ap.layoutMode === 'wide' && $store.ap.railVisible"
+    @pointerdown="startResize($event, 'rail')"
+    @keydown="onResizeKey($event, 'rail')"
+    @dblclick="resetPanelWidth('rail')"
+  ></div>
 
   <aside class="sessions-col" id="session-sidebar">
     <div class="sessions__head">
@@ -188,6 +207,22 @@
       <p class="sessions__empty" x-show="showsEmptySessions()">暂无对话</p>
     </nav>
   </aside>
+
+  <div
+    class="resizer"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="对话栏宽度"
+    aria-valuemin="176"
+    aria-valuemax="420"
+    :aria-valuenow="$store.ap.sessionsWidth"
+    tabindex="0"
+    title="拖动调整宽度 · 双击恢复默认"
+    x-show="$store.ap.layoutMode === 'wide'"
+    @pointerdown="startResize($event, 'sessions')"
+    @keydown="onResizeKey($event, 'sessions')"
+    @dblclick="resetPanelWidth('sessions')"
+  ></div>
 
   <div class="workspace">
     <header class="topbar">

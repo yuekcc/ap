@@ -82,7 +82,7 @@ h1, h2, h3, h4, h5, h6 {
     Consolas, "Liberation Mono", monospace;
 
   --maxw: 46rem;
-  /* 两个侧栏等宽，都窄到不抢正文。 */
+  /* 两个侧栏的初始宽度；拖动后由 .app 的行内样式覆盖这两个变量。 */
   --rail-w: 14rem;
   --sessions-w: 14rem;
 
@@ -150,6 +150,45 @@ body {
 .app--rail-hidden .rail,
 .app--sessions-hidden .sessions-col {
   display: none;
+}
+
+/* 栏宽分隔条：自身占 0 宽，靠伪元素向两侧扩出可点区域，
+   这样三栏的分隔线仍是 1px，不多出一条缝。 */
+.resizer {
+  position: relative;
+  /* 右侧正文列也是层叠上下文（.thread 是 relative），不抬高会被它盖住命中区。 */
+  z-index: 2;
+  flex: none;
+  width: 0;
+  cursor: col-resize;
+  /* 拖动时不要让浏览器把手势解释成滚动。 */
+  touch-action: none;
+}
+
+.resizer::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: -5px;
+  width: 10px;
+  background: transparent;
+  transition: background-color 0.12s var(--ease-out);
+}
+
+.resizer:hover::after,
+.resizer:focus-visible::after,
+.app--resizing .resizer::after {
+  background: var(--accent-tint-strong);
+}
+
+.resizer:focus-visible {
+  outline: none;
+}
+
+/* 拖动期间整页锁光标、锁选中，避免拖到正文里选中一段文字。 */
+.app--resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 /* 浮层遮罩：只盖住正文，点一下收起浮层。宽屏不会走到这里。 */
@@ -1476,8 +1515,13 @@ body {
   }
 }
 
-/* 窄屏：工作空间栏变成浮层，展开入口落在对话栏标题行。 */
+/* 窄屏：工作空间栏变成浮层，展开入口落在对话栏标题行。
+   侧栏改成浮层后就没有「分栏宽度」这回事，分隔条一起收起。 */
 @media (max-width: 1100px) {
+  .resizer {
+    display: none;
+  }
+
   .rail {
     position: fixed;
     top: 0;

@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const indexPath = fileURLToPath(new URL("../index.html", import.meta.url));
 const stylesPath = fileURLToPath(new URL("./styles.css", import.meta.url));
+const appPath = fileURLToPath(new URL("./app.js", import.meta.url));
+const renderPath = fileURLToPath(new URL("./render.js", import.meta.url));
 
 test("目录选择入口在工作空间栏，输入区只回显工作空间路径", async () => {
 	const html = await readFile(indexPath, "utf8");
@@ -123,6 +125,65 @@ test("工作空间栏可折叠，窄屏下两个侧栏都是浮层", async () =>
 	const compact = css.slice(css.indexOf("@media (max-width: 820px)"));
 	assert.ok(compact.includes(".sessions-col"), "紧凑屏对话栏也是浮层");
 	assert.ok(compact.includes(".topbar__sessions-btn"), "紧凑屏从标题行打开对话栏");
+});
+
+test("两个侧栏的分隔条可拖动可键盘调整，宽度写回 CSS 变量", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+	const app = await readFile(appPath, "utf8");
+	const render = await readFile(renderPath, "utf8");
+
+	const railEnd = html.indexOf("</aside>");
+	const separators = [...html.matchAll(/class="resizer"[\s\S]*?><\/div>/g)].map((m) => m[0]);
+	assert.equal(separators.length, 2, "两处分隔条：工作空间栏后、对话栏后");
+
+	const [railSplit, sessionsSplit] = separators;
+	for (const split of separators) {
+		assert.ok(split.includes('role="separator"'), "分隔条是 window splitter");
+		assert.ok(split.includes('aria-orientation="vertical"'), "竖向分隔");
+		assert.ok(split.includes('tabindex="0"'), "键盘能聚焦");
+		// 边界和 render.js 里的常量同源，改数字忘了改标记会在这里断。
+		assert.ok(split.includes(`aria-valuemin="${Number(render.match(/PANEL_MIN_W = (\d+)/)[1])}"`), "取值下限与常量一致");
+		assert.ok(split.includes(`aria-valuemax="${Number(render.match(/PANEL_MAX_W = (\d+)/)[1])}"`), "取值上限与常量一致");
+		assert.ok(/@pointerdown="startResize\(\$event, '\w+'\)"/.test(split), "指针按下开始拖动");
+		assert.ok(/@keydown="onResizeKey\(\$event, '\w+'\)"/.test(split), "方向键也能调");
+		assert.ok(split.includes("resetPanelWidth("), "双击回到默认宽度");
+	}
+	assert.ok(railSplit.includes(":aria-valuenow=\"$store.ap.railWidth\""), "第一处分隔条管工作空间栏");
+	assert.ok(sessionsSplit.includes(":aria-valuenow=\"$store.ap.sessionsWidth\""), "第二处分隔条管对话栏");
+	assert.ok(
+		railSplit.includes("layoutMode === 'wide' && $store.ap.railVisible"),
+		"栏折叠或变成浮层时没有分隔条",
+	);
+	assert.ok(railEnd > 0 && html.indexOf(railSplit) > railEnd, "第一处分隔条排在左栏之后");
+
+	assert.ok(
+		html.includes("--rail-w: ${$store.ap.railWidth}px; --sessions-w: ${$store.ap.sessionsWidth}px"),
+		"宽度以行内 CSS 变量喂给三栏布局",
+	);
+	assert.ok(
+		html.includes("'app--resizing': resizing !== ''"),
+		"拖动期间给页面加状态类",
+	);
+
+	// 拖动监听挂在 window 上：指针离开那 10px 命中区也要继续算宽度。
+	assert.ok(
+		app.includes('window.addEventListener("pointermove", onMove)') &&
+			app.includes('window.addEventListener("pointerup", onEnd)') &&
+			app.includes('window.removeEventListener("pointermove", onMove)'),
+		"拖动期间由 window 接管指针事件，松手时摘掉监听",
+	);
+	assert.ok(!html.includes("setPointerCapture"), "不依赖 pointer capture：离开命中区后会丢事件");
+
+	assert.match(css, /\.resizer\s*\{[^}]*cursor:\s*col-resize/, "分隔条是拖动光标");
+	assert.match(css, /\.resizer\s*\{[^}]*touch-action:\s*none/, "拖动时不触发滚动");
+	assert.match(css, /\.app--resizing\s*\{[^}]*user-select:\s*none/, "拖动期间不选中文本");
+	const narrowStart = css.indexOf("@media (max-width: 1100px)");
+	const narrowBlock = css.slice(narrowStart, css.indexOf("@media (max-width: 820px)"));
+	assert.ok(
+		narrowBlock.includes(".resizer") && narrowBlock.includes("display: none"),
+		"窄屏侧栏是浮层，分隔条一并收起",
+	);
 });
 
 test("标题行左侧是标题与刷新，右侧是状态与用量", async () => {
