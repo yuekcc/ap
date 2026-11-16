@@ -4,15 +4,19 @@
 // - 提供 render reducer 的薄入口（handleEvent / ingestHistory / handleTurnDone）。
 import Alpine from "alpinejs";
 import {
+	SORT_ORDERS,
 	appendNotice,
 	appendUserMessage,
 	applyEvent,
 	applyTurnDone,
 	createState,
+	fileName,
 	formatTokenCount,
-	groupSessionsByDay,
 	ingestHistory,
 	sessionTitle,
+	sortProjects,
+	sortSessions,
+	usageDetailText,
 	usageTotal,
 } from "./render.js";
 
@@ -47,7 +51,13 @@ export function createStore() {
 		usage: null,
 		draft: "",
 		// 侧栏折叠是纯 UI 偏好，不参与 transcript 视图；持久化在 app.js。
-		sidebarCollapsed: false,
+		// railCollapsed 是宽屏下的手动折叠，railOpen / sessionsOpen 是窄屏浮层。
+		railCollapsed: false,
+		railOpen: false,
+		sessionsOpen: false,
+		layoutMode: "wide",
+		// 列表排序偏好：recent（最近活动）/ name（名称）。
+		sortOrder: "recent",
 		// 消息区是否贴着底部；决定「回到底部」按钮是否露出。
 		atBottom: true,
 
@@ -56,50 +66,72 @@ export function createStore() {
 			return sessionTitle({ session_id: this.sessionId, title: this.title });
 		},
 
-		// 顶栏 chip：本 session 的累计 token 用量（来自 session_end / turn_end）。
+		// 主区标题行：本 session 的累计 token（来自 session_end / turn_end）。
 		get usageLabel() {
 			const total = usageTotal(this.usage);
 			return total === null ? "" : `${formatTokenCount(total)} tokens`;
 		},
 
+		// 模型名、agent 从顶栏移到这个悬停提示里，和 token 分项一起展示。
 		get usageTitle() {
-			const usage = this.usage;
-			if (!usage) return "";
-			const parts = [];
-			if (typeof usage.input_tokens === "number") parts.push(`输入 ${usage.input_tokens}`);
-			if (typeof usage.output_tokens === "number") parts.push(`输出 ${usage.output_tokens}`);
-			if (typeof usage.cached_tokens === "number") parts.push(`缓存 ${usage.cached_tokens}`);
-			if (typeof usage.reasoning_tokens === "number") {
-				parts.push(`推理 ${usage.reasoning_tokens}`);
-			}
-			if (typeof usage.total_tokens === "number") parts.push(`合计 ${usage.total_tokens}`);
-			return parts.join(" · ");
+			return usageDetailText(this.usage, this.config);
 		},
 
-		// 顶部工作空间标签：服务端的 project 列表 + 当前正在使用的目录。
-		// 新选中的目录在第一次 turn 落地前还没有 session 文件，先本地合成一个空组，
-		// 否则用户看不到自己刚打开的工作目录。
+		// 工作空间列表：服务端 project 列表 + 当前目录（新选的目录还没 session 文件），
+		// 再按用户偏好排序。排序不改服务端返回顺序。
 		get workspaceProjects() {
 			const groups = this.projects.slice();
-			if (!this.projectCwd) return groups;
-			if (!groups.some((project) => project.cwd === this.projectCwd)) {
+			if (this.projectCwd && !groups.some((project) => project.cwd === this.projectCwd)) {
 				groups.unshift({ cwd: this.projectCwd, sessions: [] });
 			}
-			return groups;
+			return sortProjects(groups, this.sortOrder);
 		},
 
 		get activeProject() {
 			return this.workspaceProjects.find((project) => project.cwd === this.projectCwd) ?? null;
 		},
 
-		// 侧栏只展示当前工作空间的对话记录，不再按 project 分组。
+		// 对话栏只展示当前工作空间的对话记录，平铺、不分日组。
 		get activeSessions() {
 			return this.activeProject?.sessions ?? [];
 		},
 
-		// 对话记录再按今天 / 昨天 / 前天 / 更早分组，空组不渲染。
-		get sessionGroups() {
-			return groupSessionsByDay(this.activeSessions);
+		get sortedSessions() {
+			return sortSessions(this.activeSessions, this.sortOrder);
+		},
+
+		// 排序菜单按钮的提示：当前按什么排。
+		get sortLabel() {
+			return this.sortOrder === "name" ? "名称" : "最近活动";
+		},
+
+		// 「当前修改的文件」：本会话最近一次 write_file / edit_file 的 file_path。
+		get currentFile() {
+			const items = this.items;
+			for (let i = items.length - 1; i >= 0; i -= 1) {
+				const item = items[i];
+				if (item.kind === "tool" && item.path) return item.path;
+			}
+			return "";
+		},
+
+		get currentFileName() {
+			return fileName(this.currentFile);
+		},
+
+		// 窄屏时两个侧栏都是浮层，浮层打开时盖一层可点击的遮罩。
+		get railVisible() {
+			return this.layoutMode === "wide" ? !this.railCollapsed : this.railOpen;
+		},
+
+		get sessionsVisible() {
+			return this.layoutMode === "compact" ? this.sessionsOpen : true;
+		},
+
+		// 只有当前档位下真的是浮层的栏才算在遮罩范围内：窄屏的对话栏是内联的。
+		get overlayOpen() {
+			if (this.layoutMode === "wide") return false;
+			return this.railOpen || (this.layoutMode === "compact" && this.sessionsOpen);
 		},
 
 		get statusKind() {
@@ -292,8 +324,24 @@ export function createStore() {
 			this.draft = text;
 		},
 
-		setSidebarCollapsed(collapsed) {
-			this.sidebarCollapsed = Boolean(collapsed);
+		setRailCollapsed(collapsed) {
+			this.railCollapsed = Boolean(collapsed);
+		},
+
+		setRailOpen(open) {
+			this.railOpen = Boolean(open);
+		},
+
+		setSessionsOpen(open) {
+			this.sessionsOpen = Boolean(open);
+		},
+
+		setLayoutMode(mode) {
+			this.layoutMode = mode === "compact" || mode === "narrow" ? mode : "wide";
+		},
+
+		setSortOrder(order) {
+			this.sortOrder = SORT_ORDERS.includes(order) ? order : "recent";
 		},
 
 		setAtBottom(atBottom) {

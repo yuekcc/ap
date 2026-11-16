@@ -174,7 +174,7 @@ Unix 上的实现如下。
 - 成功只返回规范化后的绝对路径。服务器不修改进程级 `cwd`，也不清空其他 session。
 - 前端随后调用 `POST /api/session/new {cwd}`，在该目录开新 slot。
 - `cwd` 属于每个 `Session_Runtime`。不同 project 的 turn 可以同时运行。
-- `ap-web` 重启后默认 project 回到启动目录。顶部工作空间标签仍可通过 `/api/projects` 打开其他目录的历史 session。
+- `ap-web` 重启后默认 project 回到启动目录。左栏的工作空间列表仍可通过 `/api/projects` 打开其他目录的历史 session。
 - 前端把本标签页的 `{key, id, cwd}` 存到 `sessionStorage`。刷新时优先按真实 id 加 cwd 恢复。
 
 ## 前端
@@ -192,13 +192,17 @@ Unix 上的实现如下。
 - 先引入 `github-markdown-css`，再用 Josh's Custom CSS Reset，应用样式接在后面。
 - 只提供浅色主题。`color-scheme: light`，不写暗色分支。
 - 视觉风格是 iOS 18 的扁平分组界面：应用直接铺满视口，不留外框和外边距；系统分组底色 `--bg-grouped` 用于侧栏，消息区用白色 `--bg`；不用背景模糊、投影和渐变。
-- 顶部标题栏依次是 logo、工作空间标签和「+」新建工作空间按钮。工作空间标签是一条分段控件，当前 project 用白色胶囊高亮；「+」在 Windows 上打开系统目录选择框，选中目录后在该目录开新 slot（Unix 返回 501 并由前端提示）。
-- 左栏是「开启新对话」按钮和当前工作空间的对话记录列表，当前对话用 systemBlue 整块高亮；右栏是 session 标题、消息区和录入框。输入框只回显当前工作空间路径，不再重复目录选择入口。
+- 页面是三栏工作台：左侧工作空间栏（`--rail-w`）、中间对话栏（`--sessions-w`）、右侧对话正文（吃剩下的宽度），栏间用 1px `--separator-soft` 分隔。外层用 flex 而不是 grid：折叠一栏只是 `display: none`，不需要重算列宽。
+- 工作空间栏底色 `--bg-grouped`，标题行依次是 `ap` 字标、「打开新工作空间」、「排序」、「折叠」。工作空间是竖列表，当前项用 `--accent-tint` 浅底，`title` 放完整路径。
+- 对话栏底色 `--bg`，标题行是「对话」标签加「打开文件管理器」「打开终端」两个图标按钮，下面依次是「新对话」按钮和平铺的对话列表。
+- 对话正文栏是 `grid-template-rows: auto minmax(0, 1fr) auto`：标题行（标题 + 刷新 + 累计 token）、消息区（唯一滚动容器）、录入框。
+- token 用量的悬停提示带上模型、agent 和输入/输出/缓存/推理分项，模型名不再单独占一个 chip。
+- 消息区上方单独一行、右对齐的小胶囊显示本会话最近一次 `write_file` / `edit_file` 的 `file_path`，只显示文件名，点击复制完整路径；没有改写文件时整行不占高度。
 - 系统色与形状收敛成 `--bg-grouped`、`--fill`、`--separator`、`--accent`、`--radius-*` 等自定义属性。改主题只改这些变量，不在选择器里散写颜色。
 - 强调色用 systemBlue `#007aff`；用户消息是纯色填充的 iMessage 气泡（18px 圆角，右下角 4px），助手文本保持正文色。
 - 交互只保留 120ms 的背景色淡入和聚焦色淡入；运行中脉冲与减少动态偏好下的禁用沿用原语义。
-- 页面骨架用 grid：外层是标题栏加主体，主体再分左右两栏；右栏是 `grid-template-rows: auto minmax(0, 1fr) auto`，消息区自己滚动。
-- 块级组件用 flex。窄屏（`max-width: 820px`）隐藏侧栏标题，左栏折成顶部横向对话条，会话项改成胶囊；窄屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
+- 页面骨架是单行三栏 flex；对话正文栏内部用 grid（标题行 / 消息区 / 录入框），消息区自己滚动。
+- 块级组件用 flex。宽度降到 1100px 时工作空间栏变成左侧浮层，展开入口落在对话栏标题行最左；降到 820px 时对话栏也变成浮层，由标题行的「对话记录」按钮打开，点遮罩或选项后关闭；紧凑屏输入框字号不小于 16px，避免 iOS 聚焦时自动放大。
 
 前端行为与 `ap-tui` 对齐。
 
@@ -208,8 +212,8 @@ Unix 上的实现如下。
 - Markdown 用 `markdown-exit`，设置 `html: false`、`linkify: true`、`breaks: true`。原始 HTML 被转义，`javascript:` 和 `data:` 链接不会变成可点链接。外链带 `target="_blank"` 和 `rel="noopener noreferrer"`。图片设置 `loading="lazy"` 和 `referrerpolicy="no-referrer"`。
 - 语言标记为 `mermaid` 的围栏先渲染成保留源码的占位块，消息结束后由 `mermaid-blocks.js` 用 MutationObserver + 防抖把占位块换成 SVG。mermaid 本体在 `dist/mermaid.js`，第一次出现图表时才加载；渲染失败时保留源码并显示一行错误。`securityLevel` 固定为 `strict`，图表里的 `%%{init}%%` 或 frontmatter 不允许覆盖它。
 - 减少动态偏好下的全局过渡规则排除 `svg` 及其后代：给 SVG 元素加 `transition-duration` 会让 Chrome 的 `getBBox` 返回错误尺寸，mermaid 会把图表撑到几千像素。
-- 顶部工作空间标签按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在标签条里本地合成一个空组。
-- 左栏只展示当前工作空间的对话记录，按 session 列表的 `ts` 在浏览器本地时区分成「今天 / 昨天 / 前天 / 更早」，空组不渲染；切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
+- 工作空间列表按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在列表里本地合成一个空组。
+- 对话栏只展示当前工作空间的对话记录，平铺、不按天分组：每项两行，第一行标题，第二行是本地时间（`MM-DD HH:mm`）和状态点，`running` 为真时是脉冲点。列表排序（最近活动 / 名称）和工作空间排序共用一个 `localStorage` 偏好，排序只在浏览器本地完成，不改服务端返回顺序。切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
 - 每个标签页持有自己的 `session_key`，SSE 按该 key 过滤。
 - 打开已有 session 的顺序是 `POST /api/session/resume`、`GET /api/history`、`GET /api/events`。
 - 首次订阅成功后补一次 history，填上 history 与 subscribe 之间的空档。

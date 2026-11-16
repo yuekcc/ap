@@ -9,15 +9,18 @@ import {
 	createState,
 	formatArgs,
 	formatDuration,
+	fileName,
 	formatTokenCount,
-	groupSessionsByDay,
 	ingestHistory,
 	previewContent,
 	projectName,
-	sessionDayBucket,
-	sessionMeta,
+	sessionTime,
 	sessionTitle,
+	sortProjects,
+	sortSessions,
+	toolFilePath,
 	truncateUtf8,
+	usageDetailText,
 	usageFrom,
 	usageTotal,
 } from "./render.js";
@@ -30,11 +33,8 @@ test("会话列表标题优先用生成的主题，没有时退回日期", () =>
 	assert.equal(sessionTitle({ ...session, title: "   " }), "10-22 12:00");
 	assert.equal(sessionTitle({ ...session, title: null }), "10-22 12:00");
 	assert.equal(sessionTitle(session), "10-22 12:00");
-	assert.equal(sessionMeta(session), "abcdef12 · 3 轮");
-	assert.equal(sessionMeta({ ...session, running: true }), "abcdef12 · 3 轮 · 运行中");
 	// 不符合命名规则时原样回退，不伪造日期。
 	assert.equal(sessionTitle({ session_id: "custom" }), "custom");
-	assert.equal(sessionMeta({ session_id: "custom" }), "custom · 0 轮");
 	assert.equal(sessionTitle({}), "会话");
 });
 
@@ -45,43 +45,94 @@ test("侧栏 project 名称取工作目录最后一段，兼容 Windows 分隔�
 	assert.equal(projectName(""), "工作目录");
 });
 
-test("对话记录按今天 / 昨天 / 前天 / 更早分组，空组不出现", () => {
-	const at = (day, hour = 12) => new Date(2026, 10, day, hour, 0, 0).getTime();
-	const now = at(10);
-	const sessions = [
-		{ session_id: "today-a", ts: at(10, 1) },
-		{ session_id: "yesterday-a", ts: at(9, 23) },
-		{ session_id: "before-a", ts: at(8, 8) },
-		{ session_id: "earlier-a", ts: at(7, 8) },
-		{ session_id: "earlier-b", ts: 0 },
+test("对话列表第二行是本地时间，取不到时间就不占位", () => {
+	assert.equal(sessionTime(new Date(2026, 9, 22, 12, 5).getTime()), "10-22 12:05");
+	// 0 / null / 非法值都不渲染一个假的 1970 时间。
+	assert.equal(sessionTime(0), "");
+	assert.equal(sessionTime(null), "");
+	assert.equal(sessionTime(undefined), "");
+	assert.equal(sessionTime("不是时间"), "");
+});
+
+test("「当前修改的文件」只显示最后一段路径", () => {
+	assert.equal(fileName("z:/projects/ap/ap-web/index.html"), "index.html");
+	assert.equal(fileName("C:\\Users\\me\\main.odin"), "main.odin");
+	assert.equal(fileName("main.odin"), "main.odin");
+	assert.equal(fileName(""), "");
+});
+
+test("列表排序在最近活动与名称之间切换，且不改动入参数组", () => {
+	const projects = [
+		{ cwd: "z:/ap/beta", sessions: [{ ts: 100 }] },
+		{ cwd: "z:/ap/alpha", sessions: [{ ts: 300 }] },
+		{ cwd: "z:/ap/gamma", sessions: [] },
 	];
-
-	assert.equal(sessionDayBucket(at(10), now), "today");
-	assert.equal(sessionDayBucket(at(9), now), "yesterday");
-	assert.equal(sessionDayBucket(at(8), now), "beforeYesterday");
-	assert.equal(sessionDayBucket(at(5), now), "earlier");
-	// 时钟偏差导致的未来 mtime 归到今天。
-	assert.equal(sessionDayBucket(at(12), now), "today");
-
-	const groups = groupSessionsByDay(sessions, now);
 	assert.deepEqual(
-		groups.map((group) => group.label),
-		["今天", "昨天", "前天", "更早"],
+		sortProjects(projects, "recent").map((project) => projectName(project.cwd)),
+		["alpha", "beta", "gamma"],
 	);
 	assert.deepEqual(
-		groups.map((group) => group.sessions.map((session) => session.session_id)),
-		[
-			["today-a"],
-			["yesterday-a"],
-			["before-a"],
-			["earlier-a", "earlier-b"],
-		],
+		sortProjects(projects, "name").map((project) => projectName(project.cwd)),
+		["alpha", "beta", "gamma"],
 	);
+	// 名称相同或都没有时间时保持服务端顺序，刷新不会来回抖。
+	const tied = [
+		{ cwd: "z:/ap/one", sessions: [] },
+		{ cwd: "z:/ap/two", sessions: [] },
+	];
+	assert.deepEqual(sortProjects(tied, "recent"), tied);
+	assert.equal(projects[0].cwd, "z:/ap/beta", "排序是纯派生，不就地改入参");
 
-	// 只保留有内容的组。
-	const sparse = groupSessionsByDay([{ session_id: "only", ts: at(10, 9) }], now);
-	assert.equal(sparse.length, 1);
-	assert.equal(sparse[0].label, "今天");
+	const sessions = [
+		{ session_id: "a", title: "beta", ts: 100 },
+		{ session_id: "b", title: "alpha", ts: 300 },
+		{ session_id: "c", title: "gamma", ts: 200 },
+	];
+	assert.deepEqual(
+		sortSessions(sessions, "recent").map((session) => session.session_id),
+		["b", "c", "a"],
+	);
+	assert.deepEqual(
+		sortSessions(sessions, "name").map((session) => session.session_id),
+		["b", "a", "c"],
+	);
+	assert.deepEqual(sortSessions([], "name"), [], "空列表不报错");
+});
+
+test("token chip 的悬停提示带上模型、agent 与各分项", () => {
+	assert.equal(
+		usageDetailText(
+			{ input_tokens: 10, output_tokens: 20, cached_tokens: 5, total_tokens: 30 },
+			{ model: "gpt-5", agent: "reviewer" },
+		),
+		"gpt-5 · agent reviewer · 输入 10 · 输出 20 · 缓存 5 · 合计 30",
+	);
+	// 还没有 config 时只显示已到的分项，不伪造模型名。
+	assert.equal(usageDetailText({ total_tokens: 7 }, null), "合计 7");
+	assert.equal(usageDetailText(null, { model: "  " }), "");
+});
+
+test("写文件的工具记住被改写的路径", () => {
+	const start = ev("tool_execution_start", {
+		tool_call_id: "t1",
+		name: "write_file",
+		args: { file_path: "ap-web/index.html" },
+	});
+	const path = toolFilePath(start);
+	assert.equal(path, "ap-web/index.html");
+
+	let state = applyEvent(createState(), start);
+	assert.equal(state.items.at(-1).path, "ap-web/index.html");
+
+	// 只读工具不记路径，避免「当前修改的文件」被读操作覆盖。
+	const read = ev("tool_execution_start", {
+		tool_call_id: "t2",
+		name: "read_file",
+		args: { file_path: "ap-web/styles.css" },
+	});
+	assert.equal(toolFilePath(read), "");
+	state = applyEvent(state, read);
+	assert.equal(state.items.at(-1).path, "");
 });
 
 test("formatArgs 对齐 ap-tui：键排序、字符串不加引号、整体限 240 字节", () => {

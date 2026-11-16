@@ -121,6 +121,7 @@ cmd/magi-cli ──► magi ──► apcore ──► engine
 | [proposals/hooks.md](proposals/hooks.md) | 工具与 turn 生命周期 hook 的协议、配置与分层决策（草案，未实现） | 设计记录 |
 | [proposals/cli-prompt-context-tools.md](proposals/cli-prompt-context-tools.md) | 上下文裁剪与工具开关的设计记录 | 设计记录 |
 | [proposals/sdk-scope.md](proposals/sdk-scope.md) | SDK 边界收窄的设计记录 | 设计记录 |
+| [../design/web-ui-v3.md](../design/web-ui-v3.md) | `ap-web` 三栏工作台的界面方案、用户故事与设计稿元素映射（已实现） | 设计记录 |
 | [tigerstyle-review.md](tigerstyle-review.md) | 全仓 TigerStyle 评审：已核实的问题、修改建议与修复顺序 | 工作清单 |
 | [TODO.md](TODO.md) | docs 重写计划与验收清单 | 工作清单 |
 

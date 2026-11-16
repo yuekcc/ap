@@ -118,6 +118,26 @@ export function formatTokenCount(value) {
 	return `${(count / 1000000).toFixed(2)}M`;
 }
 
+// 标题行 token 用量的悬停提示：模型、agent 加各分项。模型/agent 从顶栏移除后
+// 只能在这里看到，所以它们也要出现在提示里。
+export function usageDetailText(usage, config) {
+	const parts = [];
+	const model = typeof config?.model === "string" ? config.model.trim() : "";
+	const agent = typeof config?.agent === "string" ? config.agent.trim() : "";
+	if (model) parts.push(model);
+	if (agent) parts.push(`agent ${agent}`);
+	if (usage) {
+		if (typeof usage.input_tokens === "number") parts.push(`输入 ${usage.input_tokens}`);
+		if (typeof usage.output_tokens === "number") parts.push(`输出 ${usage.output_tokens}`);
+		if (typeof usage.cached_tokens === "number") parts.push(`缓存 ${usage.cached_tokens}`);
+		if (typeof usage.reasoning_tokens === "number") {
+			parts.push(`推理 ${usage.reasoning_tokens}`);
+		}
+		if (typeof usage.total_tokens === "number") parts.push(`合计 ${usage.total_tokens}`);
+	}
+	return parts.join(" · ");
+}
+
 // 工具卡片头部的耗时：1s 以内保留毫秒，以上换成一位小数的秒，避免长串数字撑开头部。
 export function formatDuration(ms) {
 	if (ms === null || ms === undefined || ms === "") return "";
@@ -180,52 +200,63 @@ export function projectName(cwd) {
 	return parts[parts.length - 1] || value;
 }
 
-export function sessionMeta(session) {
-	const id = String(session?.session_id ?? "");
-	const match = SESSION_ID_RE.exec(id);
-	const short = match ? match[7].slice(0, 8) : id;
-	const turns = Number.isFinite(session?.turns) ? session.turns : 0;
-	const running = session?.running === true ? " · 运行中" : "";
-	return `${short} · ${turns} 轮${running}`;
+// 路径的最后一段，用于「当前修改的文件」只显示文件名。
+export function fileName(path) {
+	const value = String(path ?? "").replace(/[\\/]+$/, "");
+	if (!value) return "";
+	const parts = value.split(/[\\/]/);
+	return parts[parts.length - 1] || value;
 }
 
-// 对话记录按最近活动时间分到「今天 / 昨天 / 前天 / 更早」。
-// ts 来自 session 文件 mtime（毫秒），按浏览器本地时区判断自然日。
-export const SESSION_DAY_GROUPS = [
-	{ key: "today", label: "今天" },
-	{ key: "yesterday", label: "昨天" },
-	{ key: "beforeYesterday", label: "前天" },
-	{ key: "earlier", label: "更早" },
-];
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function startOfLocalDay(ms) {
-	const date = new Date(ms);
-	date.setHours(0, 0, 0, 0);
-	return date.getTime();
-}
-
-export function sessionDayBucket(ts, now = Date.now()) {
+// 对话列表第二行左侧的本地时间：MM-DD HH:mm，取不到时间就不占位。
+// ts 来自 session 文件 mtime（毫秒），按浏览器本地时区显示。
+export function sessionTime(ts) {
 	const value = Number(ts);
-	if (!Number.isFinite(value) || value <= 0) return "earlier";
-	// 用整数天差，避开夏令时导致的小时偏移；未来时间按今天处理。
-	const days = Math.round((startOfLocalDay(now) - startOfLocalDay(value)) / DAY_MS);
-	if (days <= 0) return "today";
-	if (days === 1) return "yesterday";
-	if (days === 2) return "beforeYesterday";
-	return "earlier";
+	if (!Number.isFinite(value) || value <= 0) return "";
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return "";
+	const pad = (n) => String(n).padStart(2, "0");
+	const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+	return `${day} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function groupSessionsByDay(sessions, now = Date.now()) {
-	const buckets = { today: [], yesterday: [], beforeYesterday: [], earlier: [] };
-	for (const session of Array.isArray(sessions) ? sessions : []) {
-		buckets[sessionDayBucket(session?.ts, now)].push(session);
+// ---- 列表排序 ----
+// 排序是纯前端派生：服务端返回顺序保持原样，偏好只影响这一次渲染。
+// Array#sort 在现代引擎里稳定，同分项保持原有先后，刷新不会来回抖。
+
+export const SORT_ORDERS = ["recent", "name"];
+
+function timeValue(ts) {
+	const value = Number(ts);
+	return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function latestSessionTs(project) {
+	const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
+	let latest = 0;
+	for (const session of sessions) latest = Math.max(latest, timeValue(session?.ts));
+	return latest;
+}
+
+export function sortProjects(projects, order = "recent") {
+	const list = Array.isArray(projects) ? projects.slice() : [];
+	if (order === "name") {
+		return list.sort((a, b) => {
+			const diff = projectName(a?.cwd).localeCompare(projectName(b?.cwd), "zh-Hans-CN");
+			return diff !== 0 ? diff : latestSessionTs(b) - latestSessionTs(a);
+		});
 	}
-	return SESSION_DAY_GROUPS.map((group) => ({
-		...group,
-		sessions: buckets[group.key],
-	})).filter((group) => group.sessions.length > 0);
+	return list.sort((a, b) => latestSessionTs(b) - latestSessionTs(a));
+}
+
+export function sortSessions(sessions, order = "recent") {
+	const list = Array.isArray(sessions) ? sessions.slice() : [];
+	if (order === "name") {
+		return list.sort((a, b) =>
+			sessionTitle(a).localeCompare(sessionTitle(b), "zh-Hans-CN"),
+		);
+	}
+	return list.sort((a, b) => timeValue(b?.ts) - timeValue(a?.ts));
 }
 
 export function messageTexts(event) {
@@ -327,7 +358,20 @@ function addMessage(state, messageId, text, ended) {
 	return next;
 }
 
-function addTool(state, toolId, name, args) {
+// 工具条目顺带记一份「本会话改过的文件」：只有写文件的工具有 file_path。
+// live 事件和 /api/history 回放事件都保留了 args，所以不必麻烦服务端。
+const FILE_TOOLS = new Set(["write_file", "edit_file"]);
+
+export function toolFilePath(event) {
+	const name = typeof event?.name === "string" ? event.name : "";
+	if (!FILE_TOOLS.has(name)) return "";
+	const args = event?.args;
+	if (!args || typeof args !== "object") return "";
+	const path = args.file_path;
+	return typeof path === "string" ? path.trim() : "";
+}
+
+function addTool(state, toolId, name, args, path = "") {
 	const id = toolId || `tool-${state.localIds + 1}`;
 	const item = {
 		kind: "tool",
@@ -335,6 +379,7 @@ function addTool(state, toolId, name, args) {
 		toolId: id,
 		name: name || "tool",
 		args: args || "",
+		path: path || "",
 		streamed: "",
 		result: "",
 		status: "running",
@@ -429,7 +474,8 @@ function applyToolStart(state, event) {
 	const toolId = event.tool_call_id || "";
 	const index = state.tools[toolId];
 	if (typeof index === "number") return state; // 同一 tool_call_id 重放，跳过。
-	return { ...addTool(state, toolId, event.name, toolArgsText(event)), thinking: false };
+	const path = toolFilePath(event);
+	return { ...addTool(state, toolId, event.name, toolArgsText(event), path), thinking: false };
 }
 
 function applyToolUpdate(state, event) {
@@ -452,7 +498,7 @@ function applyToolEnd(state, event, mode) {
 	const toolId = event.tool_call_id || "";
 	let next = state;
 	if (typeof state.tools[toolId] !== "number") {
-		next = addTool(state, toolId, event.name || "tool", "");
+		next = addTool(state, toolId, event.name || "tool", "", toolFilePath(event));
 	}
 
 	const index = next.tools[toolId];

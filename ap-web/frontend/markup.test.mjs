@@ -1,5 +1,5 @@
-// 布局约定是 docs/web.md 的硬性要求：目录选择入口收敛到顶部「+」，
-// 输入区只回显当前工作空间路径。这里直接读 index.html 做结构断言，不引入 DOM 依赖。
+// 三栏工作台的布局约定是 docs/internal/web.md 的硬性要求：左栏工作空间、
+// 中栏对话列表、右栏对话正文。这里直接读 index.html 做结构断言，不引入 DOM 依赖。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -9,17 +9,18 @@ import { fileURLToPath } from "node:url";
 const indexPath = fileURLToPath(new URL("../index.html", import.meta.url));
 const stylesPath = fileURLToPath(new URL("./styles.css", import.meta.url));
 
-test("输入区只回显工作空间路径，不再重复目录选择入口", async () => {
+test("目录选择入口在工作空间栏，输入区只回显工作空间路径", async () => {
 	const html = await readFile(indexPath, "utf8");
-	const headerEnd = html.indexOf("</header>");
-	const footerStart = html.indexOf('<footer class="composer">');
-	assert.ok(headerEnd > 0, "index.html must have a titlebar");
-	assert.ok(footerStart > headerEnd, "composer must follow the titlebar");
 
-	const header = html.slice(0, headerEnd);
-	assert.ok(!header.includes("pickDirectory"), "pick action must not live in the titlebar");
-	assert.ok(!header.includes("选择目录"), "pick button must not live in the titlebar");
-	assert.ok(header.includes("openWorkspace()"), "titlebar + opens a workspace, not the picker");
+	const railStart = html.indexOf('<aside class="rail"');
+	const railEnd = html.indexOf("</aside>", railStart);
+	assert.ok(railStart >= 0 && railEnd > railStart, "index.html must have a workspace rail");
+	const rail = html.slice(railStart, railEnd);
+	assert.ok(!rail.includes("pickDirectory"), "工作空间栏列目录，不弹系统选择器");
+	assert.ok(rail.includes("openWorkspace()"), "工作空间栏的 + 打开一个工作空间");
+
+	const footerStart = html.indexOf('<footer class="composer">');
+	assert.ok(footerStart > railEnd, "composer must follow the rails");
 
 	const composer = html.slice(footerStart);
 	assert.ok(!composer.includes("pickDirectory"), "composer must not host a directory picker");
@@ -52,111 +53,79 @@ test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", asy
 	assert.ok(!html.includes("x-html=\"item.streamed"), "tool output must not be rendered as html");
 });
 
-test("顶部是工作空间标签，侧栏承载新对话与当前空间的对话记录", async () => {
+test("左栏是工作空间列表，中栏是新对话与当前空间的对话记录", async () => {
 	const html = await readFile(indexPath, "utf8");
 
-	const titlebarStart = html.indexOf('<header class="titlebar">');
-	const titlebarEnd = html.indexOf("</header>");
-	assert.ok(titlebarStart >= 0 && titlebarEnd > titlebarStart, "index.html must have a titlebar");
-	const titlebar = html.slice(titlebarStart, titlebarEnd);
-	assert.ok(titlebar.includes('class="brand__mark"'), "logo lives in the titlebar");
-	assert.match(
-		titlebar,
-		/>ap<\/span>/,
-		"logo mark itself spells ap",
-	);
-	assert.ok(!titlebar.includes("brand__name"), "logo has no adjacent wordmark label");
+	const railStart = html.indexOf('<aside class="rail"');
+	const railEnd = html.indexOf("</aside>", railStart);
+	assert.ok(railStart >= 0 && railEnd > railStart, "index.html must have a workspace rail");
+	const rail = html.slice(railStart, railEnd);
+	assert.ok(rail.includes('class="brand__mark"'), "logo 在左栏标题行");
+	assert.match(rail, />ap<\/span>/, "logo mark itself spells ap");
+	assert.ok(!rail.includes("brand__name"), "logo has no adjacent wordmark label");
 	assert.ok(
-		titlebar.includes('x-for="project in $store.ap.workspaceProjects"'),
-		"working directories become workspace tabs",
+		rail.includes('x-for="project in $store.ap.workspaceProjects"'),
+		"工作目录成为左栏列表项",
 	);
-	assert.ok(
-		titlebar.includes("switchWorkspace(project)"),
-		"clicking a tab switches the active workspace",
-	);
-	assert.ok(
-		titlebar.includes('@click="openWorkspace()"'),
-		"the + button opens a new workspace",
-	);
+	assert.ok(rail.includes("switchWorkspace(project)"), "点列表项切换工作空间");
+	assert.ok(rail.includes('@click="openWorkspace()"'), "+ 打开新的工作空间");
+	assert.ok(rail.includes('data-icon="arrow-down-up"'), "排序入口在左栏标题行");
+	assert.ok(rail.includes('@click="toggleRail()"'), "折叠入口在左栏标题行");
 
-	const asideStart = html.indexOf('<aside class="sidebar"');
-	const asideEnd = html.indexOf("</aside>");
-	assert.ok(asideStart >= 0 && asideEnd > asideStart, "index.html must have a sidebar");
-
-	const sidebar = html.slice(asideStart, asideEnd);
-	assert.ok(sidebar.includes('class="new-session"'), "new session lives in the sidebar");
+	const sessionsStart = html.indexOf('<aside class="sessions-col"');
+	const sessionsEnd = html.indexOf("</aside>", sessionsStart);
+	assert.ok(sessionsStart >= 0 && sessionsEnd > sessionsStart, "index.html must have a session rail");
+	const sessions = html.slice(sessionsStart, sessionsEnd);
+	assert.ok(sessions.includes('class="new-session"'), "新对话在中栏");
 	assert.ok(
-		sidebar.includes('@click="newSession()"'),
+		sessions.includes('@click="newSession()"'),
 		"new session must not receive the click event as its cwd argument",
 	);
 	assert.ok(
-		sidebar.includes('x-for="group in $store.ap.sessionGroups"'),
-		"sidebar groups conversations by natural day",
+		sessions.includes('x-for="session in $store.ap.sortedSessions"'),
+		"对话记录平铺，不再按天分组",
 	);
+	assert.ok(!sessions.includes("session-group"), "按天分组已删除");
+	assert.ok(sessions.includes("selectSession(session)"), "点条目切换当前对话");
+	assert.ok(sessions.includes("sessionTitle(session)"), "显示格式化后的会话标题");
+	assert.ok(sessions.includes("sessionTime(session.ts)"), "第二行是本地时间");
+	assert.ok(!sessions.includes('class="sidebar__cwd"'), "中栏不重复工作目录");
 	assert.ok(
-		sidebar.includes('class="session-group__label"') &&
-			sidebar.includes('x-text="group.label"'),
-		"each day group renders its own label",
-	);
-	assert.ok(
-		sidebar.includes('x-for="session in group.sessions"'),
-		"day groups list their conversations",
-	);
-	assert.ok(
-		sidebar.includes("selectSession(session)"),
-		"sidebar sessions switch the active conversation",
-	);
-	assert.ok(sidebar.includes("sessionTitle(session)"), "sidebar shows formatted session titles");
-	assert.ok(
-		!sidebar.includes('class="sidebar__cwd"'),
-		"sidebar no longer repeats the working directory in its footer",
-	);
-	assert.ok(
-		!sidebar.includes(':disabled="$store.ap.running"'),
+		!sessions.includes(':disabled="$store.ap.running"'),
 		"session actions must stay usable while another session is running",
 	);
-	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the sidebar");
+	assert.ok(!html.includes('id="session-select"'), "topbar select is replaced by the rail");
 });
 
-test("侧栏折叠入口在标题行左侧，窄屏下侧栏始终展开", async () => {
+test("工作空间栏可折叠，窄屏下两个侧栏都是浮层", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const css = await readFile(stylesPath, "utf8");
 
-	const topbarStart = html.indexOf('<header class="topbar">');
-	const topbarEnd = html.indexOf("</header>", topbarStart);
-	assert.ok(topbarStart >= 0 && topbarEnd > topbarStart, "index.html must have a topbar");
-	const topbar = html.slice(topbarStart, topbarEnd);
-
-	const toggleIndex = topbar.indexOf('@click="toggleSidebar()"');
-	const titleIndex = topbar.indexOf('class="topbar__title"');
-	assert.ok(toggleIndex >= 0, "顶栏承载侧栏折叠入口");
-	assert.ok(titleIndex > toggleIndex, "折叠入口在标题左侧");
-
-	assert.ok(topbar.includes('aria-controls="session-sidebar"'), "折叠入口指向侧栏");
 	assert.ok(
-		html.includes('<aside class="sidebar" id="session-sidebar">'),
-		"侧栏暴露折叠入口控制的 id",
+		html.includes('<aside class="rail" id="workspace-rail"'),
+		"左栏暴露折叠入口控制的 id",
 	);
+	assert.ok(html.includes('aria-controls="workspace-rail"'), "折叠入口指向左栏");
+	assert.ok(html.includes('@click="toggleRail()"'), "折叠入口调用 toggleRail");
 	assert.ok(
-		html.includes("'app--sidebar-collapsed': $store.ap.sidebarCollapsed"),
+		html.includes("'app--rail-hidden': !$store.ap.railVisible"),
 		"折叠状态由 store 驱动",
 	);
 
-	assert.ok(css.includes(".topbar__sidebar-btn"), "折叠入口有自己的样式");
-	assert.ok(
-		css.includes(".app--sidebar-collapsed .app__body"),
-		"折叠后左栏收成 0 宽",
-	);
+	assert.ok(css.includes(".app--rail-hidden .rail"), "折叠后左栏不参与布局");
+	assert.match(css, /\.rail\s*\{[^}]*width:\s*var\(--rail-w\)/, "左栏宽度来自变量");
 
-	const narrowStart = css.indexOf("@media (max-width: 820px)");
-	assert.ok(narrowStart > 0, "styles.css keeps the narrow layout query");
-	assert.ok(
-		css.slice(narrowStart).includes(".topbar__sidebar-btn"),
-		"窄屏是横向对话条，折叠入口要隐藏",
-	);
+	const narrowStart = css.indexOf("@media (max-width: 1100px)");
+	assert.ok(narrowStart > 0, "styles.css 有窄屏断点");
+	const narrow = css.slice(narrowStart, css.indexOf("@media (max-width: 820px)"));
+	assert.ok(narrow.includes("position: fixed"), "窄屏左栏浮在正文之上");
+
+	const compact = css.slice(css.indexOf("@media (max-width: 820px)"));
+	assert.ok(compact.includes(".sessions-col"), "紧凑屏对话栏也是浮层");
+	assert.ok(compact.includes(".topbar__sessions-btn"), "紧凑屏从标题行打开对话栏");
 });
 
-test("对话标题行居中，两侧分别是折叠入口与环境状态", async () => {
+test("标题行左侧是标题与刷新，右侧是状态与用量", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const css = await readFile(stylesPath, "utf8");
 
@@ -165,60 +134,39 @@ test("对话标题行居中，两侧分别是折叠入口与环境状态", async
 	assert.ok(topbarStart >= 0 && topbarEnd > topbarStart, "index.html must have a topbar");
 	const topbar = html.slice(topbarStart, topbarEnd);
 
-	const sideIndex = topbar.indexOf('class="topbar__side"');
 	const headingIndex = topbar.indexOf('class="topbar__heading"');
 	const rightIndex = topbar.indexOf('class="topbar__right"');
-	assert.ok(
-		sideIndex >= 0 && headingIndex > sideIndex && rightIndex > headingIndex,
-		"顶栏按左中右三栏排列",
-	);
-	assert.ok(
-		topbar.slice(sideIndex, headingIndex).includes('@click="toggleSidebar()"'),
-		"折叠入口在左栏",
-	);
+	assert.ok(headingIndex >= 0 && rightIndex > headingIndex, "标题行只有标题组和右侧状态两块");
 	assert.ok(
 		topbar.slice(headingIndex, rightIndex).includes("$store.ap.currentTitle"),
-		"标题在中栏",
+		"标题在左",
 	);
-	assert.ok(
-		topbar.slice(rightIndex).includes("$store.ap.statusLabel"),
-		"环境与状态在右栏",
-	);
+	assert.ok(topbar.slice(rightIndex).includes("$store.ap.statusLabel"), "状态在右");
+	assert.ok(!topbar.includes("topbar__side"), "三列居中布局已删除");
 
-	const topbarRule = css.slice(css.indexOf(".topbar {"), css.indexOf(".topbar__side"));
-	assert.ok(
-		topbarRule.includes("grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)"),
-		"两侧等宽的 1fr 把标题推到正中",
-	);
-	const headingRule = css.slice(css.indexOf(".topbar__heading {"), css.indexOf(".topbar__title {"));
-	assert.ok(headingRule.includes("justify-content: center"), "标题组自身居中");
+	const topbarRule = css.slice(css.indexOf(".topbar {"), css.indexOf(".topbar__sessions-btn"));
+	assert.ok(topbarRule.includes("display: flex"), "标题行是一条 flex 行");
+	assert.ok(!topbarRule.includes("grid-template-columns"), "不再用等宽 1fr 把标题钉在正中");
 });
 
-test("顶栏右侧是在工作目录打开文件管理器与终端的两个按钮", async () => {
+test("对话栏标题行是在工作目录打开文件管理器与终端的两个按钮", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const css = await readFile(stylesPath, "utf8");
-	const titlebarStart = html.indexOf('<header class="titlebar">');
-	const titlebarEnd = html.indexOf("</header>");
-	assert.ok(titlebarStart >= 0 && titlebarEnd > titlebarStart, "index.html must have a titlebar");
-	const titlebar = html.slice(titlebarStart, titlebarEnd);
 
-	assert.ok(!titlebar.includes("titlebar__env"), "环境标签被两个操作按钮取代");
-	assert.ok(!/>本地</.test(titlebar), "titlebar must not keep the 本地 label");
+	const headStart = html.indexOf('class="sessions__head"');
+	const headEnd = html.indexOf('class="new-session"');
+	assert.ok(headStart >= 0 && headEnd > headStart, "两个按钮在对话栏标题行");
+	const head = html.slice(headStart, headEnd);
 
-	assert.ok(titlebar.includes('@click="openWorkdirFiles()"'), "打开文件管理器是一个独立按钮");
-	assert.ok(titlebar.includes('@click="openWorkdirTerminal()"'), "打开终端是一个独立按钮");
-	assert.ok(titlebar.includes('data-icon="folder2-open"'), "文件管理器按钮使用文件夹图标");
-	assert.ok(titlebar.includes('data-icon="terminal"'), "终端按钮使用终端图标");
-	assert.ok(
-		titlebar.includes(':disabled="!$store.ap.projectCwd"'),
-		"没有工作目录时按钮不可点",
-	);
+	assert.ok(head.includes('@click="openWorkdirFiles()"'), "打开文件管理器是一个独立按钮");
+	assert.ok(head.includes('@click="openWorkdirTerminal()"'), "打开终端是一个独立按钮");
+	assert.ok(head.includes('data-icon="folder2-open"'), "文件管理器按钮使用文件夹图标");
+	assert.ok(head.includes('data-icon="terminal"'), "终端按钮使用终端图标");
+	assert.ok(head.includes(':disabled="!$store.ap.projectCwd"'), "没有工作目录时按钮不可点");
 
-	assert.ok(css.includes(".titlebar__open-btn"), "titlebar buttons need their own style");
-	assert.ok(
-		!css.includes(".titlebar__env"),
-		"旧的本地标签样式必须一起删掉",
-	);
+	assert.ok(css.includes(".sessions__actions"), "两个按钮有自己的容器样式");
+	assert.ok(!css.includes(".titlebar__open-btn"), "旧顶栏按钮样式必须一起删掉");
+	assert.ok(!css.includes(".titlebar"), "旧顶栏样式必须一起删掉");
 });
 
 test("键位提示进 placeholder，交接入口在输入框下方", async () => {
@@ -246,7 +194,7 @@ test("键位提示进 placeholder，交接入口在输入框下方", async () =>
 	assert.ok(css.includes(".composer__handoff"), "交接按钮有自己的样式");
 });
 
-test("工作区顶栏展示 token 用量", async () => {
+test("标题行右侧展示 token 用量", async () => {
 	const html = await readFile(indexPath, "utf8");
 	const topbarStart = html.indexOf('<header class="topbar">');
 	const topbarEnd = html.indexOf("</header>", topbarStart);
@@ -290,13 +238,15 @@ test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐�
 		"cards must sit on white",
 	);
 
-	// 新布局：顶部工作空间标签 + 左栏对话记录 + 右栏工作区。
+	// 三栏工作台：两栏定宽，正文吃掉剩下的宽度。
+	assert.match(css, /\.rail\s*\{[^}]*width:\s*var\(--rail-w\)/, "左栏宽度来自变量");
 	assert.match(
 		css,
-		/\.app__body\s*\{[^}]*grid-template-columns:\s*var\(--sidebar-w\)/,
-		"body splits into a conversation sidebar and a workspace",
+		/\.sessions-col\s*\{[^}]*width:\s*var\(--sessions-w\)/,
+		"中栏宽度来自变量",
 	);
-	assert.ok(css.includes(".workspace-tab.is-active"), "active workspace tab needs its own state");
+	assert.match(css, /\.workspace\s*\{[^}]*flex:\s*1 1 auto/, "正文吃掉剩余宽度");
+	assert.ok(css.includes(".workspace-item.is-active"), "当前工作空间项需要自己的状态");
 	assert.match(
 		css,
 		/body\s*\{[^}]*padding:\s*0/,
@@ -304,8 +254,8 @@ test("iOS 18 扁平风格：系统色分组底 + 白卡片，不用模糊与渐�
 	);
 	assert.match(
 		css,
-		/\.session\.is-active\s*\{[^}]*background:\s*var\(--accent\)/,
-		"the current conversation is highlighted in system blue",
+		/\.session\.is-active\s*\{[^}]*background:\s*var\(--accent-tint\)/,
+		"the current conversation is highlighted with the system blue tint",
 	);
 
 	// 控件保持胶囊/圆形，与 iOS 的默认形状一致。
@@ -346,6 +296,38 @@ test("图标来自 bootstrap-icons：源码只留 data-icon 占位，dist 已内
 		null,
 		"dist/index.html 的图标还没内联，先跑 npm --prefix ap-web run build",
 	);
+});
+
+test("对话项是标题 + 时间 + 状态点，工具卡片和当前文件各有状态指示", async () => {
+	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
+
+	const sessionsStart = html.indexOf('<aside class="sessions-col"');
+	const sessions = html.slice(sessionsStart, html.indexOf("</aside>", sessionsStart));
+	assert.ok(sessions.includes('class="session__title"'), "第一行是标题");
+	assert.ok(sessions.includes("sessionTime(session.ts)"), "第二行左侧是本地时间");
+	assert.ok(sessions.includes('class="session__dot"'), "第二行右侧是状态点");
+	assert.ok(
+		sessions.includes(":data-running=\"session.running ? 'true' : null\""),
+		"状态点由 running 派生",
+	);
+	assert.ok(
+		css.includes('.session__dot[data-running="true"]') && css.includes("animation: pulse"),
+		"运行中的对话是脉冲点",
+	);
+
+	assert.ok(html.includes('class="tool__dot"'), "工具卡片头部有状态点");
+	for (const state of ["running", "ok", "error"]) {
+		assert.ok(
+			css.includes(`.tool[data-status="${state}"] .tool__dot`),
+			`工具状态 ${state} 有自己的点色`,
+		);
+	}
+
+	// 「当前修改的文件」默认不显示，只有工具改写文件后才由 store 派生出路径。
+	assert.ok(html.includes('class="thread-file"') && html.includes('x-show="$store.ap.currentFile"'), "当前文件指示默认隐藏");
+	assert.ok(html.includes("copyCurrentPath()"), "点一下复制完整路径");
+	assert.ok(css.includes(".thread-file__btn"), "指示本身是一个小胶囊");
 });
 
 test("工具卡片默认折叠，头部只留关键行与耗时；思考中在主区域居中显示动画", async () => {

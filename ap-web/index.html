@@ -11,16 +11,78 @@
 </head>
 <body x-data="apApp" x-init="init()" x-cloak>
 
-<div class="app" :class="{ 'app--sidebar-collapsed': $store.ap.sidebarCollapsed }">
-  <header class="titlebar">
-    <div class="brand">
+<!-- 三栏工作台：工作空间栏 / 对话栏 / 对话正文。 -->
+<div
+  class="app"
+  :class="{
+    'app--rail-hidden': !$store.ap.railVisible,
+    'app--sessions-hidden': !$store.ap.sessionsVisible,
+  }"
+>
+  <aside class="rail" id="workspace-rail" aria-label="工作空间">
+    <div class="rail__head">
       <span class="brand__mark" aria-hidden="true">ap</span>
+      <div class="rail__actions">
+        <button
+          class="icon-btn"
+          type="button"
+          @click="openWorkspace()"
+          :disabled="$store.ap.loading || $store.ap.picking"
+          title="打开新的工作空间"
+          aria-label="打开新的工作空间"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="plus-lg" aria-hidden="true"></svg>
+        </button>
+
+        <div class="rail__sort" @click.outside="closeSortMenu()" @keydown.escape="closeSortMenu()">
+          <button
+            class="icon-btn"
+            type="button"
+            id="sort-trigger"
+            @click="toggleSortMenu()"
+            :aria-expanded="sortOpen ? 'true' : 'false'"
+            aria-controls="sort-menu"
+            :title="'排序：' + $store.ap.sortLabel"
+            :aria-label="'排序：' + $store.ap.sortLabel"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-down-up" aria-hidden="true"></svg>
+          </button>
+          <!-- 两个互斥的开关按钮。这里不用 role="menu"：菜单语义要求方向键导航，
+               而我们只是个两选项的排序面板，用 aria-pressed 说明当前选中项。 -->
+          <div class="menu" id="sort-menu" x-show="sortOpen" x-cloak aria-label="排序">
+            <button
+              class="menu__item"
+              type="button"
+              :aria-pressed="$store.ap.sortOrder === 'recent' ? 'true' : 'false'"
+              @click="setSortOrder('recent')"
+            >最近活动</button>
+            <button
+              class="menu__item"
+              type="button"
+              :aria-pressed="$store.ap.sortOrder === 'name' ? 'true' : 'false'"
+              @click="setSortOrder('name')"
+            >名称</button>
+          </div>
+        </div>
+
+        <button
+          class="icon-btn"
+          type="button"
+          @click="toggleRail()"
+          :aria-expanded="$store.ap.railVisible ? 'true' : 'false'"
+          aria-controls="workspace-rail"
+          title="折叠工作空间栏"
+          aria-label="折叠工作空间栏"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="layout-sidebar-inset" aria-hidden="true"></svg>
+        </button>
+      </div>
     </div>
 
-    <nav class="workspaces" aria-label="工作空间">
+    <nav class="rail__list" aria-label="工作空间">
       <template x-for="project in $store.ap.workspaceProjects" :key="project.cwd">
         <button
-          class="workspace-tab"
+          class="workspace-item"
           type="button"
           :class="{ 'is-active': isActiveProject(project) }"
           :aria-current="isActiveProject(project) ? 'true' : null"
@@ -28,280 +90,305 @@
           :disabled="$store.ap.loading"
           @click="switchWorkspace(project)"
         >
-          <svg class="workspace-tab__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="folder2" aria-hidden="true"></svg>
-          <span class="workspace-tab__name" x-text="projectName(project)"></span>
+          <svg class="workspace-item__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="folder2" aria-hidden="true"></svg>
+          <span class="workspace-item__name" x-text="projectName(project)"></span>
         </button>
       </template>
     </nav>
+  </aside>
+
+  <aside class="sessions-col" id="session-sidebar">
+    <div class="sessions__head">
+      <button
+        class="icon-btn"
+        type="button"
+        x-show="!$store.ap.railVisible"
+        @click="toggleRail()"
+        :aria-expanded="$store.ap.railVisible ? 'true' : 'false'"
+        aria-controls="workspace-rail"
+        title="展开工作空间栏"
+        aria-label="展开工作空间栏"
+      >
+        <svg viewBox="0 0 16 16" fill="currentColor" data-icon="layout-sidebar-inset" aria-hidden="true"></svg>
+      </button>
+      <p class="sessions__label">对话</p>
+      <div class="sessions__actions">
+        <button
+          class="icon-btn"
+          type="button"
+          @click="openWorkdirFiles()"
+          :disabled="!$store.ap.projectCwd"
+          title="在当前工作目录打开文件管理器"
+          aria-label="在当前工作目录打开文件管理器"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="folder2-open" aria-hidden="true"></svg>
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          @click="openWorkdirTerminal()"
+          :disabled="!$store.ap.projectCwd"
+          title="在当前工作目录打开终端"
+          aria-label="在当前工作目录打开终端"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="terminal" aria-hidden="true"></svg>
+        </button>
+      </div>
+    </div>
 
     <button
-      class="workspace-add"
+      class="new-session"
       type="button"
-      @click="openWorkspace()"
-      :disabled="$store.ap.loading || $store.ap.picking"
-      title="打开新的工作空间"
-      aria-label="打开新的工作空间"
+      @click="newSession()"
+      :disabled="$store.ap.loading"
     >
-      <svg viewBox="0 0 16 16" fill="currentColor" data-icon="plus-lg" aria-hidden="true"></svg>
+      <svg class="new-session__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="plus-lg" aria-hidden="true"></svg>
+      新对话
     </button>
 
-    <div class="titlebar__open">
+    <nav class="sessions" aria-label="对话记录">
       <button
-        class="titlebar__open-btn"
+        class="session session--draft is-active"
         type="button"
-        @click="openWorkdirFiles()"
-        :disabled="!$store.ap.projectCwd"
-        title="在文件管理器中打开工作目录"
-        aria-label="在文件管理器中打开工作目录"
-      >
-        <svg viewBox="0 0 16 16" fill="currentColor" data-icon="folder2-open" aria-hidden="true"></svg>
-      </button>
-      <button
-        class="titlebar__open-btn"
-        type="button"
-        @click="openWorkdirTerminal()"
-        :disabled="!$store.ap.projectCwd"
-        title="在工作目录打开终端"
-        aria-label="在工作目录打开终端"
-      >
-        <svg viewBox="0 0 16 16" fill="currentColor" data-icon="terminal" aria-hidden="true"></svg>
-      </button>
-    </div>
-  </header>
-
-  <div class="app__body">
-    <aside class="sidebar" id="session-sidebar">
-      <button
-        class="new-session"
-        type="button"
-        @click="newSession()"
+        x-show="showsDraftSession()"
         :disabled="$store.ap.loading"
+        title="新会话"
+        @click="newSession()"
       >
-        <svg class="new-session__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="plus-lg" aria-hidden="true"></svg>
-        开启新对话
+        <span class="session__title" x-text="$store.ap.sessionId ? sessionTitle({ session_id: $store.ap.sessionId }) : '新会话'"></span>
+        <span class="session__foot">
+          <span class="session__time" x-text="$store.ap.running ? '运行中' : '尚未开始'"></span>
+          <span class="session__dot" :data-running="$store.ap.running ? 'true' : null" aria-hidden="true"></span>
+        </span>
       </button>
 
-      <p class="sidebar__label">对话记录</p>
-
-      <nav class="sessions" aria-label="对话记录">
+      <template x-for="session in $store.ap.sortedSessions" :key="session.session_id">
         <button
-          class="session session--draft is-active"
+          class="session"
           type="button"
-          x-show="showsDraftSession()"
+          :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
+          :aria-current="session.session_id === $store.ap.sessionId ? 'true' : null"
           :disabled="$store.ap.loading"
-          title="新会话"
-          @click="newSession()"
+          :title="session.session_id"
+          @click="selectSession(session)"
         >
-          <span class="session__title" x-text="$store.ap.sessionId ? sessionTitle({ session_id: $store.ap.sessionId }) : '新会话'"></span>
-          <span class="session__meta" x-text="$store.ap.running ? '运行中' : '尚未开始'"></span>
+          <span class="session__title" x-text="sessionTitle(session)"></span>
+          <span class="session__foot">
+            <span class="session__time" x-text="sessionTime(session.ts)"></span>
+            <span
+              class="session__dot"
+              x-show="session.running || session.session_id === $store.ap.sessionId"
+              :data-running="session.running ? 'true' : null"
+              aria-hidden="true"
+            ></span>
+          </span>
         </button>
+      </template>
 
-        <template x-for="group in $store.ap.sessionGroups" :key="group.key">
-          <section class="session-group">
-            <p class="session-group__label" x-text="group.label"></p>
-            <template x-for="session in group.sessions" :key="session.session_id">
-              <button
-                class="session"
-                type="button"
-                :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
-                :aria-current="session.session_id === $store.ap.sessionId ? 'true' : null"
-                :disabled="$store.ap.loading"
-                :title="session.session_id"
-                @click="selectSession(session)"
-              >
-                <span class="session__title" x-text="sessionTitle(session)"></span>
-                <span class="session__meta" x-text="sessionMeta(session)"></span>
-              </button>
-            </template>
-          </section>
-        </template>
+      <p class="sessions__empty" x-show="showsEmptySessions()">暂无对话</p>
+    </nav>
+  </aside>
 
-        <p class="sessions__empty" x-show="showsEmptySessions()">暂无对话</p>
-      </nav>
-    </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <button
+        class="icon-btn topbar__sessions-btn"
+        type="button"
+        x-show="$store.ap.layoutMode === 'compact'"
+        @click="toggleSessions()"
+        :aria-expanded="$store.ap.sessionsVisible ? 'true' : 'false'"
+        aria-controls="session-sidebar"
+        title="对话记录"
+        aria-label="对话记录"
+      >
+        <svg viewBox="0 0 16 16" fill="currentColor" data-icon="list" aria-hidden="true"></svg>
+      </button>
 
-    <div class="workspace">
-      <header class="topbar">
-        <div class="topbar__side">
-          <button
-            class="topbar__sidebar-btn"
-            type="button"
-            @click="toggleSidebar()"
-            :aria-expanded="!$store.ap.sidebarCollapsed"
-            aria-controls="session-sidebar"
-            :title="$store.ap.sidebarCollapsed ? '展开对话记录' : '收起对话记录'"
-            :aria-label="$store.ap.sidebarCollapsed ? '展开对话记录' : '收起对话记录'"
-          >
-            <svg viewBox="0 0 16 16" fill="currentColor" data-icon="layout-sidebar-inset" aria-hidden="true"></svg>
-          </button>
-        </div>
-        <div class="topbar__heading">
-          <h1 class="topbar__title" x-text="$store.ap.currentTitle"></h1>
-          <button
-            class="topbar__title-btn"
-            type="button"
-            @click="refreshTitle()"
-            :disabled="$store.ap.running || $store.ap.loading || titlePending || !$store.ap.sessionId"
-            title="重新生成会话标题"
-            aria-label="重新生成会话标题"
-          >
-            <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-clockwise" aria-hidden="true"></svg>
-          </button>
-        </div>
-        <div class="topbar__right">
-          <span class="chip" x-show="$store.ap.config?.model" x-text="$store.ap.config?.model"></span>
-          <span class="chip" x-show="$store.ap.config?.agent" x-text="$store.ap.config?.agent"></span>
-          <span
-            class="chip chip--usage"
-            x-show="$store.ap.usageLabel"
-            :title="$store.ap.usageTitle"
-            x-text="$store.ap.usageLabel"
-          ></span>
-          <span class="status" :data-state="$store.ap.statusKind" x-text="$store.ap.statusLabel"></span>
-        </div>
-      </header>
-
-      <div class="thread">
-        <main
-          class="messages"
-          x-ref="messages"
-          @scroll.passive="onMessagesScroll()"
-          :aria-busy="$store.ap.running ? 'true' : null"
-        >
-          <div class="messages__empty" x-show="$store.ap.items.length === 0">
-            <span class="messages__empty-mark" aria-hidden="true">a</span>
-            <p class="messages__empty-title">今天要做什么？</p>
-            <p class="messages__empty-hint" x-show="$store.ap.loading">正在载入会话…</p>
-            <p class="messages__empty-hint" x-show="!$store.ap.loading">输入提示词，ap 会在当前工作目录里开始一轮。</p>
-          </div>
-
-          <template x-for="item in $store.ap.items" :key="item.key">
-            <div class="event">
-              <template x-if="item.kind === 'user'">
-                <article class="msg msg--user">
-                  <p class="msg__text" x-text="item.text"></p>
-                </article>
-              </template>
-
-              <template x-if="item.kind === 'assistant'">
-                <article class="msg msg--assistant">
-                  <div
-                    class="msg__text msg__text--markdown markdown-body"
-                    :class="{ 'is-streaming': !item.ended }"
-                    :data-streaming="item.ended ? null : 'true'"
-                    x-html="renderMarkdown(item.text)"
-                  ></div>
-                </article>
-              </template>
-
-              <template x-if="item.kind === 'tool'">
-                <details class="tool" :data-status="item.status">
-                  <summary class="tool__head" :title="item.args || item.name">
-                    <span class="tool__dot" aria-hidden="true"></span>
-                    <span class="tool__name" x-text="item.name"></span>
-                    <span class="tool__args" x-show="item.args" x-text="item.args"></span>
-                    <span class="tool__meta" x-show="item.durationMs !== null" x-text="formatDuration(item.durationMs)"></span>
-                    <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
-                    <svg class="tool__chevron" viewBox="0 0 16 16" fill="currentColor" data-icon="chevron-right" aria-hidden="true"></svg>
-                  </summary>
-                  <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
-                  <p class="tool__error" x-show="item.error" x-text="item.error"></p>
-                  <p class="tool__note" x-show="item.truncated">… 已截断，完整内容在 transcript</p>
-                </details>
-              </template>
-
-              <template x-if="item.kind === 'notice'">
-                <p
-                  class="notice"
-                  :data-tone="item.tone"
-                  :role="item.tone === 'error' ? 'alert' : null"
-                  x-text="item.text"
-                ></p>
-              </template>
-            </div>
-          </template>
-
-          <div class="thinking" x-show="$store.ap.thinking" aria-live="polite">
-            <span class="thinking__dots" aria-hidden="true"><span></span><span></span><span></span></span>
-            <span>思考中</span>
-          </div>
-        </main>
-
+      <div class="topbar__heading">
+        <h1 class="topbar__title" x-text="$store.ap.currentTitle"></h1>
         <button
-          class="scroll-bottom"
+          class="topbar__title-btn"
           type="button"
-          x-show="!$store.ap.atBottom"
-          @click="scrollToBottom()"
-          aria-label="回到底部"
-          title="回到底部"
+          @click="refreshTitle()"
+          :disabled="$store.ap.running || $store.ap.loading || titlePending || !$store.ap.sessionId"
+          title="重新生成会话标题"
+          aria-label="重新生成会话标题"
         >
-          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-down" aria-hidden="true"></svg>
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-clockwise" aria-hidden="true"></svg>
         </button>
       </div>
 
-      <footer class="composer">
-        <div class="composer__box">
-          <label class="visually-hidden" for="prompt">提示词</label>
-          <textarea
-            id="prompt"
-            class="composer__input"
-            x-ref="input"
-            rows="1"
-            x-model="$store.ap.draft"
-            @keydown="onKeydown($event)"
-            :disabled="$store.ap.loading"
-            placeholder="给 ap 一个提示词…（Enter 发送 · Shift+Enter 换行）"
-          ></textarea>
+      <div class="topbar__right">
+        <span
+          class="status"
+          x-show="$store.ap.statusKind !== 'idle'"
+          :data-state="$store.ap.statusKind"
+          :title="$store.ap.statusLabel"
+          :aria-label="$store.ap.statusLabel"
+        ></span>
+        <span
+          class="chip chip--usage"
+          x-show="$store.ap.usageLabel"
+          :title="$store.ap.usageTitle"
+          x-text="$store.ap.usageLabel"
+        ></span>
+      </div>
+    </header>
 
-          <div class="composer__bar">
-            <div class="composer__actions">
-              <span
-                class="composer__cwd"
-                x-show="$store.ap.projectCwd ?? $store.ap.config?.cwd"
-                :title="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
-                x-text="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
-              ></span>
-              <button
-                class="control composer__handoff"
-                type="button"
-                @click="sendHandoff()"
-                :disabled="$store.ap.running || $store.ap.loading || !$store.ap.sessionId"
-                title="把当前会话交接给一个新会话；输入框里的文字会作为交接后的首个提示词"
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" data-icon="box-arrow-right" aria-hidden="true"></svg>
-                交接
-              </button>
-            </div>
+    <div class="thread">
+      <!-- 本会话最近一次被改写的文件；点击复制完整路径。 -->
+      <div class="thread-file" x-show="$store.ap.currentFile">
+        <button
+          class="thread-file__btn"
+          type="button"
+          @click="copyCurrentPath()"
+          :title="'复制路径：' + $store.ap.currentFile"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" data-icon="file-earmark-code" aria-hidden="true"></svg>
+          <span class="thread-file__name" x-text="$store.ap.currentFileName"></span>
+        </button>
+      </div>
 
-            <div class="composer__buttons">
-              <button
-                class="control composer__stop"
-                type="button"
-                x-show="$store.ap.running"
-                @click="cancel"
-                :disabled="$store.ap.cancelling"
-                title="停止当前 turn"
-              >
-                <span class="composer__stop-mark" aria-hidden="true"><svg viewBox="0 0 16 16" fill="currentColor" data-icon="stop-fill"></svg></span>
-                <span x-text="$store.ap.cancelling ? '取消中' : '停止'"></span>
-              </button>
-              <button
-                class="composer__send"
-                type="button"
-                @click="send"
-                :disabled="$store.ap.running || $store.ap.loading || !$store.ap.draft.trim()"
-                aria-label="发送"
-                title="发送"
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-up" aria-hidden="true"></svg>
-              </button>
-            </div>
-          </div>
+      <main
+        class="messages"
+        x-ref="messages"
+        @scroll.passive="onMessagesScroll()"
+        :aria-busy="$store.ap.running ? 'true' : null"
+      >
+        <div class="messages__empty" x-show="$store.ap.items.length === 0">
+          <span class="messages__empty-mark" aria-hidden="true">a</span>
+          <p class="messages__empty-title">今天要做什么？</p>
+          <p class="messages__empty-hint" x-show="$store.ap.loading">正在载入会话…</p>
+          <p class="messages__empty-hint" x-show="!$store.ap.loading">输入提示词，ap 会在当前工作目录里开始一轮。</p>
         </div>
 
-      </footer>
+        <template x-for="item in $store.ap.items" :key="item.key">
+          <div class="event">
+            <template x-if="item.kind === 'user'">
+              <article class="msg msg--user">
+                <p class="msg__text" x-text="item.text"></p>
+              </article>
+            </template>
+
+            <template x-if="item.kind === 'assistant'">
+              <article class="msg msg--assistant">
+                <div
+                  class="msg__text msg__text--markdown markdown-body"
+                  :class="{ 'is-streaming': !item.ended }"
+                  :data-streaming="item.ended ? null : 'true'"
+                  x-html="renderMarkdown(item.text)"
+                ></div>
+              </article>
+            </template>
+
+            <template x-if="item.kind === 'tool'">
+              <details class="tool" :data-status="item.status">
+                <summary class="tool__head" :title="item.args || item.name">
+                  <span class="tool__dot" aria-hidden="true"></span>
+                  <span class="tool__name" x-text="item.name"></span>
+                  <span class="tool__args" x-show="item.args" x-text="item.args"></span>
+                  <span class="tool__meta" x-show="item.durationMs !== null" x-text="formatDuration(item.durationMs)"></span>
+                  <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
+                  <svg class="tool__chevron" viewBox="0 0 16 16" fill="currentColor" data-icon="chevron-right" aria-hidden="true"></svg>
+                </summary>
+                <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
+                <p class="tool__error" x-show="item.error" x-text="item.error"></p>
+                <p class="tool__note" x-show="item.truncated">… 已截断，完整内容在 transcript</p>
+              </details>
+            </template>
+
+            <template x-if="item.kind === 'notice'">
+              <p
+                class="notice"
+                :data-tone="item.tone"
+                :role="item.tone === 'error' ? 'alert' : null"
+                x-text="item.text"
+              ></p>
+            </template>
+          </div>
+        </template>
+
+        <div class="thinking" x-show="$store.ap.thinking" aria-live="polite">
+          <span class="thinking__dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>思考中</span>
+        </div>
+      </main>
+
+      <button
+        class="scroll-bottom"
+        type="button"
+        x-show="!$store.ap.atBottom"
+        @click="scrollToBottom()"
+        aria-label="回到底部"
+        title="回到底部"
+      >
+        <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-down" aria-hidden="true"></svg>
+      </button>
     </div>
+
+    <footer class="composer">
+      <div class="composer__box">
+        <label class="visually-hidden" for="prompt">提示词</label>
+        <textarea
+          id="prompt"
+          class="composer__input"
+          x-ref="input"
+          rows="1"
+          x-model="$store.ap.draft"
+          @keydown="onKeydown($event)"
+          :disabled="$store.ap.loading"
+          placeholder="给 ap 一个提示词…（Enter 发送 · Shift+Enter 换行）"
+        ></textarea>
+
+        <div class="composer__bar">
+          <div class="composer__actions">
+            <span
+              class="composer__cwd"
+              x-show="$store.ap.projectCwd ?? $store.ap.config?.cwd"
+              :title="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
+              x-text="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
+            ></span>
+          </div>
+
+          <div class="composer__buttons">
+            <button
+              class="control composer__handoff"
+              type="button"
+              @click="sendHandoff()"
+              :disabled="$store.ap.running || $store.ap.loading || !$store.ap.sessionId"
+              title="把当前会话交接给一个新会话；输入框里的文字会作为交接后的首个提示词"
+            >
+              <svg viewBox="0 0 16 16" fill="currentColor" data-icon="box-arrow-right" aria-hidden="true"></svg>
+              交接
+            </button>
+            <button
+              class="control composer__stop"
+              type="button"
+              x-show="$store.ap.running"
+              @click="cancel"
+              :disabled="$store.ap.cancelling"
+              title="停止当前 turn"
+            >
+              <span class="composer__stop-mark" aria-hidden="true"><svg viewBox="0 0 16 16" fill="currentColor" data-icon="stop-fill"></svg></span>
+              <span x-text="$store.ap.cancelling ? '取消中' : '停止'"></span>
+            </button>
+            <button
+              class="composer__send"
+              type="button"
+              @click="send"
+              :disabled="$store.ap.running || $store.ap.loading || !$store.ap.draft.trim()"
+              aria-label="发送"
+              title="发送"
+            >
+              <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-up" aria-hidden="true"></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </footer>
   </div>
+
+  <div class="scrim" x-show="$store.ap.overlayOpen" @click="closeOverlays()" aria-hidden="true"></div>
 </div>
 
 </body>

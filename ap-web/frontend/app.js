@@ -10,14 +10,20 @@ import { watchMermaid } from "./mermaid-blocks.js";
 import {
 	formatDuration,
 	projectName as projectDisplayName,
-	sessionMeta,
+	sessionTime,
 	sessionTitle,
 } from "./render.js";
 import { createEventStream } from "./sse.js";
 
 const SESSION_STORAGE_KEY = "ap-web:session";
-// 侧栏折叠是跨标签页的界面偏好，存 localStorage 而不是 sessionStorage。
-const SIDEBAR_STORAGE_KEY = "ap-web:sidebar-collapsed";
+// 工作空间栏折叠是跨标签页的界面偏好，存 localStorage 而不是 sessionStorage。
+// 键名沿用旧版的 sidebar 折叠键，升级后用户的偏好不会丢。
+const RAIL_STORAGE_KEY = "ap-web:sidebar-collapsed";
+// 列表排序偏好：最近活动 / 名称，两个列表共用。
+const SORT_STORAGE_KEY = "ap-web:sort";
+// 布局分档：宽屏三栏、窄屏折叠工作空间栏、紧凑屏两个侧栏都是浮层。
+const NARROW_QUERY = "(max-width: 1100px)";
+const COMPACT_QUERY = "(max-width: 820px)";
 // 离底部多近算「贴底」：留一点余量，滚轮多走一格不至于立刻弹按钮。
 const BOTTOM_GAP_PX = 32;
 
@@ -39,6 +45,8 @@ export function registerApp(Alpine) {
 		flushHandle: 0,
 		// 滚动事件按帧节流，避免每个 scroll 都读一次 scrollHeight。
 		scrollHandle: 0,
+		// 排序菜单是瞬态 UI，不持久化。
+		sortOpen: false,
 
 		// 绑定给 x-html：assistant 文本按 Markdown 渲染。
 		renderMarkdown,
@@ -66,7 +74,9 @@ export function registerApp(Alpine) {
 			});
 
 			const store = this.$store.ap;
-			this.restoreSidebar();
+			this.restoreRail();
+			this.restoreSort();
+			this.watchLayout();
 			store.reset(null);
 			this.$nextTick(() => this.watchMermaidBlocks());
 			this.boot();
@@ -84,22 +94,102 @@ export function registerApp(Alpine) {
 		},
 
 		// 侧栏折叠只改布局，不影响当前会话；宽度变化后贴底才需要重新跟随。
-		toggleSidebar() {
-			const collapsed = !this.$store.ap.sidebarCollapsed;
-			this.$store.ap.setSidebarCollapsed(collapsed);
-			try {
-				localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? "1" : "0");
-			} catch {
-				// 隐私模式/禁用存储：本次仍然生效，只是不记忆。
+		// 宽屏下切换的是持久化的折叠偏好，窄屏下切换的是本次浮层。
+		toggleRail() {
+			const store = this.$store.ap;
+			if (store.layoutMode === "wide") {
+				const collapsed = !store.railCollapsed;
+				store.setRailCollapsed(collapsed);
+				try {
+					localStorage.setItem(RAIL_STORAGE_KEY, collapsed ? "1" : "0");
+				} catch {
+					// 隐私模式/禁用存储：本次仍然生效，只是不记忆。
+				}
+			} else {
+				const open = !store.railOpen;
+				store.setRailOpen(open);
+				// 两个浮层不堆叠：展开一个就收起另一个。
+				if (open) store.setSessionsOpen(false);
 			}
 			this.$nextTick(() => this.autoScroll());
 		},
 
-		restoreSidebar() {
+		// 紧凑屏：对话栏是浮层，由主区标题行的按钮开关。
+		toggleSessions() {
+			const store = this.$store.ap;
+			const open = !store.sessionsOpen;
+			store.setSessionsOpen(open);
+			if (open) store.setRailOpen(false);
+		},
+
+		closeOverlays() {
+			const store = this.$store.ap;
+			store.setRailOpen(false);
+			store.setSessionsOpen(false);
+		},
+
+		restoreRail() {
 			try {
-				this.$store.ap.setSidebarCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1");
+				this.$store.ap.setRailCollapsed(localStorage.getItem(RAIL_STORAGE_KEY) === "1");
 			} catch {
-				this.$store.ap.setSidebarCollapsed(false);
+				this.$store.ap.setRailCollapsed(false);
+			}
+		},
+
+		// 布局分档交给 CSS 断点，JS 只记录当前档位决定哪侧栏是浮层。
+		// 这两个阈值必须和 styles.css 里的 @media 保持一致。
+		watchLayout() {
+			const narrow = matchMedia(NARROW_QUERY);
+			const compact = matchMedia(COMPACT_QUERY);
+			const sync = () => {
+				const mode = compact.matches ? "compact" : narrow.matches ? "narrow" : "wide";
+				this.$store.ap.setLayoutMode(mode);
+				// 变宽后浮层自动收起，避免残留一块盖在正文上的面板。
+				if (mode === "wide") this.closeOverlays();
+			};
+			sync();
+			for (const query of [narrow, compact]) {
+				query.addEventListener("change", sync);
+			}
+		},
+
+		toggleSortMenu() {
+			this.sortOpen = !this.sortOpen;
+		},
+
+		closeSortMenu() {
+			this.sortOpen = false;
+		},
+
+		setSortOrder(order) {
+			this.$store.ap.setSortOrder(order);
+			this.sortOpen = false;
+			try {
+				localStorage.setItem(SORT_STORAGE_KEY, this.$store.ap.sortOrder);
+			} catch {
+				// 不记忆也不影响本次排序。
+			}
+		},
+
+		restoreSort() {
+			try {
+				this.$store.ap.setSortOrder(localStorage.getItem(SORT_STORAGE_KEY));
+			} catch {
+				this.$store.ap.setSortOrder("recent");
+			}
+		},
+
+		// 「当前修改的文件」只显示文件名，点击复制完整路径。
+		async copyCurrentPath() {
+			const store = this.$store.ap;
+			const path = store.currentFile;
+			if (!path) return;
+			try {
+				await navigator.clipboard.writeText(path);
+				store.notice(`已复制路径：${path}`, "muted");
+			} catch {
+				// 非安全上下文（http）下没有 clipboard API，退回一行提示而不静默失败。
+				store.notice(`复制失败，路径：${path}`, "warning");
 			}
 		},
 
@@ -611,6 +701,8 @@ export function registerApp(Alpine) {
 			// @click="newSession" 会把 MouseEvent 当参数传进来；只接受路径字符串。
 			const requested = typeof cwd === "string" ? cwd.trim() : "";
 			const target = requested || store.projectCwd || this.defaultCwd();
+			// 紧凑屏下「新对话」在浮层里：开完就把浮层收起来。
+			this.closeOverlays();
 			store.setLoading(true);
 			try {
 				const created = await api.newSession(target);
@@ -635,10 +727,11 @@ export function registerApp(Alpine) {
 			}
 		},
 
-		// 点击顶部工作空间标签：切到该目录最近一条对话；还没有对话就在该目录开新 slot。
+		// 点击工作空间栏的列表项：切到该目录最近一条对话；还没有对话就在该目录开新 slot。
 		switchWorkspace(project) {
 			const store = this.$store.ap;
 			if (!project?.cwd || store.loading) return;
+			this.closeOverlays();
 			if (project.cwd === store.projectCwd) return;
 			const latest = project.sessions?.[0];
 			if (latest?.session_id) {
@@ -652,7 +745,7 @@ export function registerApp(Alpine) {
 			return this.pickDirectory();
 		},
 
-		// 顶栏右侧两个按钮：在本机打开当前工作目录的文件管理器 / 终端。
+		// 对话栏标题行两个按钮：在本机打开当前工作目录的文件管理器 / 终端。
 		// 只是让服务端起一个外部进程，不改变任何 session 或 cwd。
 		openWorkdirFiles() {
 			return this.openWorkdir("files");
@@ -700,6 +793,7 @@ export function registerApp(Alpine) {
 		selectSession(session) {
 			const cwd = this.$store.ap.projectCwd;
 			if (!cwd || !session?.session_id) return;
+			this.closeOverlays();
 			return this.resumeSession(session.session_id, cwd);
 		},
 
@@ -760,8 +854,9 @@ export function registerApp(Alpine) {
 			return sessionTitle(session);
 		},
 
-		sessionMeta(session) {
-			return sessionMeta(session);
+		// 对话列表第二行的本地时间。
+		sessionTime(ts) {
+			return sessionTime(ts);
 		},
 
 		onKeydown(event) {
