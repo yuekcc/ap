@@ -150,6 +150,8 @@ test("两个侧栏的分隔条可拖动可键盘调整，宽度写回 CSS 变量
 		assert.ok(split.includes("resetPanelWidth("), "双击回到默认宽度");
 	}
 	assert.ok(railSplit.includes(":aria-valuenow=\"$store.ap.railWidth\""), "第一处分隔条管工作空间栏");
+	assert.ok(railSplit.includes(":data-active=\"resizing === 'rail'"), "只有被拖的那条高亮");
+	assert.ok(sessionsSplit.includes(":data-active=\"resizing === 'sessions'"), "两条各自标记自己在拖");
 	assert.ok(sessionsSplit.includes(":aria-valuenow=\"$store.ap.sessionsWidth\""), "第二处分隔条管对话栏");
 	assert.ok(
 		railSplit.includes("layoutMode === 'wide' && $store.ap.railVisible"),
@@ -174,7 +176,25 @@ test("两个侧栏的分隔条可拖动可键盘调整，宽度写回 CSS 变量
 		"拖动期间由 window 接管指针事件，松手时摘掉监听",
 	);
 	assert.ok(!html.includes("setPointerCapture"), "不依赖 pointer capture：离开命中区后会丢事件");
+	// 松手事件可能根本收不到（窗口外松手、切走应用）：没有按键的移动必须收尾。
+	assert.ok(
+		app.includes("if (event.buttons === 0)") && app.includes("this.endResize();"),
+		"裸移指针时结束拖动，不让栏跟着光标走",
+	);
+	assert.ok(
+		app.includes('window.addEventListener("blur", onEnd)') &&
+			app.includes('document.addEventListener("visibilitychange", onVisibilityChange)'),
+		"失焦和切后台也要收尾",
+	);
 
+	assert.ok(
+		css.includes('.resizer[data-active="true"]::after'),
+		"高亮只给正在拖的那一条",
+	);
+	assert.ok(
+		!css.includes(".app--resizing .resizer"),
+		"拖动状态类不再一把点亮所有分隔条",
+	);
 	assert.match(css, /\.resizer\s*\{[^}]*cursor:\s*col-resize/, "分隔条是拖动光标");
 	assert.match(css, /\.resizer\s*\{[^}]*touch-action:\s*none/, "拖动时不触发滚动");
 	assert.match(css, /\.app--resizing\s*\{[^}]*user-select:\s*none/, "拖动期间不选中文本");

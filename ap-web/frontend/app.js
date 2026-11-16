@@ -206,19 +206,34 @@ export function registerApp(Alpine) {
 			// 监听挂到 window 而不是分隔条自己：指针一旦离开那条 10px 的命中区，
 			// 事件就不再回到这个元素，拖到正文上方也得继续算宽度。
 			const onMove = (moveEvent) => this.onResizeMove(moveEvent);
-			const onEnd = (endEvent) => {
+			const onEnd = () => {
 				window.removeEventListener("pointermove", onMove);
 				window.removeEventListener("pointerup", onEnd);
 				window.removeEventListener("pointercancel", onEnd);
-				this.endResize(endEvent);
+				window.removeEventListener("blur", onEnd);
+				document.removeEventListener("visibilitychange", onVisibilityChange);
+				this.endResize();
+			};
+			const onVisibilityChange = () => {
+				if (document.hidden) onEnd();
 			};
 			window.addEventListener("pointermove", onMove);
 			window.addEventListener("pointerup", onEnd);
 			window.addEventListener("pointercancel", onEnd);
+			// 松手发生在窗口外（切走应用、系统截图工具抢走指针）时页面收不到
+			// pointerup，靠失焦和切后台收尾，否则会一直跟着裸指针改宽度。
+			window.addEventListener("blur", onEnd);
+			document.addEventListener("visibilitychange", onVisibilityChange);
 		},
 
 		onResizeMove(event) {
 			if (!this.resizing) return;
+			// 还在拖动的话指针必然按着；没有按键说明松手事件丢了，就地收尾，
+			// 否则鼠标划过页面就会把栏一起拖走。
+			if (event.buttons === 0) {
+				this.endResize();
+				return;
+			}
 			this.applyPanelWidth(this.resizing, event.clientX - this.resizeOriginX);
 			this.$nextTick(() => this.autoScroll());
 		},

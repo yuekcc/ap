@@ -175,9 +175,10 @@ body {
   transition: background-color 0.12s var(--ease-out);
 }
 
+/* 只高亮鼠标停着或正在拖的那一条；两条一起亮会让人以为两栏都在变。 */
 .resizer:hover::after,
 .resizer:focus-visible::after,
-.app--resizing .resizer::after {
+.resizer[data-active="true"]::after {
   background: var(--accent-tint-strong);
 }
 
