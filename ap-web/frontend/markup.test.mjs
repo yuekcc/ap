@@ -195,6 +195,10 @@ test("两个侧栏的分隔条可拖动可键盘调整，宽度写回 CSS 变量
 		!css.includes(".app--resizing .resizer"),
 		"拖动状态类不再一把点亮所有分隔条",
 	);
+	// CSS 里的初始宽度是首帧回退值，必须和 render.js 的默认值同源。
+	const defaultRem = Number(render.match(/PANEL_DEFAULT_W = (\d+)/)[1]) / 16;
+	assert.ok(css.includes(`--rail-w: ${defaultRem}rem`), "初始栏宽与默认值一致");
+	assert.ok(css.includes(`--sessions-w: ${defaultRem}rem`), "两栏默认等宽");
 	assert.match(css, /\.resizer\s*\{[^}]*cursor:\s*col-resize/, "分隔条是拖动光标");
 	assert.match(css, /\.resizer\s*\{[^}]*touch-action:\s*none/, "拖动时不触发滚动");
 	assert.match(css, /\.app--resizing\s*\{[^}]*user-select:\s*none/, "拖动期间不选中文本");

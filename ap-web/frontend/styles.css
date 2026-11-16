@@ -82,9 +82,10 @@ h1, h2, h3, h4, h5, h6 {
     Consolas, "Liberation Mono", monospace;
 
   --maxw: 46rem;
-  /* 两个侧栏的初始宽度；拖动后由 .app 的行内样式覆盖这两个变量。 */
-  --rail-w: 14rem;
-  --sessions-w: 14rem;
+  /* 两个侧栏的初始宽度（16.25rem = 260px，与 render.js 的 PANEL_DEFAULT_W 一致）；
+     拖动后由 .app 的行内样式覆盖这两个变量。 */
+  --rail-w: 16.25rem;
+  --sessions-w: 16.25rem;
 
   /* iOS 系统色：分组背景、卡片、填充层与标签层级。 */
   --bg-grouped: #f2f2f7;

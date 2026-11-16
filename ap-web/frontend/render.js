@@ -264,7 +264,7 @@ export function sortSessions(sessions, order = "recent") {
 
 export const PANEL_MIN_W = 176;
 export const PANEL_MAX_W = 420;
-export const PANEL_DEFAULT_W = 224;
+export const PANEL_DEFAULT_W = 260;
 
 // 超出边界的值收到最近的边界；不是数字时退回默认宽度，
 // 不把 NaN 写进样式，否则整栏会碎。
