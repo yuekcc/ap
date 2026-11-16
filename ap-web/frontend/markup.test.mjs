@@ -57,6 +57,7 @@ test("assistant 文本走 Markdown 渲染，工具输出仍走 textContent", asy
 
 test("左栏是工作空间列表，中栏是新对话与当前空间的对话记录", async () => {
 	const html = await readFile(indexPath, "utf8");
+	const css = await readFile(stylesPath, "utf8");
 
 	const railStart = html.indexOf('<aside class="rail"');
 	const railEnd = html.indexOf("</aside>", railStart);
@@ -79,15 +80,23 @@ test("左栏是工作空间列表，中栏是新对话与当前空间的对话�
 	assert.ok(sessionsStart >= 0 && sessionsEnd > sessionsStart, "index.html must have a session rail");
 	const sessions = html.slice(sessionsStart, sessionsEnd);
 	assert.ok(sessions.includes('class="new-session"'), "新对话在中栏");
+	assert.ok(css.includes(".session-group__label"), "组标题有自己的样式");
 	assert.ok(
 		sessions.includes('@click="newSession()"'),
 		"new session must not receive the click event as its cwd argument",
 	);
 	assert.ok(
-		sessions.includes('x-for="session in $store.ap.sortedSessions"'),
-		"对话记录平铺，不再按天分组",
+		sessions.includes('x-for="group in $store.ap.sessionGroups"'),
+		"对话记录按时间分组渲染",
 	);
-	assert.ok(!sessions.includes("session-group"), "按天分组已删除");
+	assert.ok(
+		sessions.includes('class="session-group__label"') && sessions.includes('x-text="group.label"'),
+		"每组自带标题（今天 / 昨天 / 7天内 / 更早）",
+	);
+	assert.ok(
+		sessions.includes('x-for="session in group.sessions"'),
+		"组内渲染该时段的对话",
+	);
 	assert.ok(sessions.includes("selectSession(session)"), "点条目切换当前对话");
 	assert.ok(sessions.includes("sessionTitle(session)"), "显示格式化后的会话标题");
 	assert.ok(sessions.includes("sessionTime(session.ts)"), "第二行是本地时间");

@@ -258,6 +258,48 @@ export function sortSessions(sessions, order = "recent") {
 	return list.sort((a, b) => timeValue(b?.ts) - timeValue(a?.ts));
 }
 
+// ---- 对话列表的时间分组 ----
+// 按浏览器本地自然日划分：今天、昨天、7天内（2–7 天前）、更早。
+// ts 来自 session 文件 mtime（毫秒），取不到时间的归到「更早」，不伪造日期。
+export const SESSION_TIME_GROUPS = [
+	{ key: "today", label: "今天" },
+	{ key: "yesterday", label: "昨天" },
+	{ key: "week", label: "7天内" },
+	{ key: "earlier", label: "更早" },
+];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function startOfLocalDay(ms) {
+	const date = new Date(ms);
+	date.setHours(0, 0, 0, 0);
+	return date.getTime();
+}
+
+export function sessionTimeBucket(ts, now = Date.now()) {
+	const value = Number(ts);
+	if (!Number.isFinite(value) || value <= 0) return "earlier";
+	// 用整数天差而不是除以 86400000 后取整：夏令时那天只有 23 小时。
+	// 时钟偏差导致的未来 mtime 仍算今天，不单开一个空组。
+	const days = Math.round((startOfLocalDay(now) - startOfLocalDay(value)) / DAY_MS);
+	if (days <= 0) return "today";
+	if (days === 1) return "yesterday";
+	if (days <= 7) return "week";
+	return "earlier";
+}
+
+// 分组是纯派生：入参数组和元素顺序都不改，空组不返回。
+export function groupSessionsByTime(sessions, now = Date.now()) {
+	const buckets = new Map(SESSION_TIME_GROUPS.map((group) => [group.key, []]));
+	for (const session of Array.isArray(sessions) ? sessions : []) {
+		buckets.get(sessionTimeBucket(session?.ts, now)).push(session);
+	}
+	return SESSION_TIME_GROUPS.map((group) => ({
+		...group,
+		sessions: buckets.get(group.key),
+	})).filter((group) => group.sessions.length > 0);
+}
+
 // ---- 栏宽 ----
 // 两个侧栏可以拖动改宽度。边界值写在这里，store 和 CSS 都用同一套数字，
 // 拖动、键盘调整和恢复持久化偏好都走 clampPanelWidth。

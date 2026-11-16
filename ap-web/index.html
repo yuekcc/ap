@@ -182,27 +182,34 @@
         </span>
       </button>
 
-      <template x-for="session in $store.ap.sortedSessions" :key="session.session_id">
-        <button
-          class="session"
-          type="button"
-          :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
-          :aria-current="session.session_id === $store.ap.sessionId ? 'true' : null"
-          :disabled="$store.ap.loading"
-          :title="session.session_id"
-          @click="selectSession(session)"
-        >
-          <span class="session__title" x-text="sessionTitle(session)"></span>
-          <span class="session__foot">
-            <span class="session__time" x-text="sessionTime(session.ts)"></span>
-            <span
-              class="session__dot"
-              x-show="session.running || session.session_id === $store.ap.sessionId"
-              :data-running="session.running ? 'true' : null"
-              aria-hidden="true"
-            ></span>
-          </span>
-        </button>
+      <!-- 按时间分组：今天 / 昨天 / 7 天内 / 更早，空组不渲染。 -->
+      <template x-for="group in $store.ap.sessionGroups" :key="group.key">
+        <div class="session-group">
+          <p class="session-group__label" x-text="group.label"></p>
+
+          <template x-for="session in group.sessions" :key="session.session_id">
+            <button
+              class="session"
+              type="button"
+              :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
+              :aria-current="session.session_id === $store.ap.sessionId ? 'true' : null"
+              :disabled="$store.ap.loading"
+              :title="session.session_id"
+              @click="selectSession(session)"
+            >
+              <span class="session__title" x-text="sessionTitle(session)"></span>
+              <span class="session__foot">
+                <span class="session__time" x-text="sessionTime(session.ts)"></span>
+                <span
+                  class="session__dot"
+                  x-show="session.running || session.session_id === $store.ap.sessionId"
+                  :data-running="session.running ? 'true' : null"
+                  aria-hidden="true"
+                ></span>
+              </span>
+            </button>
+          </template>
+        </div>
       </template>
 
       <p class="sessions__empty" x-show="showsEmptySessions()">暂无对话</p>

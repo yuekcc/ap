@@ -505,6 +505,25 @@ body {
   scrollbar-color: var(--separator) transparent;
 }
 
+/* 对话记录按时间分组：组标题只做弱提示，不抢会话标题的层级。 */
+.session-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-group + .session-group {
+  margin-top: 10px;
+}
+
+.session-group__label {
+  padding: 6px 10px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--fg-3);
+}
+
 /* 对话项两行：标题 +（本地时间 ｜ 状态点）；当前对话用 systemBlue 浅底。 */
 .session {
   display: flex;

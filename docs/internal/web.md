@@ -195,7 +195,7 @@ Unix 上的实现如下。
 - 页面是三栏工作台：左侧工作空间栏（`--rail-w`）、中间对话栏（`--sessions-w`）、右侧对话正文（吃剩下的宽度），栏间用 1px `--separator-soft` 分隔。外层用 flex 而不是 grid：折叠一栏只是 `display: none`，不需要重算列宽。
 - 两个侧栏的宽度可拖动：分隔条是 `role="separator"`、`tabindex="0"` 的 0 宽元素，靠伪元素向两侧扩出 10px 命中区。指针拖动改宽，方向键 ±16px（Shift ±64px），`Home`/`End` 到边界，双击回默认 260px。宽度以行内 `--rail-w` / `--sessions-w` 写在 `.app` 上，偏好存 `localStorage`，取值范围 176–420px 且不超过视口宽度的 35%。拖动监听挂在 window 上，松手事件丢失（窗口外松手、切走应用）时靠「没有按键的 pointermove」和窗口失焦收尾，只有正在拖的那条分隔条高亮。
 - 工作空间栏底色 `--bg-grouped`，标题行依次是 `ap` 字标、「打开新工作空间」、「排序」、「折叠」。工作空间是竖列表，当前项用 `--accent-tint` 浅底，`title` 放完整路径。
-- 对话栏底色 `--bg`，标题行是「对话」标签加「打开文件管理器」「打开终端」两个图标按钮，下面依次是「新对话」按钮和平铺的对话列表。
+- 对话栏底色 `--bg`，标题行是「对话」标签加「打开文件管理器」「打开终端」两个图标按钮，下面依次是「新对话」按钮和按时间分组的对话列表。
 - 对话正文栏是 `grid-template-rows: auto minmax(0, 1fr) auto`：标题行（标题 + 刷新 + 累计 token）、消息区（唯一滚动容器）、录入框。
 - token 用量的悬停提示带上模型、agent 和输入/输出/缓存/推理分项，模型名不再单独占一个 chip。
 - 消息区上方单独一行、右对齐的小胶囊显示本会话最近一次 `write_file` / `edit_file` 的 `file_path`，只显示文件名，点击复制完整路径；没有改写文件时整行不占高度。
@@ -214,7 +214,7 @@ Unix 上的实现如下。
 - 语言标记为 `mermaid` 的围栏先渲染成保留源码的占位块，消息结束后由 `mermaid-blocks.js` 用 MutationObserver + 防抖把占位块换成 SVG。mermaid 本体在 `dist/mermaid.js`，第一次出现图表时才加载；渲染失败时保留源码并显示一行错误。`securityLevel` 固定为 `strict`，图表里的 `%%{init}%%` 或 frontmatter 不允许覆盖它。
 - 减少动态偏好下的全局过渡规则排除 `svg` 及其后代：给 SVG 元素加 `transition-duration` 会让 Chrome 的 `getBBox` 返回错误尺寸，mermaid 会把图表撑到几千像素。
 - 工作空间列表按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在列表里本地合成一个空组。
-- 对话栏只展示当前工作空间的对话记录，平铺、不按天分组：每项两行，第一行标题，第二行是本地时间（`MM-DD HH:mm`）和状态点，`running` 为真时是脉冲点。列表排序（最近活动 / 名称）和工作空间排序共用一个 `localStorage` 偏好，排序只在浏览器本地完成，不改服务端返回顺序。切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
+- 对话栏只展示当前工作空间的对话记录，按浏览器本地自然日分成「今天 / 昨天 / 7天内（2–7 天前）/ 更早」，空组不渲染；取不到时间戳的会话落进「更早」。每项两行，第一行标题，第二行是本地时间（`MM-DD HH:mm`）和状态点，`running` 为真时是脉冲点。列表排序（最近活动 / 名称）只决定组内先后：分组顺序固定为今天到更早，排序和工作空间排序共用一个 `localStorage` 偏好，都只在浏览器本地完成，不改服务端返回顺序。切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
 - 每个标签页持有自己的 `session_key`，SSE 按该 key 过滤。
 - 打开已有 session 的顺序是 `POST /api/session/resume`、`GET /api/history`、`GET /api/events`。
 - 首次订阅成功后补一次 history，填上 history 与 subscribe 之间的空档。

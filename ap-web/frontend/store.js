@@ -14,6 +14,7 @@ import {
 	createState,
 	fileName,
 	formatTokenCount,
+	groupSessionsByTime,
 	ingestHistory,
 	sessionTitle,
 	sortProjects,
@@ -103,6 +104,12 @@ export function createStore() {
 
 		get sortedSessions() {
 			return sortSessions(this.activeSessions, this.sortOrder);
+		},
+
+		// 对话栏按时间分组：今天 / 昨天 / 7天内 / 更早，空组不渲染。
+		// 组内顺序跟随排序偏好，组本身的先后固定。
+		get sessionGroups() {
+			return groupSessionsByTime(this.sortedSessions);
 		},
 
 		// 排序菜单按钮的提示：当前按什么排。

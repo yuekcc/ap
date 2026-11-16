@@ -14,12 +14,14 @@ import {
 	PANEL_MIN_W,
 	clampPanelWidth,
 	fileName,
+	groupSessionsByTime,
 	formatTokenCount,
 	parseSplitPrefs,
 	ingestHistory,
 	previewContent,
 	projectName,
 	sessionTime,
+	sessionTimeBucket,
 	sessionTitle,
 	sortProjects,
 	sortSessions,
@@ -57,6 +59,45 @@ test("对话列表第二行是本地时间，取不到时间就不占位", () =>
 	assert.equal(sessionTime(null), "");
 	assert.equal(sessionTime(undefined), "");
 	assert.equal(sessionTime("不是时间"), "");
+});
+
+test("对话列表按时段分组成今天 / 昨天 / 7天内 / 更早", () => {
+	const at = (day, hour = 12) => new Date(2026, 10, day, hour, 0, 0).getTime();
+	const now = at(16);
+
+	assert.equal(sessionTimeBucket(at(16, 1), now), "today");
+	assert.equal(sessionTimeBucket(at(15), now), "yesterday");
+	assert.equal(sessionTimeBucket(at(14), now), "week");
+	assert.equal(sessionTimeBucket(at(9), now), "week", "7 天前还在「7天内」");
+	assert.equal(sessionTimeBucket(at(8), now), "earlier", "第 8 天落到「更早」");
+	// 时钟偏差导致的未来 mtime 仍算今天；没有时间戳的归「更早」，不伪造日期。
+	assert.equal(sessionTimeBucket(at(20), now), "today");
+	assert.equal(sessionTimeBucket(0, now), "earlier");
+	assert.equal(sessionTimeBucket(null, now), "earlier");
+
+	const sessions = [
+		{ session_id: "today-a", ts: at(16, 9) },
+		{ session_id: "week-a", ts: at(12) },
+		{ session_id: "yesterday-a", ts: at(15) },
+		{ session_id: "earlier-a", ts: at(1) },
+		{ session_id: "no-ts" },
+	];
+	const groups = groupSessionsByTime(sessions, now);
+	assert.deepEqual(
+		groups.map((group) => group.label),
+		["今天", "昨天", "7天内", "更早"],
+	);
+	assert.deepEqual(
+		groups.map((group) => group.sessions.map((session) => session.session_id)),
+		[["today-a"], ["yesterday-a"], ["week-a"], ["earlier-a", "no-ts"]],
+	);
+	// 分组是纯派生：不改入参，空组直接不返回。
+	assert.equal(sessions[0].session_id, "today-a");
+	assert.deepEqual(groupSessionsByTime([], now), []);
+	assert.equal(
+		groupSessionsByTime([{ session_id: "only", ts: at(16) }], now).length,
+		1,
+	);
 });
 
 test("「当前修改的文件」只显示最后一段路径", () => {
