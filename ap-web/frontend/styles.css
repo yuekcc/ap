@@ -104,6 +104,8 @@ h1, h2, h3, h4, h5, h6 {
   --accent-fg: #ffffff;
   --accent-tint: rgba(0, 122, 255, 0.12);
   --accent-tint-strong: rgba(0, 122, 255, 0.2);
+  /* outline 按钮的描边：比填充浅一档，比分隔线更偏 systemBlue。 */
+  --accent-line: rgba(0, 122, 255, 0.36);
   --ok: #34c759;
   --bad: #ff3b30;
   --warn: #ff9500;
@@ -449,30 +451,31 @@ body {
   margin-left: auto;
 }
 
-/* 主操作使用 systemBlue 的浅色填充，比纯描边更接近 iOS 的 tinted button。 */
+/* 主操作是 outline 按钮：细描边 + 透明底，图标和文字作为一组居中；
+   悬停才铺一层 systemBlue 浅底，保持 iOS 的 tinted outline 手感。 */
 .new-session {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   width: 100%;
-  padding: 8px 10px;
-  border: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--accent-line);
   border-radius: var(--radius-field);
-  background: var(--accent-tint);
+  background: transparent;
   color: var(--accent);
   font-size: 13px;
   font-weight: 600;
-  text-align: left;
   cursor: pointer;
-  transition: background-color 0.12s var(--ease-out);
+  transition: background-color 0.12s var(--ease-out), border-color 0.12s var(--ease-out);
 }
 
 .new-session:hover:not(:disabled) {
-  background: var(--accent-tint-strong);
+  background: var(--accent-tint);
 }
 
 .new-session:active:not(:disabled) {
-  background: var(--fill);
+  background: var(--accent-tint-strong);
 }
 
 .new-session:focus-visible {

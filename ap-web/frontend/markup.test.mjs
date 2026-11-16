@@ -81,6 +81,12 @@ test("左栏是工作空间列表，中栏是新对话与当前空间的对话�
 	const sessions = html.slice(sessionsStart, sessionsEnd);
 	assert.ok(sessions.includes('class="new-session"'), "新对话在中栏");
 	assert.ok(css.includes(".session-group__label"), "组标题有自己的样式");
+	// 「新对话」是 outline 按钮：描边 + 透明底，内容居中而不是左对齐。
+	const newSessionRule = css.slice(css.indexOf(".new-session {"), css.indexOf(".new-session:hover"));
+	assert.ok(newSessionRule.includes("justify-content: center"), "图标和文字居中");
+	assert.ok(newSessionRule.includes("border: 1px solid var(--accent-line)"), "outline 用描边而不是填充");
+	assert.ok(newSessionRule.includes("background: transparent"), "未悬停时是透明底");
+	assert.ok(!newSessionRule.includes("background: var(--accent-tint)"), "底色只在悬停时出现");
 	assert.ok(
 		sessions.includes('@click="newSession()"'),
 		"new session must not receive the click event as its cwd argument",
