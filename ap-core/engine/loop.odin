@@ -264,9 +264,10 @@ loop_destroy :: proc(l: ^Loop) {
 	loop_release_owned(l)
 }
 
-loop_release_owned :: proc(l: ^Loop) {
-	delete(l.owned_message_id)
-	l.owned_message_id = ""
+// message_id 与 tool call 分开释放：`Provider_Message_End` 先收养 id、再改写
+// tool call 所有权，两者共用一次释放会让 current_message_id 指向已释放内存，
+// 随后 loop_write_message_end 把它写进 transcript 就是 use-after-free。
+loop_release_calls :: proc(l: ^Loop) {
 	for call in l.owned_calls {
 		delete(call.id)
 		delete(call.name)
@@ -276,6 +277,12 @@ loop_release_owned :: proc(l: ^Loop) {
 	}
 	delete(l.owned_calls)
 	l.owned_calls = nil
+}
+
+loop_release_owned :: proc(l: ^Loop) {
+	delete(l.owned_message_id)
+	l.owned_message_id = ""
+	loop_release_calls(l)
 }
 
 loop_append :: proc(l: ^Loop, event: any, header: Event_Header) -> Error {
@@ -307,12 +314,15 @@ loop_start_message :: proc(l: ^Loop, model: string) -> Error {
 	if l.message_started {
 		return ok_error()
 	}
-	id := l.current_message_id
-	if len(id) == 0 {
+	if len(l.current_message_id) == 0 {
 		generated := uuid.generate_v4()
-		id = uuid.to_string(generated, context.allocator)
+		id := uuid.to_string(generated, context.allocator)
+		// 生成的 id 也归 loop 所有，和 provider 借出的 id 走同一套释放路径。
+		delete(l.owned_message_id)
+		l.owned_message_id = id
 		l.current_message_id = id
 	}
+	id := l.current_message_id
 	message_model := model
 	if len(message_model) == 0 {
 		message_model = l.model
@@ -420,11 +430,7 @@ loop_provider_event :: proc(user: rawptr, event: Provider_Event) {
 	l := (^Loop)(user)
 	switch ev in event {
 	case Provider_Message_Start:
-		if len(ev.message_id) > 0 {
-			delete(l.owned_message_id)
-			l.owned_message_id = strings.clone(ev.message_id)
-			l.current_message_id = l.owned_message_id
-		}
+		loop_own_message_id(l, ev.message_id)
 		if err := loop_start_message(l, ev.model); !is_ok(err) {
 			l.callback_error = err
 		}
@@ -452,6 +458,11 @@ loop_provider_event :: proc(user: rawptr, event: Provider_Event) {
 		}
 	case Provider_Tool_End:
 	case Provider_Message_End:
+		// 同一条消息的两条事件必须用同一个 id。start 时 provider 没给 id 时
+		// loop 自己生成，end 再补上也不改用后者，避免 start/end 不一致。
+		if len(l.current_message_id) == 0 {
+			loop_own_message_id(l, ev.message_id)
+		}
 		loop_own_calls(l, ev.tool_calls)
 		l.pending_calls = l.owned_calls
 		l.pending_stop = ev.stop_reason
@@ -994,11 +1005,23 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 	}
 }
 
+// 收养 provider 借出的 message_id。clone 必须早于 delete：provider 可能把
+// 同一份字符串再传回来，直接 delete 再 clone 会读已释放内存。
+loop_own_message_id :: proc(l: ^Loop, id: string) {
+	if len(id) == 0 {
+		return
+	}
+	cloned := strings.clone(id)
+	delete(l.owned_message_id)
+	l.owned_message_id = cloned
+	l.current_message_id = cloned
+}
+
 // 把本次 message_end 的 tool call 元数据拷进 loop 自己的所有权。
 // json.Value 参数本身由 provider 在事件期间持有，执行阶段仍可用；
 // id / name 需要单独持有，因为 provider 的缓冲随后就释放。
 loop_own_calls :: proc(l: ^Loop, calls: []Assembled_Tool_Call) {
-	loop_release_owned(l)
+	loop_release_calls(l)
 	if len(calls) == 0 {
 		return
 	}

@@ -3,13 +3,18 @@ package engine
 import "../platform"
 import "../tool"
 
+import "base:runtime"
+import "core:crypto"
 import "core:encoding/json"
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:testing"
 import "core:thread"
 import "core:time"
+
+LOOP_POISON_BYTE :: 0xAB
 
 Fake_Response :: struct {
 	text:        string,
@@ -871,4 +876,90 @@ test_historical_usage_counts_handoff :: proc(t: ^testing.T) {
 	total := historical_usage_from_events(events)
 	testing.expect_value(t, total.input_tokens.?, 14)
 	testing.expect_value(t, total.output_tokens.?, 7)
+}
+
+// message_id 归 loop 所有，必须在写入 message_end 之后才释放。用「释放前填
+// 0xAB」的分配器把 use-after-free 变成可观测的脏字符串：默认堆分配器下旧字节
+// 往往原样保留，只断言字符串相等会假通过。
+Loop_Poison_Allocator :: struct {
+	backing: runtime.Allocator,
+}
+
+loop_poison_allocator_proc :: proc(
+	data: rawptr,
+	mode: runtime.Allocator_Mode,
+	size, alignment: int,
+	old_memory: rawptr,
+	old_size: int,
+	loc := #caller_location,
+) -> (
+	[]byte,
+	runtime.Allocator_Error,
+) {
+	poison := (^Loop_Poison_Allocator)(data)
+	if mode == .Free && old_memory != nil && old_size > 0 {
+		mem.set(old_memory, LOOP_POISON_BYTE, old_size)
+	}
+	return poison.backing.procedure(
+		poison.backing.data,
+		mode,
+		size,
+		alignment,
+		old_memory,
+		old_size,
+		loc,
+	)
+}
+
+@(test)
+test_loop_message_end_keeps_message_id :: proc(t: ^testing.T) {
+	// loop 在 provider 没给 id 时用 uuid.generate_v4 生成，要求 CSPRNG。
+	context.random_generator = crypto.random_generator()
+	loop, _, dir := loop_test_setup(t, "loop-message-id")
+	poison := Loop_Poison_Allocator{backing = context.allocator}
+	saved := context.allocator
+	// 只覆盖本次事件处理期间的分配与释放，退出前恢复，避免影响后续测试。
+	context.allocator = runtime.Allocator{procedure = loop_poison_allocator_proc, data = &poison}
+
+	sink := Stream_Sink{user = &loop, on_event = loop_provider_event}
+	provider_id := "msg-0123456789abcdef"
+	emit_provider_event(sink, Provider_Message_Start{model = "fake", message_id = provider_id})
+	calls := []Assembled_Tool_Call{{id = "call-abc", name = "bash", input = nil}}
+	emit_provider_event(
+		sink,
+		Provider_Message_End{message_id = provider_id, stop_reason = .Tool_Use, tool_calls = calls},
+	)
+	// provider 没给 id 时 loop 生成 UUID，start 与 end 仍必须是同一个。
+	emit_provider_event(sink, Provider_Message_Start{model = "fake"})
+	emit_provider_event(sink, Provider_Message_End{stop_reason = .Stop})
+
+	context.allocator = saved
+
+	starts := make([dynamic]string, 0, 2)
+	defer delete(starts)
+	ends := make([dynamic]Message_End_Event, 0, 2)
+	defer delete(ends)
+	for ev in loop.events {
+		switch ev.type {
+		case "message_start":
+			start: Message_Start_Event
+			json.unmarshal_string(ev.line, &start)
+			append(&starts, start.message_id)
+		case "message_end":
+			end: Message_End_Event
+			json.unmarshal_string(ev.line, &end)
+			append(&ends, end)
+		}
+	}
+	testing.expect_value(t, len(starts), 2)
+	testing.expect_value(t, len(ends), 2)
+	testing.expect_value(t, starts[0], provider_id)
+	testing.expect_value(t, ends[0].message_id, provider_id)
+	testing.expect(t, len(starts[1]) > 0)
+	testing.expect_value(t, ends[1].message_id, starts[1])
+	// tool call 的 id / name 所有权同样在 message_end 落盘时仍然有效。
+	testing.expect_value(t, len(ends[0].content), 1)
+	testing.expect_value(t, ends[0].content[0].id, "call-abc")
+	testing.expect_value(t, ends[0].content[0].name, "bash")
+	loop_test_finish(&loop, dir)
 }

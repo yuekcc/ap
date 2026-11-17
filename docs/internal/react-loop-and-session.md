@@ -200,7 +200,7 @@ assistant 消息只在开始与结束时落盘。流式增量只用于展示，�
 
 约定：
 
-1. `message_id` 优先使用 provider 返回的 id。缺失时由 Loop 生成 UUID。
+1. `message_id` 优先使用 provider 返回的 id。缺失时由 Loop 生成 UUID。同一条消息的 `message_start` 与 `message_end` 必须用同一个 `message_id`：`message_end` 补齐 id 时不覆盖已经写入 `message_start` 的值。
 2. `reasoning` 保存 provider 返回的推理内容。下一轮作为 assistant 消息的 `reasoning_content` 回传。
 3. 被取消的消息仍写 `message_end`，`stop_reason` 为 `cancelled`，内容只包含本次尝试已收到的文本，`usage` 与 `reasoning` 为 `null`。该消息不进入下一轮上下文。
 4. 重试丢弃的尝试不写 `message_end`。它可能留下只有 `message_start` 的消息，投影时忽略。

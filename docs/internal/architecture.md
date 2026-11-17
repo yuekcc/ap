@@ -359,6 +359,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error)
 2. 每个 SSE chunk 的解析结果及时释放。`assembler_feed` 每轮解析出的 JSON 树在返回前销毁。需要留下的 `message_id`、`model`、`finish_reason`、tool call 的 `id` 与 `name` 先复制到 assembler 自己的 arena。
 3. 序列化中间结果用完就放。`json_marshal_utf8` 的 Unicode 还原缓冲、`flatten_event_json` 的临时行只在一次调用内有效。`Transcript_Event.line` 是单独 clone 的副本。已知事件类型的 `type` 使用静态字面量，调用方不需要释放。
 4. 所有权归持有者。`Loop` 只释放自己追加的行，`initial_event_count` 之前的事件属于 `Session.events`。`Loop.last_text` 在 `loop_destroy` 释放。`Loop_Result.result_text` 是独立副本，归调用方释放。provider 借出的 `message_id` 与 tool call 字段由 loop 自己 clone。
+5. `message_id` 与 tool call 分开释放。`message_end` 落盘前必须还能读到 `current_message_id`，所以收养 tool call 时不能顺手释放 id；否则写进 transcript 的 `message_id` 来自已释放内存。
 
 回归用例用 tracking allocator 断言净分配：`test_transcript_append_does_not_leak_per_event` 与 `test_assembler_feed_does_not_leak_per_chunk`。
 
