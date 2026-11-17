@@ -71,7 +71,7 @@ npm --prefix ap-web install
 
 - 在 Git Bash 中运行 `./build.sh`。
 - 调用构建产物时写 `./build/ap.exe`，或使用 Windows 路径 `.\build\ap.exe`。
-- 文件工具只处理 UTF-8 文本，CRLF 会归一为 LF。二进制文件请交给 `bash`。
+- 文件工具只处理 UTF-8 文本。`write_file` 原样写入，`edit_file` 保留原文件的 BOM 和换行风格。二进制文件请交给 `bash`。
 - 控制台代码页不是 UTF-8 时，ap 会尝试用宽字符命令行重建参数。仍有乱码时，改用 `--input-file` 传提示词。
 
 ## 常见安装失败

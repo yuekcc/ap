@@ -129,36 +129,63 @@ tool_test_context :: proc(t: ^testing.T, name: string) -> Test_Tools {
 }
 
 @(test)
-test_read_file_basic_and_pagination :: proc(t: ^testing.T) {
+test_read_file_offset_limit_and_notices :: proc(t: ^testing.T) {
 	tt := tool_test_context(t, "tool-read")
 	defer test_cleanup(tt.dir)
 	path := fmt.tprintf("%s/sample.txt", tt.dir)
 	test_write_file(path, "alpha\nbeta\ngamma\n")
 
+	// 未截断时原样返回文件内容：不加行号，保留末尾换行。
 	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
 	testing.expect(t, res.ok)
-	testing.expect(t, test_contains(res.content, "lines 1-3 of 3"))
-	testing.expect(t, test_contains(res.content, "\n1\talpha\n2\tbeta\n3\tgamma"))
+	testing.expect_value(t, res.content, "alpha\nbeta\ngamma\n")
 
 	res2 := tool.tool_execute(
 		&tt.registry,
 		"read_file",
-		json.Value(json_obj(test_json(`{"file_path":%q,"start_line":2,"end_line":2}`, path))),
+		json.Value(json_obj(test_json(`{"file_path":%q,"offset":2,"limit":1}`, path))),
 		&tt.ctx,
 	)
 	testing.expect(t, res2.ok)
-	testing.expect(t, test_contains(res2.content, "lines 2-2 of 3"))
-	testing.expect(t, test_contains(res2.content, "\n2\tbeta"))
-	testing.expect(t, test_contains(res2.content, "继续请用 start_line=3"))
+	testing.expect_value(t, res2.content, "beta\n\n[1 more lines in file. Use offset=3 to continue.]")
 
 	res3 := tool.tool_execute(
 		&tt.registry,
 		"read_file",
-		json.Value(json_obj(test_json(`{"file_path":%q,"start_line":10}`, path))),
+		json.Value(json_obj(test_json(`{"file_path":%q,"offset":10}`, path))),
 		&tt.ctx,
 	)
-	testing.expect(t, res3.ok)
-	testing.expect(t, test_contains(res3.content, "lines 10-9 of 3"))
+	testing.expect(t, !res3.ok)
+	testing.expect(t, test_contains(res3.error, "beyond end of file (3 lines total)"))
+}
+
+@(test)
+test_read_file_byte_limit_notice :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-read-bytes")
+	defer test_cleanup(tt.dir)
+	tt.cfg.max_capture_bytes = 100
+	path := fmt.tprintf("%s/lines.txt", tt.dir)
+	b := strings.builder_make()
+	for _ in 1 ..= 10 {
+		fmt.sbprintf(&b, "01234567890123456789\n")
+	}
+	test_write_file(path, strings.to_string(b))
+
+	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
+	testing.expect(t, res.ok)
+	testing.expect(t, test_contains(res.content, "[Showing lines 1-4 of 10 (100B limit). Use offset=5 to continue.]"))
+}
+
+@(test)
+test_read_file_first_line_exceeds_byte_limit :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-read-long-line")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/long.txt", tt.dir)
+	test_write_file(path, strings.repeat("x", 60 * 1024))
+
+	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
+	testing.expect(t, res.ok)
+	testing.expect(t, test_contains(res.content, "[Line 1 is 60.0KB, exceeds 50.0KB limit. Use bash: sed -n '1p'"))
 }
 
 @(test)
@@ -169,8 +196,7 @@ test_read_file_crlf_and_utf8_errors :: proc(t: ^testing.T) {
 	test_write_file(crlf, "a\r\nb\r\n")
 	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, crlf))), &tt.ctx)
 	testing.expect(t, res.ok)
-	testing.expect(t, test_contains(res.content, "\n1\ta\n2\tb"))
-	testing.expect(t, !test_contains(res.content, "\r"))
+	testing.expect_value(t, res.content, "a\nb\n")
 
 	binary := fmt.tprintf("%s/bin.dat", tt.dir)
 	data: []byte = {0xff, 0xfe, 0x00, 0x01}
@@ -191,6 +217,17 @@ test_read_file_crlf_and_utf8_errors :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_read_file_empty_file :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-read-empty")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/empty.txt", tt.dir)
+	test_write_file(path, "")
+	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
+	testing.expect(t, res.ok)
+	testing.expect_value(t, res.content, "")
+}
+
+@(test)
 test_read_file_image_attachments :: proc(t: ^testing.T) {
 	tt := tool_test_context(t, "tool-read-image")
 	defer test_cleanup(tt.dir)
@@ -202,7 +239,7 @@ test_read_file_image_attachments :: proc(t: ^testing.T) {
 	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
 	defer free_test_images(res.images)
 	testing.expect(t, res.ok)
-	testing.expect(t, test_contains(res.content, "image/png"))
+	testing.expect_value(t, res.content, "Read image file [image/png]")
 	testing.expect_value(t, len(res.images), 1)
 	testing.expect_value(t, res.images[0].mime_type, "image/png")
 	testing.expect(t, test_contains(res.images[0].name, "pixel.png"))
@@ -241,31 +278,25 @@ test_read_file_2000_line_cap :: proc(t: ^testing.T) {
 	}
 	test_write_file(path, strings.to_string(b))
 
-	res := tool.tool_execute(
+	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
+	testing.expect(t, res.ok)
+	testing.expect(t, test_contains(res.content, "\nline 2000"))
+	testing.expect(t, !test_contains(res.content, "\nline 2001"))
+	testing.expect(t, test_contains(res.content, "[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]"))
+
+	res2 := tool.tool_execute(
 		&tt.registry,
 		"read_file",
-		json.Value(json_obj(test_json(`{"file_path":%q,"start_line":1,"end_line":3000}`, path))),
+		json.Value(json_obj(test_json(`{"file_path":%q,"offset":2001}`, path))),
 		&tt.ctx,
 	)
-	testing.expect(t, res.ok)
-	testing.expect(t, test_contains(res.content, "lines 1-2000 of 2500"))
-	testing.expect(t, test_contains(res.content, "已截断到 2000 行"))
-	testing.expect(t, test_contains(res.content, "继续请用 start_line=2001"))
+	testing.expect(t, res2.ok)
+	testing.expect(t, test_contains(res2.content, "line 2001\n"))
+	testing.expect(t, test_contains(res2.content, "line 2500\n"))
 }
 
 @(test)
-test_read_file_single_line_limit :: proc(t: ^testing.T) {
-	tt := tool_test_context(t, "tool-read-line")
-	defer test_cleanup(tt.dir)
-	tt.cfg.max_capture_bytes = 64
-	path := fmt.tprintf("%s/long.txt", tt.dir)
-	test_write_file(path, strings.repeat("x", 200))
-	res := tool.tool_execute(&tt.registry, "read_file", json.Value(json_obj(test_json(`{"file_path":%q}`, path))), &tt.ctx)
-	testing.expect(t, !res.ok)
-}
-
-@(test)
-test_write_file_and_edit :: proc(t: ^testing.T) {
+test_write_file_keeps_content :: proc(t: ^testing.T) {
 	tt := tool_test_context(t, "tool-write")
 	defer test_cleanup(tt.dir)
 	path := fmt.tprintf("%s/sub/out.txt", tt.dir)
@@ -276,49 +307,260 @@ test_write_file_and_edit :: proc(t: ^testing.T) {
 		&tt.ctx,
 	)
 	testing.expect(t, res.ok)
-	testing.expect_value(t, test_read_file(path), "one\ntwo\n")
-	testing.expect(t, test_contains(res.content, "wrote"))
+	testing.expect(t, test_contains(res.content, "Successfully wrote to"))
+	// write 原样落盘，不再把 CRLF 归一为 LF。
+	testing.expect_value(t, test_read_file(path), "one\r\ntwo\r\n")
 
-	edit := tool.tool_execute(
+	res2 := tool.tool_execute(
+		&tt.registry,
+		"write_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"content":"x"}`, path))),
+		&tt.ctx,
+	)
+	testing.expect(t, res2.ok)
+	testing.expect_value(t, test_read_file(path), "x")
+}
+
+@(test)
+test_edit_file_batch_preserves_bom_and_line_endings :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-edit-batch")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/bom.txt", tt.dir)
+	test_write_file(path, "\xEF\xBB\xBFalpha\r\nbeta\r\ngamma\r\n")
+
+	res := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(
+			json_obj(
+				test_json(
+					`{"file_path":%q,"edits":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"gamma","newText":"GAMMA"}]}`,
+					path,
+				),
+			),
+		),
+		&tt.ctx,
+	)
+	testing.expect(t, res.ok)
+	testing.expect(t, test_contains(res.content, "Successfully replaced 2 block(s)"))
+	testing.expect_value(t, test_read_file(path), "\xEF\xBB\xBFALPHA\r\nbeta\r\nGAMMA\r\n")
+}
+
+@(test)
+test_edit_file_matches_against_original :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-edit-original")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/order.txt", tt.dir)
+	test_write_file(path, "aa\nbb\n")
+
+	res := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(
+			json_obj(
+				test_json(
+					`{"file_path":%q,"edits":[{"oldText":"aa","newText":"bb"},{"oldText":"bb","newText":"cc"}]}`,
+					path,
+				),
+			),
+		),
+		&tt.ctx,
+	)
+	testing.expect(t, res.ok)
+	testing.expect_value(t, test_read_file(path), "bb\ncc\n")
+}
+
+@(test)
+test_edit_file_fuzzy_matching :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-edit-fuzzy")
+	defer test_cleanup(tt.dir)
+
+	trailing := fmt.tprintf("%s/trailing.txt", tt.dir)
+	test_write_file(trailing, "foo   \nbar\nkeep\n")
+	res := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"foo\nbar","newText":"baz"}]}`, trailing))),
+		&tt.ctx,
+	)
+	testing.expect(t, res.ok)
+	testing.expect_value(t, test_read_file(trailing), "baz\nkeep\n")
+
+	quotes := fmt.tprintf("%s/quotes.txt", tt.dir)
+	test_write_file(quotes, "say \xE2\x80\x9Chi\xE2\x80\x9D\n")
+	res2 := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"say \"hi\"","newText":"say bye"}]}`, quotes))),
+		&tt.ctx,
+	)
+	testing.expect(t, res2.ok)
+	testing.expect_value(t, test_read_file(quotes), "say bye\n")
+
+	wide := fmt.tprintf("%s/wide.txt", tt.dir)
+	test_write_file(wide, "\xEF\xBC\xA1\xEF\xBC\xA2\xEF\xBC\xA3\n")
+	res3 := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"ABC","newText":"xyz"}]}`, wide))),
+		&tt.ctx,
+	)
+	testing.expect(t, res3.ok)
+	testing.expect_value(t, test_read_file(wide), "xyz\n")
+}
+
+@(test)
+test_edit_file_fuzzy_keeps_unchanged_lines :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-edit-fuzzy-lines")
+	defer test_cleanup(tt.dir)
+
+	// 容错匹配只重写被改动的行；相邻行合并成一个改动区间。
+	adjacent := fmt.tprintf("%s/adjacent.txt", tt.dir)
+	test_write_file(adjacent, "foo  \nbar  \nkeep  \n")
+	res := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(
+			json_obj(
+				test_json(
+					`{"file_path":%q,"edits":[{"oldText":"foo\n","newText":"F\n"},{"oldText":"bar\n","newText":"B\n"}]}`,
+					adjacent,
+				),
+			),
+		),
+		&tt.ctx,
+	)
+	testing.expect(t, res.ok)
+	testing.expect_value(t, test_read_file(adjacent), "F\nB\nkeep  \n")
+
+	// 同一行的多条改动合并到一个行级区间。
+	same_line := fmt.tprintf("%s/same-line.txt", tt.dir)
+	test_write_file(same_line, "say \xE2\x80\x9Chi\xE2\x80\x9D and bye   \nkeep\n")
+	res2 := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(
+			json_obj(
+				test_json(
+					`{"file_path":%q,"edits":[{"oldText":"say \"hi\"","newText":"SAY"},{"oldText":" bye","newText":" BYE"}]}`,
+					same_line,
+				),
+			),
+		),
+		&tt.ctx,
+	)
+	testing.expect(t, res2.ok)
+	testing.expect_value(t, test_read_file(same_line), "SAY and BYE\nkeep\n")
+}
+
+@(test)
+test_edit_file_errors :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-edit-errors")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/dup.txt", tt.dir)
+	test_write_file(path, "x x\nabcdef\n")
+
+	duplicate := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"x","newText":"y"}]}`, path))),
+		&tt.ctx,
+	)
+	testing.expect(t, !duplicate.ok)
+	testing.expect(t, test_contains(duplicate.error, "Found 2 occurrences"))
+	testing.expect_value(t, test_read_file(path), "x x\nabcdef\n")
+
+	overlap := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(
+			json_obj(
+				test_json(
+					`{"file_path":%q,"edits":[{"oldText":"abc","newText":"A"},{"oldText":"bcd","newText":"B"}]}`,
+					path,
+				),
+			),
+		),
+		&tt.ctx,
+	)
+	testing.expect(t, !overlap.ok)
+	testing.expect(t, test_contains(overlap.error, "overlap"))
+
+	empty_old := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"","newText":"y"}]}`, path))),
+		&tt.ctx,
+	)
+	testing.expect(t, !empty_old.ok)
+	testing.expect(t, test_contains(empty_old.error, "oldText must not be empty"))
+
+	no_change := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"abcdef","newText":"abcdef"}]}`, path))),
+		&tt.ctx,
+	)
+	testing.expect(t, !no_change.ok)
+	testing.expect(t, test_contains(no_change.error, "No changes made"))
+
+	not_found := tool.tool_execute(
+		&tt.registry,
+		"edit_file",
+		json.Value(json_obj(test_json(`{"file_path":%q,"edits":[{"oldText":"zzz","newText":"q"}]}`, path))),
+		&tt.ctx,
+	)
+	testing.expect(t, !not_found.ok)
+	testing.expect(t, test_contains(not_found.error, "Could not find the exact text"))
+}
+
+@(test)
+test_edit_file_accepts_legacy_input :: proc(t: ^testing.T) {
+	tt := tool_test_context(t, "tool-edit-legacy")
+	defer test_cleanup(tt.dir)
+	path := fmt.tprintf("%s/legacy.txt", tt.dir)
+	test_write_file(path, "one\ntwo\n")
+
+	res := tool.tool_execute(
 		&tt.registry,
 		"edit_file",
 		json.Value(json_obj(test_json(`{"file_path":%q,"old_string":"two","new_string":"three"}`, path))),
 		&tt.ctx,
 	)
-	testing.expect(t, edit.ok)
+	testing.expect(t, res.ok)
 	testing.expect_value(t, test_read_file(path), "one\nthree\n")
 
-	multi := fmt.tprintf("%s/multi.txt", tt.dir)
-	test_write_file(multi, "x x x\n")
-	edit_multi := tool.tool_execute(
-		&tt.registry,
-		"edit_file",
-		json.Value(json_obj(test_json(`{"file_path":%q,"old_string":"x","new_string":"y"}`, multi))),
-		&tt.ctx,
-	)
-	testing.expect(t, !edit_multi.ok)
-	testing.expect(t, test_contains(edit_multi.error, "matched 3 times"))
-	testing.expect_value(t, test_read_file(multi), "x x x\n")
-
-	edit_all := tool.tool_execute(
+	res2 := tool.tool_execute(
 		&tt.registry,
 		"edit_file",
 		json.Value(
-			json_obj(test_json(`{"file_path":%q,"old_string":"x","new_string":"y","replace_all":true}`, multi)),
+			json_obj(
+				test_json(
+					`{"file_path":%q,"edits":"[{\"oldText\":\"three\",\"newText\":\"four\"}]"}`,
+					path,
+				),
+			),
 		),
 		&tt.ctx,
 	)
-	testing.expect(t, edit_all.ok)
-	testing.expect_value(t, test_read_file(multi), "y y y\n")
+	testing.expect(t, res2.ok)
+	testing.expect_value(t, test_read_file(path), "one\nfour\n")
 
-	edit_none := tool.tool_execute(
+	replace_all := tool.tool_execute(
 		&tt.registry,
 		"edit_file",
-		json.Value(json_obj(test_json(`{"file_path":%q,"old_string":"zzz","new_string":"q"}`, multi))),
+		json.Value(
+			json_obj(
+				test_json(
+					`{"file_path":%q,"old_string":"o","new_string":"0","replace_all":true}`,
+					path,
+				),
+			),
+		),
 		&tt.ctx,
 	)
-	testing.expect(t, !edit_none.ok)
-	testing.expect(t, test_contains(edit_none.error, "not found"))
+	testing.expect(t, !replace_all.ok)
+	testing.expect(t, test_contains(replace_all.error, "replace_all"))
 }
 
 @(test)
@@ -393,7 +635,7 @@ test_bash_output_truncates_at_2000_lines :: proc(t: ^testing.T) {
 	res2 := tool.tool_execute(
 		&tt.registry,
 		"read_file",
-		json.Value(json_obj(test_json(`{"file_path":%q,"start_line":2001}`, path))),
+		json.Value(json_obj(test_json(`{"file_path":%q,"offset":2001}`, path))),
 		&tt.ctx,
 	)
 	testing.expect(t, res2.ok)

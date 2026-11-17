@@ -84,7 +84,7 @@ Odin 没有异步运行时。流式读取用阻塞 IO 加回调。
 7. 工具结果带图片时，先发正常的 `role=tool` 文本消息，再发一条合成 `role=user` 消息，`content` 是 text + `image_url` 数组。图片在投影层编码成 `data:<mime>;base64,...`。OpenAI 兼容接口的 tool 消息通常只接受文本 part，拆成 user 消息兼容性最好，也不影响 tool call 配对。
 
 ```json
-{"role": "tool", "tool_call_id": "call_1", "content": "[image a.png, image/png, 12345 bytes]"},
+{"role": "tool", "tool_call_id": "call_1", "content": "Read image file [image/png]"},
 {"role": "user", "content": [
   {"type": "text", "text": "Images returned by the tool:\n- a.png (image/png)"},
   {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}

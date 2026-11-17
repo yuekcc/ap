@@ -137,7 +137,7 @@ tool_bash :: proc(args: json.Object, cfg: ^Tool_Config, ctx: ^tool.Tool_Context)
 		if platform.is_ok(werr) {
 			fmt.sbprintf(
 				&b,
-				"[共 %d 行，已返回 1-%d；完整输出已保存到 %s；继续请用 read_file(file_path=%q, start_line=%d)]",
+				"[共 %d 行，已返回 1-%d；完整输出已保存到 %s；继续请用 read_file(file_path=%q, offset=%d)]",
 				total_lines,
 				BASH_OUTPUT_MAX_LINES,
 				path,

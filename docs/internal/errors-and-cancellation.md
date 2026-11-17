@@ -53,7 +53,7 @@ Loop 只看 `Provider_Error.retryable`，不重新按 kind 分类。Provider 把
 
 普通失败写入 `tool_execution_end(ok=false)`，循环继续。包括参数错误、路径不存在、文件非 UTF-8、图片超过 `image_max_bytes`、edit 未匹配、bash 超时、输出超过 `max_capture_bytes` 与工具结果 blob 写入失败。各工具的具体文本与范围见 [tools.md](tools.md)。
 
-`read_file` 请求超过 2000 行时截断并正常返回。bash 非 0 退出仍是 `ok=true`，`exit_code` 保留真实退出码。两者都不是失败。工具取消走信号取消路径，见下文。
+`read_file` 超过 2000 行或 50KB 时截断并正常返回，末尾给出续读的 `offset`。bash 非 0 退出仍是 `ok=true`，`exit_code` 保留真实退出码。两者都不是失败。工具取消走信号取消路径，见下文。
 
 以下情况是 fatal，会终止 turn：
 

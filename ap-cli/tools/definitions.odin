@@ -16,18 +16,18 @@ Tool_Info :: struct {
 TOOL_INFOS := [5]Tool_Info {
 	{
 		name = "read_file",
-		description = "按行读取 UTF-8 文本文件；单次最多 2000 行，大文件用 start_line/end_line 分页读取。首行为元信息，其后每行格式为 `<NNN>\\t<content>`，NNN 是该行在文件中的实际行号（从 1 开始，不含补零或对齐）；内容本身不含行号，写回或匹配时不要带上它。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径（文本或图片），绝对或相对启动目录"},"start_line":{"type":"integer","minimum":1,"description":"起始行号（含），默认 1"},"end_line":{"type":"integer","minimum":1,"description":"结束行号（含），默认 start_line+499"}},"required":["file_path"],"additionalProperties":false}`,
+		description = "读取文件内容。文本单次最多 2000 行或 50KB（先到者为准），大文件用 offset/limit 分页；需要完整内容时按返回里的 offset 继续读。",
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径（文本或图片），绝对或相对启动目录"},"offset":{"type":"integer","minimum":1,"description":"起始行号（从 1 开始）"},"limit":{"type":"integer","minimum":1,"description":"最多读取的行数"}},"required":["file_path"],"additionalProperties":false}`,
 	},
 	{
 		name = "write_file",
-		description = "写入 UTF-8 文本文件；自动创建父目录，CRLF 统一为 LF，覆盖已有文件。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"content":{"type":"string","description":"完整文件内容"}},"required":["file_path","content"],"additionalProperties":false}`,
+		description = "写入文件内容。文件不存在时创建，已存在时覆盖，自动创建父目录。",
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"content":{"type":"string","description":"要写入的完整文件内容"}},"required":["file_path","content"],"additionalProperties":false}`,
 	},
 	{
 		name = "edit_file",
-		description = "把文件中的 old_string 替换为 new_string；只支持 UTF-8，写回 LF。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"old_string":{"type":"string","description":"待替换文本，支持跨行"},"new_string":{"type":"string"},"replace_all":{"type":"boolean","default":false}},"required":["file_path","old_string","new_string"],"additionalProperties":false}`,
+		description = "用精确文本替换编辑单个文件。每处 edits[].oldText 必须匹配原文件中唯一、不重叠的片段；同一块或相邻行的多处改动合并成一条，不要为了连接相距较远的改动而包含大段未变内容。",
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"edits":{"type":"array","description":"一处或多处替换。每条都按原文件匹配，不是按增量匹配；不要重叠或嵌套；相邻改动合并成一条。","items":{"type":"object","properties":{"oldText":{"type":"string","description":"与原文件精确匹配的唯一片段，不能与同一调用中的其他 edits[].oldText 重叠"},"newText":{"type":"string","description":"这条编辑的替换文本"}},"required":["oldText","newText"],"additionalProperties":false}}},"required":["file_path","edits"],"additionalProperties":false}`,
 	},
 	{
 		name = "bash",
@@ -47,7 +47,7 @@ read_file_description :: proc(cfg: ^Tool_Config) -> string {
 	base := TOOL_INFOS[0].description
 	if cfg != nil && cfg.image_input {
 		return fmt.tprintf(
-			"%s也支持读取图片：按魔数识别 PNG、JPEG、GIF、WebP，直接传 file_path 即可，图片会作为视觉附件返回；start_line/end_line 对图片无效；单张上限 %d 字节。",
+			"%s也支持读取图片：按魔数识别 PNG、JPEG、GIF、WebP，直接传 file_path 即可，图片会作为视觉附件返回；offset/limit 对图片无效；单张上限 %d 字节。",
 			base,
 			cfg.image_max_bytes,
 		)

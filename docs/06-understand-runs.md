@@ -13,8 +13,8 @@ ap 的输出分两路。看懂这两路，比记住每个参数更重要。
 
 ```text
 ◆ read_file (ap-cli/options.odin)
-  1	package apcli
-  2
+  package apcli
+
 ✓ 12ms exit 0
 ```
 

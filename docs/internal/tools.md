@@ -17,7 +17,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 
 1. 一个 step 内的多个 tool call 按响应顺序串行执行，不并发。
 2. 每次调用是无状态操作。不共享 cwd、环境变量或 shell 变量，`cd` 不跨调用生效。
-3. `read_file` 与 `bash` 各有 2000 行分页上限。`write_file`、`edit_file`、`task` 没有行数上限。
+3. `read_file` 单次最多 2000 行或 50KB，`bash` 单次最多 2000 行。`write_file`、`edit_file`、`task` 没有行数上限。
 4. 单次结果超过 `blob_threshold_bytes` 时，完整内容写入 blob，transcript 只存预览和引用。blob 不改写模型已经拿到的结果，`bash` 的 2000 行分页发生在更早的工具层。
 5. 单次捕获超过 `max_capture_bytes` 时终止工具并返回 `ok:false`，不做静默截断。
 6. 工具失败只作为 tool result 交还模型。只有 `fatal=true` 的基础设施故障才终止 turn。
@@ -91,33 +91,33 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 
 ## read_file
 
-按行读取 UTF-8 文本文件，或把图片作为多模态附件返回。
+读取文件内容，或把图片作为多模态附件返回。行为对齐 pi 的 `read`。
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `file_path` | 是 | 绝对路径或相对启动目录 |
-| `start_line` | 否 | 起始行号，包含该行，默认 1 |
-| `end_line` | 否 | 结束行号，包含该行，默认 `start_line + 499` |
+| `offset` | 否 | 起始行号（从 1 开始），默认 1 |
+| `limit` | 否 | 最多读取的行数，默认读到文件尾 |
 
 行为：
 
-1. 单次最多返回 2000 行。请求跨度更大时截到 2000 行，并追加 `[请求跨度超过 2000 行，已截断到 2000 行]`。
-2. 结果首行是 `[<path> lines <start>-<end> of <total>]`。
-3. 其后每行是 `<NNN>\t<content>`。`NNN` 是该行在文件中的实际行号，从 1 开始，不补零、不对齐。行号前缀计入 `max_capture_bytes`。
-4. 文件还有更多行时，末尾追加 `[共 N 行，已返回 X-Y；继续请用 start_line=Y+1]`。
-5. `start_line` 大于总行数时返回空内容和元信息，不报错。
-6. `end_line` 超过文件尾时按实际行数返回。
-7. `start_line < 1` 或 `end_line < start_line` 返回 `ok:false`。
+1. 文本按原样返回，不加行号。未截断时保留文件末尾换行；CRLF 的行尾 `\r` 在输出中去掉。
+2. 单次最多 2000 行或 50KB（与 `max_capture_bytes` 取小）。
+3. 被行数截断时追加 `[Showing lines X-Y of Z. Use offset=N to continue.]`。
+4. 被字节截断时追加 `[Showing lines X-Y of Z (<size> limit). Use offset=N to continue.]`。
+5. 显式 `limit` 提前结束时追加 `[<n> more lines in file. Use offset=N to continue.]`。
+6. 第一行就超过字节上限时，内容替换为 `[Line N is <size>, exceeds <limit> limit. Use bash: sed -n 'Np' <path> | head -c <bytes>]`。
+7. `offset` 超出文件尾时返回 `ok:false`；`offset < 1` 或 `limit < 1` 同样失败。
 8. 文件不存在、是目录或不是普通文件时返回 `ok:false`。
 9. 读取到的行不是合法 UTF-8、含 NUL 或单行超过 `max_capture_bytes` 时返回 `ok:false`，提示改用 bash。
-10. 本次请求的累计输出超过 `max_capture_bytes` 时返回 `ok:false`，提示缩小范围。
+10. 行计数与 pi 一致：文件以换行结尾时不额外算一个空行。
 
 ### 图片
 
 按魔数识别 PNG、JPEG、GIF、WebP。SVG 仍按文本文件读取。
 
 1. `image_input = false`（默认）时，图片文件返回 `ok:false`，提示开启配置，不按二进制错误处理。
-2. `image_input = true` 时，返回一行文本 `[image <path>, <mime>, <bytes> bytes]`，并把原始字节放进 `images`。`start_line` / `end_line` 对图片不生效。
+2. `image_input = true` 时，返回一行文本 `Read image file [<mime>]`，并把原始字节放进 `images`。`offset` / `limit` 对图片不生效。
 3. 图片超过 `image_max_bytes`（默认 `5242880`）时返回 `ok:false`，不自动缩放或转码。
 4. 只支持原样透传，不处理 EXIF 旋转、动画帧或色彩空间。
 5. 引擎把图片写入 blob，`tool_execution_end.images` 只记录 `name`、`mime_type`、`ref` 与 `bytes`。投影时 provider 把图片展开成紧随 tool 消息的 user 消息；具体见 [provider.md](provider.md)。
@@ -125,15 +125,14 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 示例：
 
 ```text
-[Z:/projects/ap/ap-core/engine/loop.odin lines 1-3 of 824]
-1	package engine
-2	
-3	import "../platform"
+package engine
+
+import "../platform"
 ```
 
 ## write_file
 
-写入文本文件。
+写入完整文件内容。行为对齐 pi 的 `write`。
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
@@ -143,35 +142,46 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 行为：
 
 1. 父目录不存在时自动创建。
-2. 内容按 UTF-8 文本处理。实现不做编码校验，只把 CRLF 归一为 LF，其余字节原样写入。
+2. 内容原样写入，不做编码校验，也不转换换行符。
 3. 先写同目录临时文件 `.ap-tmp-<pid>-<nano>`，`fsync`，关闭，再 rename 覆盖。Windows 的 rename 会替换已有文件。
 4. 已有文件保留原权限位。新文件按默认权限创建。
 5. 不备份、不保留原文件。
 6. `content` 超过 `max_capture_bytes` 时返回 `ok:false`，不写文件。
-7. 返回 `wrote <bytes> bytes (<lines> lines) to <path>`。
+7. 返回 `Successfully wrote to <path>`。
 
 ## edit_file
 
-把文件中的 `old_string` 替换为 `new_string`。
+用 `edits` 里的精确文本替换编辑单个文件。行为对齐 pi 的 `edit`。
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `file_path` | 是 | 文件路径 |
-| `old_string` | 是 | 待替换文本，可跨行 |
-| `new_string` | 是 | 新文本 |
-| `replace_all` | 否 | 是否替换全部匹配，默认 `false` |
+| `edits` | 是 | 至少一条 `{oldText, newText}` |
+| `edits[].oldText` | 是 | 必须唯一、不重叠 |
+| `edits[].newText` | 是 | 这条编辑的替换文本 |
 
 行为：
 
-1. 读入整份文件后先把 CRLF 归一为 LF。替换结果原样写回，所以编辑 CRLF 文件会让旧内容整份变成 LF，`new_string` 中的换行则保持原样。
-2. 文件大于 `max_capture_bytes` 时返回 `ok:false`，提示改用 bash。
-3. 非 UTF-8 或目标是目录时返回 `ok:false`。
-4. `old_string` 为空时返回 `ok:false`。
-5. 0 处匹配时返回 `ok:false`，提示先用 `read_file` 确认内容，不写文件。
-6. 多处匹配且 `replace_all=false` 时返回 `ok:false`，给出匹配次数。
-7. 替换结果与原文相同时返回 `ok:false`，错误为 `replacement produced no change`。
-8. 写入方式与 `write_file` 相同：同目录临时文件、`fsync`、rename。
-9. 返回 `replaced <N> occurrence(s) in <path> (<lines> lines)`。
+1. 所有 `oldText` 都按原文件匹配，不是按前一条的结果递增匹配。
+2. 精确匹配失败时做容错匹配：逐行去掉行尾空白，把弯引号、Unicode 破折号、特殊空格归一到 ASCII；全角 ASCII（`U+FF01..U+FF5E`）也归一。不做完整 NFKC。
+3. 容错匹配只重写被改动的行，其余行原样保留。
+4. 读入时去掉 BOM 再匹配，写回时按原文件恢复 BOM 与换行风格（`\r\n` 或 `\n`）。
+5. `oldText` 为空时返回 `ok:false`，错误为 `oldText must not be empty in <path>.`。
+6. `oldText` 匹配不到时返回 `ok:false`，不写文件。
+7. 同一 `oldText` 匹配到多处时返回 `ok:false`，给出匹配次数并要求补充上下文。
+8. 多条编辑的范围重叠时返回 `ok:false`，要求合并成一条。
+9. 替换结果与原文相同时返回 `ok:false`。
+10. 文件大于 `max_capture_bytes`、非 UTF-8 或目标是目录时返回 `ok:false`。
+11. 写入方式与 `write_file` 相同：同目录临时文件、`fsync`、rename。
+12. 返回 `Successfully replaced <N> block(s) in <path>.`。
+13. 兼容宽松输入：`edits` 可以是 JSON 字符串；旧式顶层 `old_string`/`new_string`（或 `oldText`/`newText`）视为单条编辑。`replace_all` 不再支持。
+
+### 与 pi 的有意差异
+
+- 图片不缩放、不转码，也不识别 BMP；开关沿用 `image_input` 与 `image_max_bytes`。
+- 容错匹配不做完整 NFKC，只覆盖全角 ASCII、弯引号、Unicode 破折号与特殊空格。
+- `edit_file` 不生成 diff/patch，结果只有一行状态文本；ap 的 tool result 没有 details 通道。
+- 写入仍走同目录临时文件 + `fsync` + rename，而不是直接覆盖。
 
 ## bash
 
@@ -201,7 +211,7 @@ SDK 不认识具体工具名、参数或子代理命令行。`Tool.user` 是宿�
 7. 超时由 ap 控制。不要求在命令里调用 `timeout`。
 8. `timeout_ms <= 0`、超过 600000、命令为空、命令超过 8000 个字符或超过 32000 字节时返回 `ok:false`。
 9. 输出超过 `max_capture_bytes` 时终止整棵进程树，返回 `ok:false`，错误为 `output exceeded <max_capture_bytes> bytes`。
-10. 输出超过 2000 行时只返回前 2000 行。完整输出写入 `blobs/<sha256>.txt`，结果末尾给出路径和 `read_file(..., start_line=2001)` 续读提示。写入失败时保留前 2000 行并附错误信息。
+10. 输出超过 2000 行时只返回前 2000 行。完整输出写入 `blobs/<sha256>.txt`，结果末尾给出路径和 `read_file(..., offset=2001)` 续读提示。写入失败时保留前 2000 行并附错误信息。
 11. 命令按 POSIX shell 语法编写。不保证 `cmd.exe` 或 PowerShell 的内置命令可用。
 
 示例：
