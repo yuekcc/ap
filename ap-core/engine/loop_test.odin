@@ -56,9 +56,16 @@ fake_provider_call :: proc(
 	}
 	calls := make([dynamic]Assembled_Tool_Call, 0, 1)
 	if response.stop == .Tool_Use {
+		// 真实 provider 用 context.allocator 解析参数树并把它交给 loop 回收。
+		// 测试里的 tool_input 是手写 map，键是字符串字面量；必须深拷成由
+		// context.allocator 拥有的树，否则 loop 释放键时会 free 字面量。
 		append(
 			&calls,
-			Assembled_Tool_Call{id = response.tool_id, name = response.tool_name, input = response.tool_input},
+			Assembled_Tool_Call {
+				id = response.tool_id,
+				name = response.tool_name,
+				input = json.clone_value(response.tool_input),
+			},
 		)
 	}
 	emit_provider_event(
