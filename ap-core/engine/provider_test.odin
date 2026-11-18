@@ -438,3 +438,37 @@ test_sse_parser_rejects_oversized_event :: proc(t: ^testing.T) {
 	chunk[len(chunk) - 1] = '\n'
 	testing.expect_value(t, sse_feed(&p, chunk, sse_test_handler, nil), Sse_Error.Event_Too_Long)
 }
+
+@(test)
+test_provider_header_for_log_masks_api_key :: proc(t: ^testing.T) {
+	testing.expect_value(
+		t,
+		provider_header_for_log("Authorization: Bearer sk-secret"),
+		"Authorization: Bearer ***",
+	)
+	testing.expect_value(
+		t,
+		provider_header_for_log("authorization: Basic dXNlcg=="),
+		"Authorization: Bearer ***",
+	)
+	testing.expect_value(
+		t,
+		provider_header_for_log("Content-Type: application/json"),
+		"Content-Type: application/json",
+	)
+}
+
+@(test)
+test_provider_trace_stops_at_limit :: proc(t: ^testing.T) {
+	ctx := Stream_Context{}
+	defer delete(ctx.trace)
+
+	chunk := make([]byte, PROVIDER_TRACE_MAX_BYTES + 10)
+	defer delete(chunk)
+	provider_trace_append(&ctx, chunk)
+	testing.expect_value(t, len(ctx.trace), PROVIDER_TRACE_MAX_BYTES)
+	testing.expect(t, ctx.trace_truncated)
+
+	provider_trace_append(&ctx, chunk)
+	testing.expect_value(t, len(ctx.trace), PROVIDER_TRACE_MAX_BYTES)
+}

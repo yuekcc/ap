@@ -124,6 +124,8 @@ $AP_CONFIG/logs/app-YYYY-MM-DD.log
 ./build/ap --debug --print "..."
 ```
 
+`--verbose` 记录 info：启动环境、session 怎么打开、每个 turn 的请求规模、每次请求的 `stop_reason`、交接原因。`--debug` 再加上 debug：完整的接口请求与响应（地址、header、body；`Authorization` 值替换为 `Bearer ***`；单次正文上限 1MiB）、传输结果与重试等待、工具耗时与退出码、子代理丢弃的非 JSON 行。两种级别都同时写 stderr 和当天的日志文件。
+
 ## 报告问题时带上这些
 
 - 完整命令和参数。

@@ -192,6 +192,8 @@ continue with -s <session_id>
 诊断日志追加到 `$AP_CONFIG/logs/app-YYYY-MM-DD.log`，按本地日期一天一个文件。
 
 - 默认级别是 warning。`log_error` 始终输出，`log_warn` 在 warning 及以上输出。`--verbose` 加上 info，`--debug` 再加上 debug。
+- info 记录一次运行的主干：启动环境（cwd、配置目录）、session 打开（来源、model、agent、深度）、每个 turn 的配置、每次 provider 请求的消息数与工具数与估算 token 与预算、每个 step 的 `stop_reason`、自动交接的原因。
+- debug 记录排查细节：provider 的请求地址与请求字节数、完整请求 header 与请求体（`Authorization` 值替换为 `Bearer ***`）、响应 header 与响应正文（SSE 原始字节或错误正文，单次上限 1MiB）、传输结果（状态码、失败类型、缓冲字节数）、重试次数与等待时间、`context_too_long` 后收紧预算、每次工具调用的耗时与退出码与参数和结果字节数、子代理 stdout 上被丢弃的非 JSON 行、transcript 里被跳过的未知事件。
 - 一条日志一行：`YYYY-MM-DD HH:MM:SS [level] message`。消息自带换行时，续行保留同一前缀并缩进两格。
 - 进程内第一条日志才创建 `logs/` 和文件。整次运行没有日志就不留空文件。
 - 目录不可写、磁盘满等写入失败一律吞掉，不影响退出码和 stderr。

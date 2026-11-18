@@ -7,6 +7,7 @@ import "core:testing"
 
 // 文件日志是全局状态，每个用例结束都要清掉，避免影响同包其它测试。
 logger_reset :: proc() {
+	log_set_level(.Info)
 	log_file_close()
 }
 
@@ -105,4 +106,60 @@ test_log_file_appends_across_reopen :: proc(t: ^testing.T) {
 	content := test_read_file(log_file_path(dir, 2024, 3, 7))
 	testing.expect(t, strings.contains(content, "[warn] one\n"))
 	testing.expect(t, strings.contains(content, "[warn] two\n"))
+}
+
+@(test)
+test_log_info_and_debug_are_below_warn_level :: proc(t: ^testing.T) {
+	dir := test_temp_dir("logger-level-warn")
+	defer test_cleanup(dir)
+	defer logger_reset()
+
+	year, month, day, _, _, _ := local_now()
+	log_file_init(dir)
+	log_set_level(.Warn)
+	log_info("info is filtered out")
+	log_debug("debug is filtered out")
+	// 级别过滤发生在写文件之前：只有 info/debug 时不创建日志文件。
+	testing.expect(t, !os.exists(logs_dir_of(dir)))
+
+	log_warn("warn is kept")
+	log_error("error is kept")
+	content := test_read_file(log_file_path(dir, year, month, day))
+	testing.expect(t, strings.contains(content, "[warn] warn is kept\n"))
+	testing.expect(t, strings.contains(content, "[error] error is kept\n"))
+}
+
+@(test)
+test_log_debug_writes_info_and_debug_lines :: proc(t: ^testing.T) {
+	dir := test_temp_dir("logger-level-debug")
+	defer test_cleanup(dir)
+	defer logger_reset()
+
+	year, month, day, _, _, _ := local_now()
+	log_file_init(dir)
+	log_set_level(.Debug)
+	log_info("request %d messages", 3)
+	log_debug("line one\nline two")
+
+	content := test_read_file(log_file_path(dir, year, month, day))
+	testing.expect(t, strings.contains(content, "[info] request 3 messages\n"))
+	testing.expect(t, strings.contains(content, "[debug] line one\n"))
+	testing.expect(t, strings.contains(content, "[debug]   line two\n"))
+}
+
+@(test)
+test_log_error_is_not_filtered_by_level :: proc(t: ^testing.T) {
+	dir := test_temp_dir("logger-level-error")
+	defer test_cleanup(dir)
+	defer logger_reset()
+
+	year, month, day, _, _, _ := local_now()
+	log_file_init(dir)
+	log_set_level(.Error)
+	log_warn("warn is filtered out")
+	log_error("error always wins")
+
+	content := test_read_file(log_file_path(dir, year, month, day))
+	testing.expect(t, !strings.contains(content, "warn is filtered out"))
+	testing.expect(t, strings.contains(content, "[error] error always wins\n"))
 }

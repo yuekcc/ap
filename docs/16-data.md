@@ -83,7 +83,8 @@ $AP_CONFIG/logs/app-YYYY-MM-DD.log
 ```
 
 - 默认记录 warning 及以上级别。
-- `--verbose` 加上 info，`--debug` 再加上 debug。
+- `--verbose` 加上 info：启动环境、session 打开、每个 turn 的请求规模与预算、每次请求的 `stop_reason`、自动交接原因。
+- `--debug` 再加上 debug：接口请求与响应（地址、header、body，`Authorization` 已脱敏，单次正文上限 1MiB）、传输与重试细节、工具耗时与退出码、子代理丢弃的非 JSON 行。
 - 一条日志一行，格式是 `YYYY-MM-DD HH:MM:SS [level] message`。
 - 日志不记录 `api_key`。
 - 日志写入失败不影响运行和退出码。

@@ -1,8 +1,11 @@
 package apcore
 
+import "platform"
+
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 sdk_temp_dir :: proc(name: string) -> string {
@@ -119,4 +122,32 @@ test_sdk_session_options_append :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(opts.prompt_sections), 2)
 	testing.expect_value(t, opts.prompt_sections[0], "one")
 	testing.expect_value(t, opts.prompt_sections[1], "two")
+}
+
+// 回归：--debug 曾经因为 SDK 不转发 info/debug 而完全没有输出。
+@(test)
+test_sdk_log_info_and_debug_follow_level :: proc(t: ^testing.T) {
+	dir := sdk_temp_dir("sdk-logger")
+	defer os.remove_all(dir)
+	defer log_set_level(.Info)
+	defer log_file_close()
+
+	year, month, day, _, _, _ := platform.local_now()
+	path := fmt.tprintf("%s/logs/app-%04d-%02d-%02d.log", dir, year, month, day)
+
+	log_file_open(dir)
+	log_set_level(.Warn)
+	log_info("filtered info")
+	log_debug("filtered debug")
+	testing.expect(t, !os.exists(path))
+
+	log_set_level(.Debug)
+	log_info("step %d: request", 1)
+	log_debug("provider: status %d", 200)
+
+	data, err := os.read_entire_file_from_path(path, context.allocator)
+	testing.expect(t, err == nil)
+	content := string(data)
+	testing.expect(t, strings.contains(content, "[info] step 1: request\n"))
+	testing.expect(t, strings.contains(content, "[debug] provider: status 200\n"))
 }

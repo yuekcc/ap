@@ -602,7 +602,7 @@ normalize_finish_reason :: proc(reason: string) -> (Stop_Reason, bool) {
 	case "stop":
 		return .Stop, true
 	case "content_filter":
-		log_warn("provider stopped due to content_filter")
+		platform.log_warn("provider stopped due to content_filter")
 		return .Stop, true
 	case "tool_calls":
 		return .Tool_Use, true
@@ -797,13 +797,37 @@ provider_init :: proc(settings: ^Settings) -> Provider {
 Stream_Context :: struct {
 	assembler:      ^Stream_Assembler,
 	raw:            [dynamic]byte,
+	// 只在 debug 级别按需累积：日志要的是完整请求/响应，传输层其它时候不保留副本。
+	trace:          [dynamic]byte,
+	trace_wanted:   bool,
+	trace_truncated: bool,
 	sse:            Sse_Parser,
 	protocol_error: string,
+}
+
+// 单次请求/响应的日志上限。debug 用于排查接口问题，不为了写日志把大响应全留在内存。
+PROVIDER_TRACE_MAX_BYTES :: 1024 * 1024
+
+provider_trace_append :: proc(ctx: ^Stream_Context, data: []byte) {
+	remaining := PROVIDER_TRACE_MAX_BYTES - len(ctx.trace)
+	if remaining <= 0 {
+		ctx.trace_truncated = true
+		return
+	}
+	chunk := data
+	if len(chunk) > remaining {
+		chunk = chunk[:remaining]
+		ctx.trace_truncated = true
+	}
+	append(&ctx.trace, ..chunk)
 }
 
 // 传输层只给原始字节和状态码；这里决定字节进 SSE 还是当作错误正文缓存。
 provider_body_cb :: proc(user: rawptr, status: int, data: []byte) -> bool {
 	ctx := (^Stream_Context)(user)
+	if ctx.trace_wanted {
+		provider_trace_append(ctx, data)
+	}
 	if status == 200 {
 		err := sse_feed(&ctx.sse, data, provider_sse_handler, rawptr(ctx.assembler))
 		if err != .None {
@@ -849,6 +873,46 @@ provider_transport_error :: proc(res: platform.Http_Stream_Result) -> Provider_E
 	return {kind = .Network, message = res.message, retryable = true}
 }
 
+// 日志里不能出现 api_key：Authorization 只保留 scheme。
+provider_header_for_log :: proc(line: string) -> string {
+	lower, _ := strings.to_lower(line, context.temp_allocator)
+	if strings.has_prefix(lower, "authorization:") {
+		return "Authorization: Bearer ***"
+	}
+	return line
+}
+
+// 接口详情只在 debug 下记录：地址、请求规模、完整 header 与请求体，便于复现模型侧问题。
+provider_log_request :: proc(
+	p: ^Provider,
+	req: ^Chat_Message_Request,
+	headers: []string,
+	body: []byte,
+) {
+	b := strings.builder_make()
+	defer strings.builder_destroy(&b)
+	fmt.sbprintf(
+		&b,
+		"provider: request POST %s (%d messages, %d bytes, max_tokens %d)\n",
+		p.base_url,
+		len(req.messages),
+		len(body),
+		req.max_tokens,
+	)
+	for header in headers {
+		fmt.sbprintf(&b, "  %s\n", provider_header_for_log(header))
+	}
+	fmt.sbprintf(&b, "  body:\n%s", string(body))
+	platform.log_debug("%s", strings.to_string(b))
+}
+
+provider_log_response_header :: proc(user: rawptr, status: int, line: string) {
+	if len(line) == 0 {
+		return
+	}
+	platform.log_debug("provider: response header [%d] %s", status, line)
+}
+
 provider_stream :: proc(
 	p: ^Provider,
 	req: ^Chat_Message_Request,
@@ -868,6 +932,8 @@ provider_stream :: proc(
 	defer assembler_destroy(&a)
 
 	ctx := Stream_Context{assembler = &a}
+	ctx.trace_wanted = platform.log_enabled(.Debug)
+	defer delete(ctx.trace)
 	sse_parser_init(&ctx.sse)
 	defer sse_parser_destroy(&ctx.sse)
 
@@ -879,6 +945,9 @@ provider_stream :: proc(
 		user_agent,
 		auth,
 	}
+	if ctx.trace_wanted {
+		provider_log_request(p, req, headers[:], body)
+	}
 
 	http_req := platform.Http_Stream_Request {
 		url = p.base_url,
@@ -889,8 +958,23 @@ provider_stream :: proc(
 		cancel = cancel,
 		user = &ctx,
 		on_body = provider_body_cb,
+		on_header = provider_log_response_header,
 	}
 	res := platform.http_stream(&http_req)
+	platform.log_debug(
+		"provider: done status=%d failure=%v buffered=%d bytes",
+		res.status,
+		res.failure,
+		len(ctx.raw),
+	)
+	if len(ctx.trace) > 0 {
+		platform.log_debug(
+			"provider: response body (%d bytes, truncated=%v):\n%s",
+			len(ctx.trace),
+			ctx.trace_truncated,
+			string(ctx.trace[:]),
+		)
+	}
 
 	if len(ctx.protocol_error) > 0 {
 		return assembler_fail(&a, {kind = .Protocol, message = ctx.protocol_error, retryable = false})

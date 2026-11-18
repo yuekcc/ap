@@ -29,7 +29,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | `apcore` | 接收 `Config`、定位 project、组装 `Session_Request`、暴露会话生命周期、日志入口 | 不读 argv、环境变量或 `settings.json(c)`，不写 stdout，不装信号，不决定退出码 |
 | `ap-core/engine` | session、loop、provider、context、transcript 的编排 | 不 import `apcore`、`ap-cli` 或前端 |
 | `ap-core/tool` | `Tool`、`Tool_Context`、`Tool_Result`、`Registry`、执行管线 | 不 import engine，不提供具体工具 |
-| `ap-core/platform` | 路径与 project hash、session 发现、blob、JSON 与文本、平台原语、流式 HTTP 传输、进程树、取消 token、日志文件 | 不 import 任何本地包，不含 agent 与协议语义 |
+| `ap-core/platform` | 路径与 project hash、session 发现、blob、JSON 与文本、平台原语、流式 HTTP 传输、进程树、取消 token、诊断日志（级别过滤与 stderr、文件双写） | 不 import 任何本地包，不含 agent 与协议语义 |
 | `ap-core/protocol` | 事件 schema 与 wire 常量、宽松解析、`Line_Reader`、usage | 不 import 任何本地包，不含 IO、路径或 agent 逻辑 |
 | `ap-core/client` | spawn、拼 argv、逐行泵、取消、只读 project/session/blob、历史展示辅助 | 不 import engine 或 `apcore` 根包，不含 agent |
 | `ap-tui`（`aptui`） | 终端渲染、输入、编辑器、按键、terminal 控制、历史重放 | 不 import engine 或 platform，不含 agent |
@@ -45,7 +45,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | `context.odin` | transcript 到 messages 的投影、system prompt 组装、blob 解引用 |
 | `provider.odin`、`sse.odin` | OpenAI chat completions 请求、SSE 解析、tool call 组装、usage、错误归一；HTTP 传输在 `platform` |
 | `transcript.odin` | 事件追加与读取、最后一个 `session_start` 的定位、fork 与恢复 |
-| `errors.odin`、`config.odin` | 错误值、日志级别、`Settings` 与默认值 |
+| `errors.odin`、`config.odin` | 错误值、`Settings` 与默认值 |
 | `prompts/system.md` | 编译期内嵌的基础 system prompt |
 
 ## 依赖方向

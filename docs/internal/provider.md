@@ -207,9 +207,12 @@ HTTP 头的 `Retry-After` 写入 `retry_after_ms`。循环层决定是否使用�
 
 调用契约：
 
-- header 行先于正文到达，回调拿到的状态码是已经解析出的值；还没读到状态行时为 0。
+- 正文与 header 回调拿到的状态码是已经解析出的值；还没读到状态行时为 0。
+- header 回调可选，状态行与每个 header 行各触发一次，行内容已去掉换行；传输层自己只用它解析状态码与 `Retry-After`。
 - 回调返回 false 立即中止传输，已收到的字节由调用方处理。
 - 取消标志在 curl 进度回调里轮询，命中后中止请求。
+
+`provider_stream` 在 debug 级别把接口详情写进诊断日志：请求地址、完整请求 header（`Authorization` 替换为 `Bearer ***`）、请求体、响应 header，以及响应正文（SSE 原始字节或错误正文）。正文只在 debug 开启时累积，单次请求上限 1MiB，超出部分丢弃并标注 `truncated=true`。
 
 HTTP 与 TLS 统一走 `vendor:curl`。Windows 链接 Odin 随附的静态 libcurl。Linux 与 macOS 链接系统 libcurl，需要开发包。
 

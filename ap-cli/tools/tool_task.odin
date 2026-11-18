@@ -105,10 +105,12 @@ task_handle_line :: proc(state: ^Task_State, project: platform.Project, line: st
 	}
 	value, perr := json.parse_string(line, .JSON, true)
 	if perr != nil {
+		platform.log_debug("subagent: skipping non-JSON stdout line: %s", line)
 		return
 	}
 	obj, is_obj := value.(json.Object)
 	if !is_obj {
+		platform.log_debug("subagent: skipping non-object stdout line: %s", line)
 		return
 	}
 	typ, has_type := obj["type"].(json.String)

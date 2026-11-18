@@ -31,6 +31,9 @@ Http_Failure :: enum {
 // 返回 false 中止传输。status 是该段字节所属响应的状态码；还没读到状态行时为 0。
 Http_Body_Proc :: #type proc(user: rawptr, status: int, data: []byte) -> bool
 
+// 响应头回调：状态行与每个 header 行各一次，line 已去掉换行。
+Http_Header_Proc :: #type proc(user: rawptr, status: int, line: string)
+
 Http_Stream_Request :: struct {
 	url:                   string,
 	// 完整 header 行，例如 "Accept: text/event-stream"。
@@ -42,6 +45,8 @@ Http_Stream_Request :: struct {
 	cancel:                ^Cancel_Token,
 	user:                  rawptr,
 	on_body:               Http_Body_Proc,
+	// 可选：观察响应头，传输层自身不做其它处理。
+	on_header:             Http_Header_Proc,
 }
 
 Http_Stream_Result :: struct {
@@ -86,6 +91,9 @@ http_header_cb :: proc "c" (buffer: [^]byte, size, nitems: c.size_t, user: rawpt
 		if status, ok := http_parse_status_line(trimmed); ok {
 			state.status = status
 		}
+	}
+	if state.req.on_header != nil {
+		state.req.on_header(state.req.user, state.status, trimmed)
 	}
 	lower, _ := strings.to_lower(trimmed, context.temp_allocator)
 	if strings.has_prefix(lower, "retry-after:") {

@@ -331,7 +331,7 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 		value, perr := json.parse_string(line, .JSON, true)
 		if perr != nil {
 			if idx == last_nonempty {
-				log_warn("transcript %s: ignoring incomplete last line", path)
+				platform.log_warn("transcript %s: ignoring incomplete last line", path)
 				break
 			}
 			return nil, make_error(.Usage, "transcript %s is corrupt at line %d: %v", path, idx + 1, perr)
@@ -343,7 +343,7 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 		obj, is_obj := value.(json.Object)
 		if !is_obj {
 			if idx == last_nonempty {
-				log_warn("transcript %s: ignoring incomplete last line", path)
+				platform.log_warn("transcript %s: ignoring incomplete last line", path)
 				break
 			}
 			return nil, make_error(.Usage, "transcript %s is corrupt at line %d: not an object", path, idx + 1)
@@ -351,7 +351,7 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 		typ, typ_ok := obj["type"].(json.String)
 		if !typ_ok {
 			if idx == last_nonempty {
-				log_warn("transcript %s: ignoring incomplete last line", path)
+				platform.log_warn("transcript %s: ignoring incomplete last line", path)
 				break
 			}
 			return nil, make_error(.Usage, "transcript %s is corrupt at line %d: missing type", path, idx + 1)
@@ -362,7 +362,7 @@ transcript_read_all :: proc(project: Project, session_id: string) -> ([]Event, E
 			version = int(v)
 		}
 		if !event_type_known(type_name) {
-			log_debug("transcript %s: skipping unknown event type %q", path, type_name)
+			platform.log_debug("transcript %s: skipping unknown event type %q", path, type_name)
 			continue
 		}
 		if version > SCHEMA_VERSION {

@@ -83,6 +83,7 @@ run_inner :: proc(args: []string) -> int {
 		apcore.log_error("%s", cwderr.message)
 		return int(Exit_Code.Usage)
 	}
+	apcore.log_info("ap %s: cwd=%s config=%s", VERSION, cwd, config_dir)
 	bash_path, berr := platform.find_bash()
 	if !platform.is_ok(berr) {
 		apcore.log_error("%s", berr.message)
@@ -225,6 +226,14 @@ run_inner :: proc(args: []string) -> int {
 	for warning in info.warnings {
 		apcore.log_warn("%s", warning)
 	}
+	apcore.log_info(
+		"session %s: %s, model %s, agent %s, depth %d",
+		info.session_id,
+		session_kind_label(kind),
+		info.model,
+		info.agent_name,
+		info.agent_depth,
+	)
 	// task 子代理沿用本次 session 实际使用的 model / max_steps。
 	tool_cfg.model = session.model
 	tool_cfg.max_steps = session.max_steps
@@ -668,4 +677,17 @@ exit_code_for :: proc(kind: apcore.Error_Kind) -> int {
 		return int(Exit_Code.Tool)
 	}
 	return int(Exit_Code.Internal)
+}
+
+// 日志里只出现可读的会话来源，方便和 transcript / session_end 对上。
+session_kind_label :: proc(kind: apcore.Session_Kind) -> string {
+	switch kind {
+	case .New:
+		return "new"
+	case .Resume:
+		return "resume"
+	case .Fork:
+		return "fork"
+	}
+	return "new"
 }

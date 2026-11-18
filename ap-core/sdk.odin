@@ -39,7 +39,7 @@ SESSION_END_ERROR :: engine.SESSION_END_ERROR
 
 Error :: engine.Error
 Error_Kind :: engine.Error_Kind
-Log_Level :: engine.Log_Level
+Log_Level :: platform.Log_Level
 Session :: engine.Session
 Session_Kind :: engine.Session_Kind
 Session_Request :: engine.Session_Request
@@ -280,7 +280,7 @@ session_title_destroy :: proc(result: ^Session_Title_Result) {
 // SDK 不读环境变量、不猜配置目录，只有显式传进来的目录才会被写。
 
 log_set_level :: proc(level: Log_Level) {
-	engine.log_set_level(level)
+	platform.log_set_level(level)
 }
 
 // log_file_open 打开当天的日志文件（已在其它位置初始化过目录时可省略）。
@@ -293,9 +293,17 @@ log_file_close :: proc() {
 }
 
 log_error :: proc(format: string, args: ..any) {
-	engine.log_error(format, ..args)
+	platform.log_error(format, ..args)
 }
 
 log_warn :: proc(format: string, args: ..any) {
-	engine.log_warn(format, ..args)
+	platform.log_warn(format, ..args)
+}
+
+log_info :: proc(format: string, args: ..any) {
+	platform.log_info(format, ..args)
+}
+
+log_debug :: proc(format: string, args: ..any) {
+	platform.log_debug(format, ..args)
 }

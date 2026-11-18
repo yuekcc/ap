@@ -574,7 +574,7 @@ loop_finish_turn :: proc(l: ^Loop, result: ^Loop_Result, stop_reason: string, nu
 // 记一条日志后继续返回结果，避免把原始终止原因盖掉。
 loop_try_write_turn_end :: proc(l: ^Loop, stop_reason: string) {
 	if err := loop_write_turn_end(l, stop_reason); !is_ok(err) {
-		log_error("cannot write turn_end(%s): %s", stop_reason, err.message)
+		platform.log_error("cannot write turn_end(%s): %s", stop_reason, err.message)
 	}
 }
 
@@ -672,6 +672,15 @@ loop_execute_tools :: proc(l: ^Loop) -> (cancelled: bool, err: Error, error_kind
 			res.error = TOOL_ERROR_CANCELLED
 			res.content = ""
 		}
+		platform.log_debug(
+			"tool %s: ok=%v duration=%dms exit=%d args=%d bytes, result=%d bytes",
+			call.name,
+			res.ok,
+			res.duration_ms,
+			res.exit_code,
+			len(args_text),
+			len(res.content),
+		)
 
 		image_refs: []Tool_Image_Ref
 		image_error := ""
@@ -773,6 +782,15 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		result.fatal_error = err.message
 		return result
 	}
+	platform.log_info(
+		"turn %d: session %s, model %s, agent %s, max_steps %d, max_tokens %d",
+		turn,
+		l.session_id,
+		l.model,
+		l.agent_name,
+		l.max_steps,
+		l.max_tokens,
+	)
 
 	step := 0
 	for {
@@ -880,6 +898,14 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 		}
 		sink := Stream_Sink{user = l, on_event = loop_provider_event}
 		l.last_request_estimate = request_raw_estimate(context_in)
+		platform.log_info(
+			"step %d: request %d messages, %d tools, ~%d tokens (limit %d)",
+			step,
+			len(all_messages),
+			len(tools),
+			context_in.estimated_tokens,
+			target,
+		)
 
 		attempt := 1
 		success := false
@@ -903,6 +929,11 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 					perr = {kind = .Protocol, message = "provider returned no message_end", retryable = false}
 				} else {
 					success = true
+					platform.log_info(
+						"step %d: response stop_reason=%s",
+						step,
+						stop_reason_string(l.pending_stop),
+					)
 					break
 				}
 			}
@@ -916,6 +947,10 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 				if target > 0 && l.handoff_enabled && !tightened {
 					tightened = true
 					if tightened_request(l, context_in, alloc, target, &req) {
+						platform.log_debug(
+							"step %d: provider rejected request as too long; retrying with tighter budget",
+							step,
+						)
 						progress(
 							l,
 							.Line,
@@ -942,6 +977,14 @@ loop_run_turn :: proc(l: ^Loop, prompt: string) -> (result: Loop_Result) {
 					delay += int(time.time_to_unix_nano(time.now()) % 251)
 				}
 				progress(l, .Line, "[retry] %s (attempt %d, %dms)", perr.message, attempt, delay)
+				platform.log_debug(
+					"provider retry %d/%d: %s %s (wait %dms)",
+					attempt,
+					MAX_LLM_RETRIES,
+					provider_error_kind_string(perr.kind),
+					perr.message,
+					delay,
+				)
 				if l.attempt_had_text {
 					progress(l, .Line, "[retry] 上一次尝试已展示的文本作废")
 				}
@@ -1127,6 +1170,7 @@ handoff_frozen_prompt :: proc(project: Project, events: []Event) -> (string, Err
 // 生成交接文档并结束本次 turn。失败时退回 loop_context_exhausted 的路径。
 loop_handoff_turn :: proc(l: ^Loop, result: Loop_Result, step: int, reason: string) -> Loop_Result {
 	out := result
+	platform.log_info("step %d: handoff (%s)", step, reason)
 	frozen_prompt, serr := handoff_frozen_prompt(l.project, l.events[:])
 	if !is_ok(serr) {
 		return loop_context_exhausted(l, result, step)
