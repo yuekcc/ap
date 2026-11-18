@@ -63,7 +63,7 @@ build_system_prompt :: proc(opts: System_Prompt_Options) -> string {
 	if !strings.has_suffix(base, "\n") {
 		strings.write_byte(&b, '\n')
 	}
-	strings.write_string(&b, "\n## 工具\n")
+	strings.write_string(&b, "\n## Tools\n")
 	strings.write_string(&b, opts.tool_section)
 	strings.write_string(&b, "\n")
 

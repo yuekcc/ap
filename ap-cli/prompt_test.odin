@@ -41,20 +41,20 @@ test_prompt_sections_default_order :: proc(t: ^testing.T) {
 		},
 	)
 	testing.expect(t, len(sections) >= 7)
-	testing.expect(t, strings.has_prefix(sections[0], "## 环境\n"))
-	testing.expect(t, strings.contains(sections[0], "- 当前时间: "))
-	testing.expect(t, strings.contains(sections[0], "- git 仓库: 是"))
-	testing.expect_value(t, sections[1], "## 可用技能\n\nSKILL_SECTION\n")
-	testing.expect(t, strings.has_prefix(sections[2], "## 全局记忆 (AGENTS.md)\n\n<global_agent_md>\n"))
+	testing.expect(t, strings.has_prefix(sections[0], "## Environment\n"))
+	testing.expect(t, strings.contains(sections[0], "- current time: "))
+	testing.expect(t, strings.contains(sections[0], "- git repository: yes"))
+	testing.expect_value(t, sections[1], "## Available skills\n\nSKILL_SECTION\n")
+	testing.expect(t, strings.has_prefix(sections[2], "## Global memory (AGENTS.md)\n\n<global_agent_md>\n"))
 	testing.expect(t, strings.contains(sections[2], "GLOBAL_MEMORY"))
 	testing.expect(t, strings.has_suffix(sections[2], "</global_agent_md>\n"))
-	testing.expect(t, strings.has_prefix(sections[3], "## 项目记忆 ("))
+	testing.expect(t, strings.has_prefix(sections[3], "## Project memory ("))
 	testing.expect(t, strings.contains(sections[3], "<project_agent_md>\n"))
 	testing.expect(t, strings.contains(sections[3], "ROOT_MEMORY"))
 	testing.expect(t, strings.has_suffix(sections[3], "</project_agent_md>\n"))
 	testing.expect(t, strings.contains(sections[4], "SUB_MEMORY"))
-	testing.expect_value(t, sections[5], "## Agent 定义 (general)\nAGENT_BODY\n")
-	testing.expect_value(t, sections[6], "## 追加指令\nAPPEND_MARKER\n")
+	testing.expect_value(t, sections[5], "## Agent definition (general)\nAGENT_BODY\n")
+	testing.expect_value(t, sections[6], "## Additional instructions\nAPPEND_MARKER\n")
 }
 
 @(test)
@@ -77,6 +77,6 @@ test_prompt_sections_switches :: proc(t: ^testing.T) {
 		},
 	)
 	testing.expect_value(t, len(sections), 1)
-	testing.expect(t, strings.contains(sections[0], "- git 仓库: 否"))
+	testing.expect(t, strings.contains(sections[0], "- git repository: no"))
 	testing.expect(t, !strings.contains(strings.join(sections, ""), "记忆"))
 }

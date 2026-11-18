@@ -242,45 +242,47 @@ estimated = estimate_tokens(当前请求) * ratio_percent / 100
 
 ### `prompts/handoff.md` 正文
 
+提示词用英文，写法符合 ASD-STE100。正文如下：
+
 ```markdown
-你负责把上文这段即将结束的对话压缩成一份交接文档，交给一个全新的 agent 继续这段工作。
+You compress the conversation above into a handoff document. A new agent continues this work from the document. The conversation above ends now.
 
-输出约定：
+Output rules:
 
-- 只输出交接文档正文，Markdown。不要前言、不要「好的，以下是」之类的包装，不要写文件，不要调用工具。
-- 用中文。代码标识符、路径、命令保持原文。
-- 不重复其他产物已经记录的内容。规格、计划、ADR、issue、commit、diff、代码本身，一律只给路径或 URL 加一句话说明，不要抄录。
-- 必须脱敏。API key、口令、token、cookie、私钥、真实姓名、邮箱、内部主机名，一律替换为 <已脱敏>。宁可漏写，也不要泄露。
-- 只写可验证的事实。对话里没有结论的地方写「不确定」，不要推测补全。
-- 按下面的小节输出，没有内容的小节省略。不要复述对话过程，只留结论与状态。
+- Output only the body of the handoff document. Use Markdown. Do not add an introduction. Do not write a phrase such as "Here is the document". Do not write a file. Do not call a tool.
+- Use the language of the conversation. Keep code identifiers, paths, and commands as they are.
+- Do not copy content that another artifact already holds. These artifacts are a specification, a plan, an ADR, an issue, a commit, a diff, and the code itself. For each of them, give only the path or the URL and one sentence.
+- Remove all sensitive data. Replace each secret with `<redacted>`. A secret is an API key, a password, a token, a cookie, a private key, a real name, an email address, or an internal host name. If you are not sure, omit the item.
+- Write only facts that the reader can verify. If the conversation gives no conclusion, write "unclear". Do not guess.
+- Use the sections below. Omit a section that has no content. Give only the conclusions and the state. Do not describe the sequence of the conversation.
 
-## 任务目标
+## Task goal
 
-用户最初要什么。原话里的硬约束、禁止事项、验收标准必须完整保留，这是下一个 agent 最容易被摘要丢掉的东西。
+What the user wanted at the start. Keep all hard limits, prohibitions, and acceptance criteria from the words of the user. A summary loses these items first.
 
-## 当前状态
+## Current state
 
-已完成什么、正在做什么、卡在哪里。已完成的部分说明验证到什么程度：跑过什么命令、结果是什么。
+What is done, what is in work, and where the work is blocked. For each completed item, give the level of the verification: which commands ran, and what the result was.
 
-## 未完成
+## Not complete
 
-还差什么。每条写清阻塞点，以及需要谁或什么信息才能推进。
+What is missing. For each item, give the blocking point and the person or the data that can remove it.
 
-## 关键文件
+## Key files
 
-每个文件一行：`<路径>` —— 为什么重要（改过什么、还差什么）。
+One line for each file: `<path>` - why the file is important (what changed, what is missing).
 
-## 决策与约束
+## Decisions and limits
 
-已经定下的选择与理由，包括被否决的方案。目的是让下一个 agent 不要重新推翻已经讨论过的结论。
+The choices that are already made, and the reasons. Include the options that are rejected. A new agent must not open a closed decision again.
 
-## 下一步
+## Next steps
 
-具体的、可执行的下一步，按优先级排列。写清预期结果，不要写「继续完善」这类无法验收的说法。
+The next actions in priority order. Make each action specific and executable. Give the expected result. Do not write an item such as "continue to improve" that has no acceptance test.
 
-## 建议技能
+## Suggested skills
 
-下一个 agent 应该读的技能，每个一行：`<name>` —— `location` —— 为什么需要。
+The skills that the new agent must read. One line for each: `<name>` - `<location>` - why the skill is necessary.
 ```
 
 小节标题写进提示词，代码不校验结构。模型少写或写错小节不算失败：交接文档是尽力而为的产物，强制结构只会让它编造内容来填坑。
@@ -313,8 +315,8 @@ CLI adapter 在拿到交接文本后创建新 session。引擎不参与。
 - 新 session 的第一条事件是 `user_message`，内容为：
 
 ```
-## 上一会话交接
-来源 session: <source_session_id>
+## Handoff from the previous session
+Source session: <source_session_id>
 
 <交接文档正文>
 ```

@@ -110,7 +110,7 @@ test_resolve_new_tools_none :: proc(t: ^testing.T) {
 	)
 	testing.expect(t, is_ok(err))
 	testing.expect_value(t, len(resolved.tools), 0)
-	testing.expect(t, test_contains(resolved.system_prompt, "（本次没有可用工具）"))
+	testing.expect(t, test_contains(resolved.system_prompt, "(No tools are available)"))
 }
 
 @(test)

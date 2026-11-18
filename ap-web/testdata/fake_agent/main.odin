@@ -53,7 +53,7 @@ main :: proc() {
 		emit(`{"v":1,"seq":2,"ts":3,"type":"session_end","reason":"exit","usage":{"input_tokens":5,"output_tokens":3,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":8}}`)
 		// 新 session 的 session_start 必须带新 id，消费方据此切换。
 		emit(`{"v":1,"seq":0,"ts":4,"type":"session_start","session_id":"ses_handoff_new","parent_session_id":null}`)
-		emit(`{"v":1,"seq":1,"ts":5,"type":"user_message","content":"## 上一会话交接\n来源 session: ses_handoff_src\n\ndoc"}`)
+		emit(`{"v":1,"seq":1,"ts":5,"type":"user_message","content":"## Handoff from the previous session\nSource session: ses_handoff_src\n\ndoc"}`)
 		emit(`{"v":1,"seq":2,"ts":6,"type":"session_end","reason":"exit","usage":{"input_tokens":5,"output_tokens":3,"cached_tokens":null,"reasoning_tokens":null,"total_tokens":8}}`)
 		os.exit(0)
 	}

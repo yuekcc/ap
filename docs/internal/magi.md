@@ -180,11 +180,11 @@ $AP_CONFIG/projects/<project_path_hash>/<session_id>.jsonl
 constitution.md
 ## 你的角色
 <角色正文>
-## 工具
-（本次没有可用工具）
+## Tools
+(No tools are available)
 ```
 
-公共规则在前，角色人格在后，避免角色正文稀释结构化输出要求。`## 工具` 一节由 SDK 根据空注册表生成。
+公共规则在前，角色人格在后，避免角色正文稀释结构化输出要求。`## Tools` 一节由 SDK 根据空注册表生成。magi 自己的提示词（公共规则与角色正文）仍用中文，只有 SDK 生成的工具段是英文。
 
 用户消息：
 

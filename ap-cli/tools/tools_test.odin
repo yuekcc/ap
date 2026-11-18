@@ -620,14 +620,14 @@ test_bash_output_truncates_at_2000_lines :: proc(t: ^testing.T) {
 	testing.expect(t, res.ok)
 	testing.expect(t, test_contains(res.content, "\n2000\n"))
 	testing.expect(t, !test_contains(res.content, "\n2001\n"))
-	testing.expect(t, test_contains(res.content, "共 2500 行"))
+	testing.expect(t, test_contains(res.content, "total 2500 lines"))
 	testing.expect(t, test_contains(res.content, "read_file(file_path="))
 
-	marker := "完整输出已保存到 "
+	marker := "the complete output is saved to "
 	start := strings.index(res.content, marker)
 	testing.expect(t, start >= 0)
 	rest := res.content[start + len(marker):]
-	sep := strings.index(rest, "；")
+	sep := strings.index(rest, ";")
 	testing.expect(t, sep > 0)
 	path := rest[:sep]
 	testing.expect(t, os.exists(path))
@@ -734,7 +734,7 @@ test_read_file_description_follows_image_config :: proc(t: ^testing.T) {
 			disabled_desc = item.description
 		}
 	}
-	testing.expect(t, test_contains(disabled_desc, "未启用图片读取"))
+	testing.expect(t, test_contains(disabled_desc, "Image input is off"))
 
 	cfg.image_input = true
 	enabled := builtin_tools(cfg)
@@ -750,7 +750,7 @@ test_read_file_description_follows_image_config :: proc(t: ^testing.T) {
 	registry, rerr := tool.registry_init(enabled)
 	testing.expect(t, platform.is_ok(rerr))
 	section := tool.registry_prompt_section(&registry, []string{"read_file"})
-	testing.expect(t, test_contains(section, "PNG、JPEG、GIF、WebP"))
+	testing.expect(t, test_contains(section, "PNG, JPEG, GIF, and WebP"))
 }
 
 @(test)
@@ -773,7 +773,7 @@ test_tool_definitions_are_valid :: proc(t: ^testing.T) {
 	testing.expect(t, platform.is_ok(nerr))
 	testing.expect_value(t, len(none), 0)
 	section := tool.registry_prompt_section(&registry, []string{})
-	testing.expect_value(t, section, "（本次没有可用工具）")
+	testing.expect_value(t, section, "(No tools are available)")
 }
 
 @(test)

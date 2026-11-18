@@ -7,6 +7,7 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
+// 工具说明是模型可见的提示词，用英文并符合 ASD-STE100。
 Tool_Info :: struct {
 	name:        string,
 	description: string,
@@ -16,28 +17,28 @@ Tool_Info :: struct {
 TOOL_INFOS := [5]Tool_Info {
 	{
 		name = "read_file",
-		description = "读取文件内容。文本单次最多 2000 行或 50KB（先到者为准），大文件用 offset/limit 分页；需要完整内容时按返回里的 offset 继续读。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径（文本或图片），绝对或相对启动目录"},"offset":{"type":"integer","minimum":1,"description":"起始行号（从 1 开始）"},"limit":{"type":"integer","minimum":1,"description":"最多读取的行数"}},"required":["file_path"],"additionalProperties":false}`,
+		description = "Read the content of a file. A text read returns at most 2000 lines or 50KB, whichever comes first. To page through a large file, use offset and limit. To get the complete content, continue from the offset in the result.",
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path of the file (text or image). Use an absolute path or a path relative to the start directory."},"offset":{"type":"integer","minimum":1,"description":"Line number of the first line to read (starts at 1)."},"limit":{"type":"integer","minimum":1,"description":"Maximum number of lines to read."}},"required":["file_path"],"additionalProperties":false}`,
 	},
 	{
 		name = "write_file",
-		description = "写入文件内容。文件不存在时创建，已存在时覆盖，自动创建父目录。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"content":{"type":"string","description":"要写入的完整文件内容"}},"required":["file_path","content"],"additionalProperties":false}`,
+		description = "Write the content of a file. If the file does not exist, the tool creates it. If the file exists, the tool replaces it. The tool also creates the parent directory.",
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path of the file. Use an absolute path or a path relative to the start directory."},"content":{"type":"string","description":"Complete content to write to the file."}},"required":["file_path","content"],"additionalProperties":false}`,
 	},
 	{
 		name = "edit_file",
-		description = "用精确文本替换编辑单个文件。每处 edits[].oldText 必须匹配原文件中唯一、不重叠的片段；同一块或相邻行的多处改动合并成一条，不要为了连接相距较远的改动而包含大段未变内容。",
-		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"文件路径，绝对或相对启动目录"},"edits":{"type":"array","description":"一处或多处替换。每条都按原文件匹配，不是按增量匹配；不要重叠或嵌套；相邻改动合并成一条。","items":{"type":"object","properties":{"oldText":{"type":"string","description":"与原文件精确匹配的唯一片段，不能与同一调用中的其他 edits[].oldText 重叠"},"newText":{"type":"string","description":"这条编辑的替换文本"}},"required":["oldText","newText"],"additionalProperties":false}}},"required":["file_path","edits"],"additionalProperties":false}`,
+		description = "Edit one file with exact text replacement. Each edits[].oldText must match one unique sequence in the original file. The sequences must not overlap. Merge changes to the same block or to adjacent lines into one edit. Do not include a large unchanged region only to connect two distant changes.",
+		parameters = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path of the file. Use an absolute path or a path relative to the start directory."},"edits":{"type":"array","description":"One or more replacements. The tool matches each replacement against the original file, not against the result of an earlier replacement. Do not overlap or nest the replacements. Merge adjacent changes into one edit.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Unique sequence that matches the original file exactly. It must not overlap with an oldText of another edit in the same call."},"newText":{"type":"string","description":"Replacement text for this edit."}},"required":["oldText","newText"],"additionalProperties":false}}},"required":["file_path","edits"],"additionalProperties":false}`,
 	},
 	{
 		name = "bash",
-		description = "使用 bash -c <command> 执行 Bash/POSIX 命令；每次独立进程，不保留 cwd/环境变量，stdin 为 NUL。stdout/stderr 合并返回，最多 2000 行；超出时提供完整输出的 .txt 路径，用 read_file 分页续读。输出过大可能终止命令，必要时分段执行。",
-		parameters = `{"type":"object","properties":{"command":{"type":"string","description":"POSIX shell 命令，最多 8000 字符"},"timeout_ms":{"type":"integer","minimum":1,"maximum":600000,"description":"超时毫秒数，默认取配置"}},"required":["command"],"additionalProperties":false}`,
+		description = "Run a Bash or POSIX command with bash -c <command>. Each call starts a separate process. The process keeps no cwd and no environment variable. stdin is NUL. The tool returns stdout and stderr together, at most 2000 lines. If the output is longer, the result gives the path of a .txt file with the complete output. Continue with read_file and offset. A very large output can stop the command. Divide the command into smaller parts when necessary.",
+		parameters = `{"type":"object","properties":{"command":{"type":"string","description":"POSIX shell command, at most 8000 characters."},"timeout_ms":{"type":"integer","minimum":1,"maximum":600000,"description":"Timeout in milliseconds. The default value comes from the configuration."}},"required":["command"],"additionalProperties":false}`,
 	},
 	{
 		name = "task",
-		description = "启动一个独立 ap 子进程完成自包含任务，只回传最终结论；不设超时，靠父进程中断取消。",
-		parameters = `{"type":"object","properties":{"prompt":{"type":"string","description":"子代理提示词，必须自包含"},"agent_name":{"type":"string","description":"agent 名称，默认 general"},"description":{"type":"string","description":"3-5 词任务概括，用于展示"}},"required":["prompt"],"additionalProperties":false}`,
+		description = "Start a separate ap subprocess for a self-contained task. The tool returns only the final result. There is no timeout. A cancel from the parent process stops the task.",
+		parameters = `{"type":"object","properties":{"prompt":{"type":"string","description":"Prompt for the subagent. It must be self-contained."},"agent_name":{"type":"string","description":"Name of the agent. The default is general."},"description":{"type":"string","description":"Summary of the task in 3 to 5 words. The tool uses it for display."}},"required":["prompt"],"additionalProperties":false}`,
 	},
 }
 
@@ -47,12 +48,12 @@ read_file_description :: proc(cfg: ^Tool_Config) -> string {
 	base := TOOL_INFOS[0].description
 	if cfg != nil && cfg.image_input {
 		return fmt.tprintf(
-			"%s也支持读取图片：按魔数识别 PNG、JPEG、GIF、WebP，直接传 file_path 即可，图片会作为视觉附件返回；offset/limit 对图片无效；单张上限 %d 字节。",
+			"%s The tool also reads an image. It identifies PNG, JPEG, GIF, and WebP from the file signature. Pass the file_path only. The tool returns the image as a visual attachment. offset and limit have no effect on an image. The size limit is %d bytes for one image.",
 			base,
 			cfg.image_max_bytes,
 		)
 	}
-	return fmt.tprintf("%s当前未启用图片读取；PNG/JPEG/GIF/WebP 会返回错误。", base)
+	return fmt.tprintf("%s Image input is off. PNG, JPEG, GIF, and WebP return an error.", base)
 }
 
 tool_info_by_name :: proc(name: string) -> (Tool_Info, bool) {

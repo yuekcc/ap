@@ -82,14 +82,14 @@ title_digest_in :: proc(
 	}
 
 	b := strings.builder_make(allocator)
-	strings.write_string(&b, "首次请求：\n")
+	strings.write_string(&b, "First request:\n")
 	strings.write_string(&b, platform.utf8_prefix(transmute([]byte)first_user, TITLE_DIGEST_BYTES))
 	if last_user != first_user {
-		strings.write_string(&b, "\n\n最近的请求：\n")
+		strings.write_string(&b, "\n\nLatest request:\n")
 		strings.write_string(&b, platform.utf8_prefix(transmute([]byte)last_user, TITLE_DIGEST_BYTES))
 	}
 	if have_assistant {
-		strings.write_string(&b, "\n\n最近的回复：\n")
+		strings.write_string(&b, "\n\nLatest response:\n")
 		strings.write_string(&b, platform.utf8_prefix(transmute([]byte)last_assistant, TITLE_DIGEST_BYTES))
 	}
 	return strings.to_string(b), ok_error()

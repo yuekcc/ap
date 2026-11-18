@@ -73,7 +73,7 @@
 - `ap -s <id> --handoff "<prompt>"`：`<prompt>` 同时是交接的聚焦提示与**新 session** 的第一个 turn，用同一条文本。新 session 跑完这个 turn 后正常输出结果。
 - `ap -s <id> --handoff`：只创建新 session 并打印它的 id，不跑 turn。
 - 源 session 先写 `handoff` 事件与 `session_end`，再创建新 session。两者的 `session_end.usage` 都包含交接那次调用。
-- 新 session 走正常 new session 路径：重新组装 system prompt，用当前工具集、当前模型、当前 `AGENTS.md` 与技能。**不是 fork**。第一条事件是承载交接文档的 `user_message`，首行为 `## 上一会话交接`。
+- 新 session 走正常 new session 路径：重新组装 system prompt，用当前工具集、当前模型、当前 `AGENTS.md` 与技能。**不是 fork**。第一条事件是承载交接文档的 `user_message`，首行为 `## Handoff from the previous session`。
 - `text` 格式下交接文档不进 stdout，stderr 写一行 `handoff created session <id>`；`json` 格式新增顶层 `handoff` 对象（见下）；`stream-json` 先转发 `handoff` 事件与源 session 的 `session_end`，再输出新 session 的 `session_start` 和它的 `session_end`（有聚焦提示词时中间还有那个 turn 的事件），消费方据此切到新 session。
 - 交接成功退出 0，`stop_reason` 为 `handoff`。交接失败按 `--no-handoff` 的行为结束，退出 3。
 

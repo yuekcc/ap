@@ -74,7 +74,7 @@ test_cli_handoff_session_seeds_user_message :: proc(t: ^testing.T) {
 	testing.expect_value(t, events[1].type, protocol.EVENT_USER_MESSAGE)
 	user: protocol.User_Message_Event
 	json.unmarshal_string(events[1].line, &user)
-	testing.expect(t, strings.has_prefix(user.content, "## 上一会话交接\n来源 session: ses_source\n\n"))
+	testing.expect(t, strings.has_prefix(user.content, "## Handoff from the previous session\nSource session: ses_source\n\n"))
 	testing.expect(t, strings.has_suffix(user.content, "交接正文"))
 	apcore.session_close(&opened.session, {reason = protocol.SESSION_END_EXIT})
 }

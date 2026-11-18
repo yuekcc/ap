@@ -241,5 +241,5 @@ handoff_system_prompt :: proc(frozen_system_prompt: string, allocator: runtime.A
 // 交接文档进入新 session 的首条 user_message；判定「这条是交接」靠首行文本，
 // 不加字段，免得旧前端误解析。
 handoff_user_message :: proc(source_session_id, content: string) -> string {
-	return fmt.tprintf("## 上一会话交接\n来源 session: %s\n\n%s", source_session_id, content)
+	return fmt.tprintf("## Handoff from the previous session\nSource session: %s\n\n%s", source_session_id, content)
 }

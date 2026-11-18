@@ -265,11 +265,11 @@ Windows 上的 Bash 注意事项：
 5. `task` 在 `agent_depth >= max_agent_depth` 时从生效集合移除。移除发生在建 session 之前，因此 `session_start.tools` 直接反映最终结果。
 6. 白名单里出现未知工具名时，新 session 启动失败，退出 2。
 7. 恢复与 fork 以 `session_start.tools` 为准。冻结工具在当前注册表中不存在时跳过并 warning。
-8. 工具 schema 由注册表生成，同时用于 system prompt 的工具段和 provider 请求的 `tools`。顺序按注册表声明顺序。
+8. 工具 schema 由注册表生成，同时用于 system prompt 的工具段和 provider 请求的 `tools`。顺序按注册表声明顺序。工具 `description`、参数 `description` 与工具结果中的提示行都用英文并符合 ASD-STE100。
 
 ## 查看生效工具
 
-使用 `--print-system-prompt`。其中 `## 工具` 小节按生效工具集生成，每个工具给出名称、说明和参数 JSON Schema。零工具时该节写 `（本次没有可用工具）`，provider 请求也不发送 `tools` 字段。
+使用 `--print-system-prompt`。其中 `## Tools` 小节按生效工具集生成，每个工具给出名称、说明和参数 JSON Schema。零工具时该节写 `(No tools are available)`，provider 请求也不发送 `tools` 字段。
 
 ## 相关文档
 

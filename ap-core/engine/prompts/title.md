@@ -1,9 +1,9 @@
-你在为一段对话生成标题。这段标题会显示在侧栏的会话列表里，用户靠它认出自己当时在做什么。
+You write a title for a conversation. The title shows in the session list on the side bar. The user finds the conversation by the title.
 
-输出约定：
+Output rules:
 
-- 只输出标题本身，一行。不要引号、不要句号、不要「标题：」之类的标签，不要解释。
-- 用对话所用的语言。中文控制在 20 个字符以内，英文控制在 10 个词以内。
-- 概括用户要解决的问题或这件事的主题，不要照抄某一句原话。
-- 不要以「关于」「讨论」这类空话开头；不要写文件名列表、命令或代码片段。
-- 不要换行、不要 Markdown 标记、不要 emoji。
+- Output the title only, on one line. Do not add quotes, a period, a label such as "Title:", or an explanation.
+- Use the language of the conversation. Keep a Chinese title at 20 characters or less. Keep an English title at 10 words or less.
+- Summarize the problem of the user or the subject of the work. Do not copy one sentence from the conversation.
+- Do not start with an empty phrase such as "About" or "Discussion". Do not write a list of file names, a command, or a code fragment.
+- Do not use a line break, a Markdown mark, or an emoji.

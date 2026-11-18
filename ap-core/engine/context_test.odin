@@ -240,7 +240,7 @@ test_build_system_prompt_orders_sections :: proc(t: ^testing.T) {
 		},
 	)
 	testing.expect(t, strings.has_prefix(prompt, "BASE\n"))
-	testing.expect(t, test_contains(prompt, "## 工具\nTOOL_SECTION\n\n## 环境\nENV\n\n## 追加指令\nAPPEND\n"))
+	testing.expect(t, test_contains(prompt, "## Tools\nTOOL_SECTION\n\n## 环境\nENV\n\n## 追加指令\nAPPEND\n"))
 	testing.expect(t, strings.has_suffix(prompt, "APPEND\n"))
 }
 
@@ -253,7 +253,7 @@ test_build_system_prompt_skips_empty_sections_and_adds_newline :: proc(t: ^testi
 			sections = []string{"", "SECTION_WITHOUT_NEWLINE"},
 		},
 	)
-	testing.expect(t, strings.has_prefix(prompt, "BASE\n\n## 工具\nTOOL_SECTION\n"))
+	testing.expect(t, strings.has_prefix(prompt, "BASE\n\n## Tools\nTOOL_SECTION\n"))
 	testing.expect(t, strings.has_suffix(prompt, "\n\nSECTION_WITHOUT_NEWLINE\n"))
 }
 
@@ -267,8 +267,8 @@ test_build_system_prompt_base_override_keeps_tool_section :: proc(t: ^testing.T)
 		},
 	)
 	testing.expect(t, strings.has_prefix(prompt, "CUSTOM_BASE\n"))
-	testing.expect(t, !test_contains(prompt, "你是 AI Assistant"))
-	testing.expect(t, test_contains(prompt, "## 工具\nTOOL_SECTION"))
+	testing.expect(t, !test_contains(prompt, "You are the AI Assistant"))
+	testing.expect(t, test_contains(prompt, "## Tools\nTOOL_SECTION"))
 	testing.expect(t, test_contains(prompt, "APPEND_MARKER"))
 }
 

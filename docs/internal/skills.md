@@ -56,14 +56,14 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 
 `ap-cli/prompt.odin` 只在新 session 组装应用层 section 时注入技能清单。位置在「环境」之后、「全局记忆」之前。完整顺序见 [context-management.md](context-management.md)。
 
-有可注入技能时，小节内容如下：
+有可注入技能时，小节内容如下（提示词用英文并符合 ASD-STE100）：
 
 ```text
-## 可用技能
+## Available skills
 
-若 <available_skills> 里有明显适用于当前任务的 skill，先用 read_file 读取其 <location> 指向的 SKILL.md（文件过大或需要定位片段时用 bash），再照其中步骤执行。若多个都沾边，选最贴切的那个；若都不贴切，一个都不要读。skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成绝对路径再使用。
+If a skill in <available_skills> applies to the current task, read its SKILL.md first. Use read_file with the path in <location>. Use bash if the file is large or if you must find a part of it. Then do the steps in the skill. If more than one skill applies, select the most accurate one. If no skill applies, do not read a skill. The skill can give a relative path. Make an absolute path from the directory of that SKILL.md before you use it.
 
-用户也会使用 /<skill_name> 方式调用 skill，如果 <skill_name> 能完全匹配某个 skill，也用上述的方式调用 skill。
+The user can also start a skill with /<skill_name>. If <skill_name> matches the name of a skill exactly, use that skill in the same way.
 
 <available_skills>
   <skill>
@@ -76,12 +76,12 @@ description: 根据 git log 生成发布说明；用户要求写 release notes �
 
 约束：
 
-1. 没有任何可注入技能时，包括全部技能都声明 `disable-model-invocation: true`，整个「可用技能」小节不出现，不留空标题或“暂无技能”之类内容。
+1. 没有任何可注入技能时，包括全部技能都声明 `disable-model-invocation: true`，整个「Available skills」小节不出现，不留空标题或“暂无技能”之类内容。
 2. `name`、`description` 和 `location` 做 XML 转义，覆盖 `&`、`<`、`>`、`"`、`'`。
 3. `location` 使用 `/`，避免 Windows 反斜杠被当成转义符。
 4. 只注入元数据，不注入正文。技能再多也只占清单的 token。
 5. agent 的工具白名单不参与发现。agent 既没有 `read_file` 也没有 `bash` 时，清单仍会注入，但它无法读取正文。需要技能时给该 agent 加上 `read_file`。
-6. `--no-skills` 时完全不扫描技能目录，也不注入「可用技能」小节。它只影响新 session 的提示词，不是安全边界。模型仍可用 `read_file` 或 `bash` 直接读取 `SKILL.md`。
+6. `--no-skills` 时完全不扫描技能目录，也不注入「Available skills」小节。它只影响新 session 的提示词，不是安全边界。模型仍可用 `read_file` 或 `bash` 直接读取 `SKILL.md`。
 
 ## 查看技能
 

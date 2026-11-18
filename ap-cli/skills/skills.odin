@@ -27,9 +27,10 @@ SKILLS_SUBDIR :: "skills"
 SKILLS_ASSETS_DIR :: ".agents"
 
 // 拼进 system prompt 的开场说明：何时读、怎么读、相对路径怎么解析。
-SKILL_PROMPT_INTRO :: `若 <available_skills> 里有明显适用于当前任务的 skill，先用 read_file 读取其 <location> 指向的 SKILL.md（文件过大或需要定位片段时用 bash），再照其中步骤执行。若多个都沾边，选最贴切的那个；若都不贴切，一个都不要读。skill 中引用相对路径时，以该 SKILL.md 所在目录为基准解析成绝对路径再使用。
+// 模型可见文本用英文并符合 ASD-STE100。
+SKILL_PROMPT_INTRO :: `If a skill in <available_skills> applies to the current task, read its SKILL.md first. Use read_file with the path in <location>. Use bash if the file is large or if you must find a part of it. Then do the steps in the skill. If more than one skill applies, select the most accurate one. If no skill applies, do not read a skill. The skill can give a relative path. Make an absolute path from the directory of that SKILL.md before you use it.
 
-用户也会使用 /<skill_name> 方式调用 skill，如果 <skill_name> 能完全匹配某个 skill，也用上述的方式调用 skill。`
+The user can also start a skill with /<skill_name>. If <skill_name> matches the name of a skill exactly, use that skill in the same way.`
 
 // ---- 类型 ----
 

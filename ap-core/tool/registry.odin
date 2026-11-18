@@ -130,7 +130,7 @@ registry_prompt_section :: proc(registry: ^Registry, active_tools: []string) -> 
 			wrote_any = true
 			fmt.sbprintf(
 				&b,
-				"\n### %s\n%s\n参数 JSON Schema: %s\n",
+				"\n### %s\n%s\nParameter JSON Schema: %s\n",
 				tool.name,
 				tool.description,
 				tool.parameters_json,
@@ -138,7 +138,7 @@ registry_prompt_section :: proc(registry: ^Registry, active_tools: []string) -> 
 		}
 	}
 	if !wrote_any {
-		return "（本次没有可用工具）"
+		return "(No tools are available)"
 	}
 	return strings.to_string(b)
 }

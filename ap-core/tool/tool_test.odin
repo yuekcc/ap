@@ -62,7 +62,7 @@ test_registry_definitions_and_prompt_section :: proc(t: ^testing.T) {
 	testing.expect(t, !strings.contains(section, "### read_file"))
 
 	none_section := registry_prompt_section(&reg, []string{})
-	testing.expect_value(t, none_section, "（本次没有可用工具）")
+	testing.expect_value(t, none_section, "(No tools are available)")
 }
 
 @(test)

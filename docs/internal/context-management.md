@@ -2,18 +2,24 @@
 
 本文件定义 system prompt 的组成、`$AP_CONFIG/SYSTEM.md` 与 `AGENTS.md` 的读取、技能清单位置，以及 transcript 到 provider messages 的投影。事件 schema 见 [react-loop-and-session.md](react-loop-and-session.md)，blob 的存储格式见 [tools.md](tools.md)，provider 请求字段见 [provider.md](provider.md)。
 
+## 提示词语言
+
+模型可见的提示词全部用英文，写法遵循 ASD-STE100（简化技术英语）：主动语态、祈使句、一句一条指令、句长不超过 20 词、同一术语只用一个词。适用范围包括 `prompts/system.md`、`prompts/handoff.md`、`prompts/title.md`、应用层 section 的固定文本、工具说明与参数描述、技能清单开场说明，以及工具结果里由 ap 自己生成的提示行。
+
+用户可见的输出与中文文档不受影响：CLI 帮助、错误消息、日志仍是中文，模型用什么语言回答由用户提示词与记忆决定。
+
 ## system prompt 的三段
 
 `build_system_prompt` 按固定顺序拼接三段：
 
 1. **base**：SDK 内置的 `ap-core/engine/prompts/system.md` 文本。编译期由 `#load` 内嵌，运行时不读取该文件。
-2. **工具段**：`## 工具` 标题加注册表生成的工具说明。
+2. **工具段**：`## Tools` 标题加注册表生成的工具说明。
 3. **应用层 sections**：`ap-cli` 按顺序传入的原始 Markdown 块。
 
 拼接规则：
 
 - 先写 base。base 不以 `\n` 结尾时补一个。
-- 写 `\n## 工具\n`，再写工具段，再写一个 `\n`。
+- 写 `\n## Tools\n`，再写工具段，再写一个 `\n`。
 - 每个非空 section 前写一个 `\n`。section 不以 `\n` 结尾时补一个。
 - 空字符串 section 跳过。
 
@@ -37,14 +43,14 @@ SDK 不解析应用层 section，不给它加标题，不合并空白，也不�
 
 | 顺序 | 标题 | 内容来源 | 条件 |
 | --- | --- | --- | --- |
-| 1 | `## 环境` | OS、cwd、当前时间、是否在 git 仓库 | 总是出现 |
-| 2 | `## 可用技能` | 技能清单块 | 有技能且未传 `--no-skills` |
-| 3 | `## 全局记忆 (AGENTS.md)` | `~/.agents/AGENTS.md` | 未传 `--no-agents-md`，文件存在 |
-| 4 | `## 项目记忆 (<file>)` | 每个项目 `AGENTS.md` | 未传 `--no-agents-md`，文件存在 |
-| 5 | `## Agent 定义 (<name>)` | agent 文件的正文 | 正文非空 |
-| 6 | `## 追加指令` | `Prompt_Options.append_prompt` | 非空。当前 CLI 不设置该字段 |
+| 1 | `## Environment` | OS、cwd、当前时间、是否在 git 仓库 | 总是出现 |
+| 2 | `## Available skills` | 技能清单块 | 有技能且未传 `--no-skills` |
+| 3 | `## Global memory (AGENTS.md)` | `~/.agents/AGENTS.md` | 未传 `--no-agents-md`，文件存在 |
+| 4 | `## Project memory (<file>)` | 每个项目 `AGENTS.md` | 未传 `--no-agents-md`，文件存在 |
+| 5 | `## Agent definition (<name>)` | agent 文件的正文 | 正文非空 |
+| 6 | `## Additional instructions` | `Prompt_Options.append_prompt` | 非空。当前 CLI 不设置该字段 |
 
-环境段逐行写 `OS`、`cwd`、`当前时间`、`git 仓库`。时间取新 session 组装时的时刻，之后随 system prompt 冻结。
+环境段逐行写 `OS`、`cwd`、`current time`、`git repository`。时间取新 session 组装时的时刻，之后随 system prompt 冻结。
 
 记忆文件按文件原文注入，内容外包一层 `<global_agent_md>` 或 `<project_agent_md>` 标签，标题后和标签前后各留一个空行，便于模型区分记忆边界。agent 正文去掉开头换行后注入。两者都不做 CRLF 规范化，不截断，不做 `@import`。只有 `SYSTEM.md` 经过规范化。
 
@@ -76,19 +82,19 @@ SDK 不解析应用层 section，不给它加标题，不合并空白，也不�
 - 没有任何可用技能，或传了 `--no-skills` 时，整个小节省略。
 - 技能发现、`SKILL.md` 格式与 `--list-skills` 见 [skills.md](skills.md)。
 
-清单块整体放进 `## 可用技能`。模型按 `location` 用 `read_file` 或 `bash` 读取正文。
+清单块整体放进 `## Available skills`。模型按 `location` 用 `read_file` 或 `bash` 读取正文。
 
 ## Agent 定义段
 
-agent 文件的正文以 `## Agent 定义 (<name>)` 追加。正文只补充指令，不替换 base、工具段、环境或记忆。agent 的 `tools:`、`model`、`max_steps` 不进入这一段。定义解析与工具白名单见 [subagents.md](subagents.md)。
+agent 文件的正文以 `## Agent definition (<name>)` 追加。正文只补充指令，不替换 base、工具段、环境或记忆。agent 的 `tools:`、`model`、`max_steps` 不进入这一段。定义解析与工具白名单见 [subagents.md](subagents.md)。
 
 ## 工具段
 
 工具段与 provider 请求里的 `tools` 使用同一个生效工具集。
 
 - 顺序按注册表声明顺序，不按名字排序。
-- 每个工具写 `### <name>`、描述、`参数 JSON Schema: <json>`。
-- 生效工具为零时，工具段只有 `（本次没有可用工具）`。provider 请求省略 `tools` 字段。
+- 每个工具写 `### <name>`、描述、`Parameter JSON Schema: <json>`。
+- 生效工具为零时，工具段只有 `(No tools are available)`。provider 请求省略 `tools` 字段。
 - 工具定义的结构见 [tools.md](tools.md)。
 
 ## 冻结与预览
@@ -275,6 +281,7 @@ transcript 只追加，所以第 N 步发出的 messages 一定是第 N+1 步 me
 - `max_tokens = handoff_max_tokens`（默认 `16384`），不取 `--max-tokens`。`include_usage` 跟随 `stream_include_usage`。
 - 只尝试一次，不重试。失败时写 `error(scope=llm, kind=<原错误>, message="handoff failed: ...")` 并按 `--no-handoff` 的路径结束。
 - 输出正文直接作为交接文档，不改写、不重排、不加包装。输出为空视为失败。
+- 交接文档的语言跟随对话所用的语言，代码标识符、路径与命令保持原文。
 
 提示词的四条硬要求：不重复其他产物（只给路径或 URL）、必须脱敏、列出建议技能（带 `location`）、按聚焦提示词调整侧重。小节结构写进提示词，代码不校验：交接是尽力而为的产物，强制结构只会让它编造内容填坑。
 
@@ -287,10 +294,7 @@ transcript 只追加，所以第 N 步发出的 messages 一定是第 N+1 步 me
 CLI adapter 在拿到交接文本后创建新 session。引擎不参与。
 
 - 新 session 走正常 new session 路径：重新组装 system prompt，用当前工具集、当前模型、当前 `AGENTS.md` 与技能。**不是 fork**，不复制 transcript，不冻结源 session 的任何值。
-- 第一条事件是 `user_message`，内容为 `## 上一会话交接
-来源 session: <id>
-
-<交接文档正文>`。
+- 新 session 的第一条事件是 `user_message`，内容为 `## Handoff from the previous session\nSource session: <id>\n\n<交接文档正文>`。
 - `ap -s <id> --handoff "<prompt>"` 会在新 session 里继续跑这个 turn；`ap -s <id> --handoff` 只创建新 session 并打印它的 id。传了 prompt 时它同时是交接的聚焦提示与第一个 turn，用同一条文本。
 - 判定「这条 user_message 是交接」靠文本首行，不加新字段。
 

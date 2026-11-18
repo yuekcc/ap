@@ -195,7 +195,7 @@ test_handoff_system_prompt_uses_frozen_prefix :: proc(t: ^testing.T) {
 @(test)
 test_handoff_user_message_shape :: proc(t: ^testing.T) {
 	text := handoff_user_message("ses_1", "doc")
-	testing.expect_value(t, text, "## 上一会话交接\n来源 session: ses_1\n\ndoc")
+	testing.expect_value(t, text, "## Handoff from the previous session\nSource session: ses_1\n\ndoc")
 }
 
 // 预算余量按**窗口**比例算出：真正要防的是输入侧估算偏差，它随输入规模

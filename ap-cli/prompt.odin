@@ -9,6 +9,7 @@ import "core:time"
 
 // system prompt 的应用层段落。SDK 只固定 base 与工具段；这里决定其余顺序与内容。
 // 默认顺序：环境 → 技能 → 全局记忆 → 项目记忆 → agent 正文 → 用户追加。
+// 段落文本是模型可见的提示词，用英文并符合 ASD-STE100。
 
 Prompt_Options :: struct {
 	cwd:           string,
@@ -23,22 +24,22 @@ build_prompt_sections :: proc(opts: Prompt_Options) -> []string {
 	sections := make([dynamic]string, 0, 8)
 
 	env := strings.builder_make()
-	strings.write_string(&env, "## 环境\n\n")
+	strings.write_string(&env, "## Environment\n\n")
 	fmt.sbprintf(&env, "- OS: %v\n", ODIN_OS)
 	fmt.sbprintf(&env, "- cwd: %s\n", opts.cwd)
-	fmt.sbprintf(&env, "- 当前时间: %v\n", time.now())
-	fmt.sbprintf(&env, "- git 仓库: %s\n", "是" if find_git_root(opts.cwd) != "" else "否")
+	fmt.sbprintf(&env, "- current time: %v\n", time.now())
+	fmt.sbprintf(&env, "- git repository: %s\n", "yes" if find_git_root(opts.cwd) != "" else "no")
 	append(&sections, strings.to_string(env))
 
 	if len(opts.skill_section) > 0 {
-		append(&sections, fmt.tprintf("## 可用技能\n\n%s\n", opts.skill_section))
+		append(&sections, fmt.tprintf("## Available skills\n\n%s\n", opts.skill_section))
 	}
 
 	if opts.include_memory && len(opts.home_dir) > 0 {
 		global_memory := fmt.tprintf("%s/.agents/AGENTS.md", opts.home_dir)
 		if os.exists(global_memory) {
 			if data, err := os.read_entire_file_from_path(global_memory, context.allocator); err == nil {
-				append(&sections, fmt.tprintf("## 全局记忆 (AGENTS.md)\n\n<global_agent_md>\n%s\n</global_agent_md>\n", string(data)))
+				append(&sections, fmt.tprintf("## Global memory (AGENTS.md)\n\n<global_agent_md>\n%s\n</global_agent_md>\n", string(data)))
 			}
 		}
 	}
@@ -46,17 +47,17 @@ build_prompt_sections :: proc(opts: Prompt_Options) -> []string {
 	if opts.include_memory {
 		for file in project_memory_files(opts.cwd) {
 			if data, err := os.read_entire_file_from_path(file, context.allocator); err == nil {
-				append(&sections, fmt.tprintf("## 项目记忆 (%s)\n\n<project_agent_md>\n%s\n</project_agent_md>\n", file, string(data)))
+				append(&sections, fmt.tprintf("## Project memory (%s)\n\n<project_agent_md>\n%s\n</project_agent_md>\n", file, string(data)))
 			}
 		}
 	}
 
 	if len(opts.agent.body) > 0 {
-		append(&sections, fmt.tprintf("## Agent 定义 (%s)\n%s\n", opts.agent.name, opts.agent.body))
+		append(&sections, fmt.tprintf("## Agent definition (%s)\n%s\n", opts.agent.name, opts.agent.body))
 	}
 
 	if len(opts.append_prompt) > 0 {
-		append(&sections, fmt.tprintf("## 追加指令\n%s\n", opts.append_prompt))
+		append(&sections, fmt.tprintf("## Additional instructions\n%s\n", opts.append_prompt))
 	}
 
 	return sections[:]

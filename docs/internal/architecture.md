@@ -313,7 +313,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error)
 8. 读取提示词。`--print-system-prompt` 跳过这一步。
 9. 新 session 才加载 agent 定义，按 CLI、agent、settings 的优先级合并 model 与 max_steps，读取 `$AP_CONFIG/SYSTEM.md`，发现技能。
 10. 构造工具注册表。新 session 再按 agent 白名单与 `max_agent_depth` 选出工具集。
-11. 新 session 组装 prompt sections。顺序是环境、技能、全局记忆、项目记忆、agent 正文。
+11. 新 session 组装 prompt sections。顺序是 `## Environment`、`## Available skills`、`## Global memory`、`## Project memory`、`## Agent definition`。
 12. `apcore.env_open`。它确保配置目录可写，再次规范化 cwd，打开 project 目录，建立不可变注册表。
 13. `preview_prompt` 或 `session_open`。新 session 在这里写 `session_start`，必要时把 system prompt 写入 blob。恢复与 fork 也追加一条新的 `session_start`。
 14. 安装信号处理器，初始化输出，`stream-json` 立即写出 `session_start` 行。
