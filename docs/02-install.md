@@ -11,7 +11,7 @@
 
 | 依赖 | 用途 | 说明 |
 | --- | --- | --- |
-| Odin nightly | 编译 ap | 开发和验证使用 `dev-2026-10-nightly:84bc3fc`。nightly 的 stdlib 会变，升级后重跑测试 |
+| Odin nightly | 编译 ap | 开发和验证使用 `dev-2026-11-nightly:9a69916`。nightly 的 stdlib 会变，升级后重跑测试 |
 | Bash | `bash` 工具 | Windows 需要 Git for Windows 提供 `bash.exe` |
 | libcurl | 访问模型接口 | Linux 和 macOS 需要系统开发包；Windows 使用 Odin 随附的静态 libcurl |
 | Node 和 npm | 重新构建网页前端 | 只在修改 `ap-web/frontend/` 或首次安装前端依赖时需要 |
@@ -82,6 +82,6 @@ npm --prefix ap-web install
 
 **libcurl 链接失败。** Linux 安装 `libcurl` 开发包；macOS 确认系统 libcurl 头文件可用。Windows 应使用 Odin 随附的静态 libcurl，不要手动替换。
 
-**Odin 版本不匹配。** 换回 `dev-2026-10-nightly:84bc3fc`，或按新版 stdlib 修代码后重跑 `./test.sh`。
+**Odin 版本不匹配。** 换回 `dev-2026-11-nightly:9a69916`，或按新版 stdlib 修代码后重跑 `./test.sh`。
 
 构建成功后，下一步是 [连接模型](03-connect-model.md)。

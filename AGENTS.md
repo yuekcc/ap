@@ -8,7 +8,7 @@ ap 是用 Odin 写的 coding agent。`ap` 本体是一次性 CLI：一条提示�
 
 ## 环境
 
-- Odin nightly，开发和验证使用 `dev-2026-10-nightly:84bc3fc`。nightly 的 stdlib 会变，不要依赖更新版本的 API；升级 Odin 后必须重跑完整测试。
+- Odin nightly，开发和验证使用 `dev-2026-11-nightly:9a69916`。nightly 的 stdlib 会变，不要依赖更新版本的 API；升级 Odin 后必须重跑完整测试。
 - Windows 需要 Git for Windows 提供 `bash.exe`。ap 会跳过 `C:\Windows\System32` 下的 WSL `bash.exe`；`AP_BASH` 可指定绝对路径。
 - Linux 和 macOS 需要系统 libcurl 开发包。Windows 使用 Odin 随附的静态 libcurl。
 - `ap-web/dist/` 是构建产物，不提交进仓库；编译 `ap-web` 前必须用 Node 和 npm 生成它。

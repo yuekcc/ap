@@ -18,7 +18,7 @@ ap 是一个用 [Odin](https://odin-lang.org/) 写的命令行 coding agent。�
 
 ## 快速开始
 
-支持 Windows、Linux 和 macOS，shell 统一使用 Bash。需要 Odin nightly（开发和验证使用 `dev-2026-10-nightly:84bc3fc`）、bash 和 libcurl。Windows 的 bash 由 Git for Windows 提供。`ap-web/dist/` 不提交进仓库，编译 `ap-web` 需要 Node 和 npm 先生成它。
+支持 Windows、Linux 和 macOS，shell 统一使用 Bash。需要 Odin nightly（开发和验证使用 `dev-2026-11-nightly:9a69916`）、bash 和 libcurl。Windows 的 bash 由 Git for Windows 提供。`ap-web/dist/` 不提交进仓库，编译 `ap-web` 需要 Node 和 npm 先生成它。
 
 ```sh
 ./build.sh

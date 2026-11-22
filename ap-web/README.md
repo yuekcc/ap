@@ -34,7 +34,7 @@
 
 ### 依赖
 
-- Odin nightly（开发使用 `dev-2026-10-nightly:84bc3fc`）
+- Odin nightly（开发使用 `dev-2026-11-nightly:9a69916`）
 - 一个可执行的 `ap`（`--agent-bin`、`AP_AGENT_BIN`、`AP_BIN`、同目录 `ap`、`PATH` 依次查找）
 - Windows 需要 Git for Windows 提供的 `bash.exe`（ap 本身的要求）
 - 构建 ap-web 时需要 Node + npm（生成 `ap-web/dist/`）

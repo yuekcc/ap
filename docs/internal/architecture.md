@@ -365,7 +365,7 @@ resolve_agent_bin :: proc(configured: Maybe(string)) -> (string, Error)
 
 ## Odin 约束
 
-开发与验证使用 `dev-2026-10-nightly:84bc3fc`。升级 Odin 后必须重跑 `./test.sh`。
+开发与验证使用 `dev-2026-11-nightly:9a69916`。升级 Odin 后必须重跑 `./test.sh`。
 
 1. HTTP 与 TLS 只走 `vendor:curl`。`core:net` 没有 HTTP 客户端，也没有 TLS。Windows 使用 Odin 随附的静态 libcurl。Linux 与 macOS 链接系统 libcurl，构建和运行需要开发包。
 2. `core:os` 的 `process_kill` 只杀直接子进程，没有进程组或 Job Object。Unix 用 PPid 递归收集后代，先发 `SIGTERM`，2 秒后对同一快照发 `SIGKILL`。Windows 自己声明 Win32 Job Object 绑定，失败时退化为 `taskkill /T /F`。
