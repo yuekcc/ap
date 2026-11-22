@@ -32,7 +32,9 @@ Fake_Provider :: struct {
 	index:     int,
 }
 
-fake_provider_state: ^Fake_Provider
+// 测试替身必须是全局值而不是指向测试栈帧的指针：fake_provider_call 没有 user data 参数，
+// 只能读包级状态；存指针会让它在测试返回后悬空。
+fake_provider_state: Fake_Provider
 
 fake_provider_call :: proc(
 	p: ^Provider,
@@ -40,8 +42,8 @@ fake_provider_call :: proc(
 	sink: Stream_Sink,
 	cancel: ^platform.Cancel_Token,
 ) -> Provider_Error {
-	state := fake_provider_state
-	if state == nil || state.index >= len(state.responses) {
+	state := &fake_provider_state
+	if state.index >= len(state.responses) {
 		return {kind = .Protocol, message = "fake provider exhausted", retryable = false}
 	}
 	response := state.responses[state.index]
@@ -210,7 +212,8 @@ test_loop_blobs_large_tool_output :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "run big output")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
@@ -245,7 +248,8 @@ test_loop_persists_tool_images :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "read an image")
 	testing.expect_value(t, result.fatal_error, "")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
@@ -298,7 +302,8 @@ test_loop_blobs_large_tool_input :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "write big")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect(t, os.exists(target))
@@ -338,7 +343,8 @@ test_loop_text_stop :: proc(t: ^testing.T) {
 	state := Fake_Provider {
 		responses = []Fake_Response{{text = "hello", stop = .Stop, usage = Usage{input_tokens = 3, output_tokens = 2}}},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "hi")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "stop")
@@ -380,7 +386,8 @@ test_loop_tool_use_then_stop :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "write a file")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "stop")
@@ -422,7 +429,8 @@ test_loop_max_steps :: proc(t: ^testing.T) {
 			{tool_name = "write_file", tool_id = "c2", tool_input = args, stop = .Tool_Use},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "loop")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "max_steps")
@@ -442,7 +450,8 @@ test_loop_retry_then_success :: proc(t: ^testing.T) {
 			{text = "recovered", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "retry")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.result_text, "recovered")
@@ -487,7 +496,8 @@ test_loop_retry_after_capped_and_cancellable :: proc(t: ^testing.T) {
 			{text = "should not be reached", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	cancel_state := Retry_Cancel_State{token = loop.cancel}
 	handle := thread.create_and_start_with_data(rawptr(&cancel_state), retry_cancel_after_delay)
 	defer {
@@ -529,7 +539,8 @@ test_loop_retry_after_clamped :: proc(t: ^testing.T) {
 			{text = "recovered", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "retry after")
 	testing.expect_value(t, result.result_text, "recovered")
 	testing.expect_value(t, retry_clamped_slept_ms, RETRY_DELAY_MS_MAX)
@@ -566,7 +577,8 @@ test_loop_turn_end_write_failure_is_fatal :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	turn_end_fail_store = loop.store
 	defer turn_end_fail_store = nil
 
@@ -588,7 +600,8 @@ test_loop_context_too_long_without_handoff :: proc(t: ^testing.T) {
 			{error = Provider_Error{kind = .Context_Too_Long, message = "too long", retryable = false}},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "big")
 	testing.expect_value(t, result.error_kind, Error_Kind.Provider)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
@@ -611,7 +624,8 @@ test_loop_context_too_long_corrects_then_succeeds :: proc(t: ^testing.T) {
 			{text = "recovered", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "big")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "stop")
@@ -640,7 +654,8 @@ test_loop_context_too_long_twice_triggers_handoff :: proc(t: ^testing.T) {
 			{text = "handoff doc body", stop = .Stop, usage = Usage{input_tokens = 11, output_tokens = 7}},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "big")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	testing.expect_value(t, result.stop_reason, "handoff")
@@ -683,7 +698,8 @@ test_loop_handoff_failure_falls_back :: proc(t: ^testing.T) {
 			{text = "", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "big")
 	testing.expect_value(t, result.error_kind, Error_Kind.Provider)
 	testing.expect_value(t, result.stop_reason, "context_too_long")
@@ -737,7 +753,8 @@ test_loop_cancelled_turn_reports_usage :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "cancel")
 	testing.expect(t, result.cancelled)
 	testing.expect_value(t, result.stop_reason, STOP_REASON_CANCELLED)
@@ -752,7 +769,8 @@ test_loop_cancel_mid_stream :: proc(t: ^testing.T) {
 	loop, _, dir := loop_test_setup(t, "loop-cancel")
 	platform.cancel_token_cancel(loop.cancel)
 	state := Fake_Provider{responses = []Fake_Response{{text = "partial", stop = .Stop}}}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "cancel")
 	testing.expect(t, result.cancelled)
 	testing.expect_value(t, result.stop_reason, "cancelled")
@@ -785,7 +803,8 @@ test_loop_progress_uses_markdown_headings :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	capture := Progress_Capture{}
 	loop.emitter = Emitter{user = &capture, on_progress = capture_progress}
 	result := loop_run_turn(&loop, "run echo")
@@ -812,7 +831,8 @@ test_loop_turn_end_context_observation :: proc(t: ^testing.T) {
 	state := Fake_Provider {
 		responses = []Fake_Response{{text = "hi", stop = .Stop, usage = Usage{input_tokens = 12}}},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "hi")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
@@ -831,7 +851,8 @@ test_loop_turn_end_context_null_when_budget_disabled :: proc(t: ^testing.T) {
 	loop, _, dir := loop_test_setup(t, "loop-ctx-off")
 	loop.settings.context_window_tokens = 0
 	state := Fake_Provider{responses = []Fake_Response{{text = "hi", stop = .Stop}}}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "hi")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	events, _ := transcript_read_all(loop.project, loop.session_id)
@@ -862,7 +883,8 @@ test_loop_calibration_from_usage :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "hi")
 	testing.expect_value(t, result.error_kind, Error_Kind.None)
 	// 第二步才会用到第一步的观测值。

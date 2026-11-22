@@ -410,7 +410,8 @@ test_session_handoff_manual_writes_event :: proc(t: ^testing.T) {
 			{text = "handoff doc", stop = .Stop, usage = Usage{input_tokens = 21}},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result, err := session_handoff(
 		&session,
 		HANDOFF_REASON_MANUAL,

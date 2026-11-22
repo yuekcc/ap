@@ -60,7 +60,8 @@ test_session_title_generate_writes_event :: proc(t: ^testing.T) {
 			{text = "标题：侧栏标题生成。", stop = .Stop, usage = Usage{input_tokens = 30, output_tokens = 4}},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result, err := session_title_generate(&session, new(platform.Cancel_Token), {})
 	testing.expect_value(t, err.kind, Error_Kind.None)
 	defer session_title_destroy(&result)
@@ -114,7 +115,8 @@ test_session_title_generate_without_user_message_fails :: proc(t: ^testing.T) {
 	session, _, dir := handoff_test_session(t, "session-title-empty")
 	defer test_cleanup(dir)
 	state := Fake_Provider{}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	_, err := session_title_generate(&session, new(platform.Cancel_Token), {})
 	testing.expect_value(t, err.kind, Error_Kind.Usage)
 }

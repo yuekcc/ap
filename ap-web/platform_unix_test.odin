@@ -8,7 +8,7 @@ import "core:testing"
 test_unix_signal_handler_only_sets_flag :: proc(t: ^testing.T) {
 	SHUTDOWN = {}
 	state: Shutdown_Test_Handler
-	shutdown_configure(shutdown_test_handler, &state)
+	shutdown_configure(shutdown_test_handler, rawptr(&state))
 
 	shutdown_signal_handler(.SIGINT)
 

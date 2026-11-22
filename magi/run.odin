@@ -136,7 +136,8 @@ run :: proc(args: []string) -> int {
 	}
 
 	cancel: apcore.Cancel_Token
-	install_signal_handlers(&cancel)
+	// 处理器只在本次 run 的栈帧存活期间触发；显式转换表示有意把地址交给全局。
+	install_signal_handlers(cast(^apcore.Cancel_Token) rawptr(&cancel))
 
 	if opts.verbose {
 		magi_log("进入 MAGI 投票：%d 名成员，model=%s", len(MEMBER_ROLES), env.settings.model)

@@ -31,7 +31,7 @@ test_shutdown_signal_path_only_sets_flag :: proc(t: ^testing.T) {
 	testing.expect(t, !shutdown_pending())
 
 	state: Shutdown_Test_Handler
-	shutdown_configure(shutdown_test_handler, &state)
+	shutdown_configure(shutdown_test_handler, rawptr(&state))
 
 	shutdown_request()
 	testing.expect(t, shutdown_pending())

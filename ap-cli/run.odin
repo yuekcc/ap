@@ -239,7 +239,8 @@ run_inner :: proc(args: []string) -> int {
 	tool_cfg.max_steps = session.max_steps
 
 	cancel: apcore.Cancel_Token
-	install_signal_handlers(&cancel)
+	// 处理器只在本次 run 的栈帧存活期间触发；显式转换表示有意把地址交给全局。
+	install_signal_handlers(cast(^apcore.Cancel_Token) rawptr(&cancel))
 	out := Output_State{format = opts.output_format}
 	if out.format == .Text {
 		// text 的 stderr 用 ap-tui 风格渲染；非 TTY（管道、重定向）时关掉颜色。

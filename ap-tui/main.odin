@@ -190,7 +190,8 @@ run :: proc(args: []string) -> int {
 
 	// Ctrl+C 只取消正在跑的 turn；正常退出与崩溃两条路径都要收掉子进程树。
 	cancel: client.Cancel_Token
-	install_signal_handlers(&cancel)
+	// 处理器只在本次 run 的栈帧存活期间触发；显式转换表示有意把地址交给全局。
+	install_signal_handlers(cast(^client.Cancel_Token) rawptr(&cancel))
 	defer client.cleanup_jobs()
 
 	print_banner(&app)

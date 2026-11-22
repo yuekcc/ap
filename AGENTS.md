@@ -109,6 +109,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 - 错误是值：使用 `platform.Error`、`apcore.Error`、`Provider_Error` 等显式错误类型和 `errorf` / `is_ok`。非测试代码不要用 `panic` 表达预期失败，在 CLI 边界映射成退出码。
 - 用 `defer` 释放文件、进程和临时资源；按现有代码选择 `context.allocator` 或 `context.temp_allocator`；避免全局可变状态。
 - 需要并发时传入 `^platform.Cancel_Token`，并确保取消路径能停下来。
+- 栈变量的地址写进全局（信号 token、关机回调、测试替身）会触发 Odin 的栈逃逸警告。要么改成存值并在 `defer` 里清空，要么用显式 `rawptr` 转换说明「有意把栈地址交给全局」。
 - 注释和文档用中文，标识符用英文。注释解释为什么，不复述代码。
 - 不新增第三方库。HTTP/TLS 统一走 `vendor:curl`；不要引入额外的 C 依赖或新的第三方包。
 - `cmd/*` 保持一行入口；业务逻辑放进对应库包。

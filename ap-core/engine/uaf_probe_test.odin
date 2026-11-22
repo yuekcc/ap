@@ -102,7 +102,8 @@ test_probe_message_id_after_free :: proc(t: ^testing.T) {
 			{text = "done", stop = .Stop},
 		},
 	}
-	fake_provider_state = &state
+	fake_provider_state = state
+	defer fake_provider_state = {}
 	result := loop_run_turn(&loop, "go")
 	// loop 收养 provider 的 message_id 与 tool call 后不能再碰已释放内存，
 	// 否则这里要么拿到乱码 id，要么在毒化分配器下崩溃。

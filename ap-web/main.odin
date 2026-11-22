@@ -466,7 +466,7 @@ run :: proc(args: []string) -> int {
 		fmt.eprintln("ap-web: cannot start heartbeat thread")
 		return 1
 	}
-	shutdown_configure(on_shutdown_signal, &app)
+	shutdown_configure(on_shutdown_signal, rawptr(&app))
 	install_shutdown_signal_handler()
 	shutdown_watcher_start()
 	defer app_shutdown(&app)
