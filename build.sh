@@ -1,8 +1,10 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -eux
 
 version=$(odin version)
 echo "odin: $version"
+
+FLAGS=(-o:speed)
 
 # #load_directory("dist") 在编译期读取，前端构建必须先于 odin build。
 # dist 不提交进仓库，缺少它时无法编译 ap-web。
@@ -26,8 +28,8 @@ esac
 mkdir -p $out
 cd $out
 
-odin build ../cmd/ap -out:ap$ext -vet
-odin build ../cmd/ap-tui -out:ap-tui$ext -vet
-odin build ../cmd/ap-web -out:ap-web$ext -vet
-odin build ../cmd/magi-cli -out:magi-cli$ext -vet
+odin build ../cmd/ap -out:ap$ext -vet "${FLAGS[@]}"
+odin build ../cmd/ap-tui -out:ap-tui$ext -vet "${FLAGS[@]}"
+odin build ../cmd/ap-web -out:ap-web$ext -vet "${FLAGS[@]}"
+odin build ../cmd/magi-cli -out:magi-cli$ext -vet "${FLAGS[@]}"
 echo "built ${out}/ap$ext ${out}/ap-tui$ext ${out}/ap-web$ext ${out}/magi-cli$ext"
