@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # 检查包边界。Odin 没有 Go 的 internal 机制，只能靠构建期脚本约束。
 # 用法：
 #   tools/check-deps.sh            正常检查

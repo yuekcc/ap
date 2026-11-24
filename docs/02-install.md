@@ -12,7 +12,7 @@
 | 依赖 | 用途 | 说明 |
 | --- | --- | --- |
 | Odin nightly | 编译 ap | 开发和验证使用 `dev-2026-11-nightly:9a69916`。nightly 的 stdlib 会变，升级后重跑测试 |
-| Bash | `bash` 工具；执行 `build.sh` | `build.sh` 用 bash（使用数组拼接编译参数），Windows 需要 Git for Windows 提供 `bash.exe` |
+| Bash | `bash` 工具；执行仓库脚本 | `build.sh`、`test.sh`、`tools/check-deps.sh` 都是 bash 脚本，Windows 需要 Git for Windows 提供 `bash.exe` |
 | libcurl | 访问模型接口 | Linux 和 macOS 需要系统开发包；Windows 使用 Odin 随附的静态 libcurl |
 | Node 和 npm | 重新构建网页前端 | 只在修改 `ap-web/frontend/` 或首次安装前端依赖时需要 |
 

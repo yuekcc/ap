@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 set -eu
 
 odin test ap-core/protocol -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
