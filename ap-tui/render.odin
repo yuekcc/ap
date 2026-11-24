@@ -29,6 +29,8 @@ Renderer :: struct {
 	assistant_active:      bool,
 	message_had_text_delta: bool,
 	tool_active:           bool,
+	// 本轮收到过 cancel 事件。取消不单独上屏，由结束行统一收尾。
+	cancelled:             bool,
 	glow:                  Glow_Config,
 	// 最后一条 assistant 消息的原始 Markdown，供 /copy 使用。
 	last_assistant_text:   string,
@@ -239,12 +241,21 @@ format_elapsed :: proc(elapsed: time.Duration) -> string {
 }
 
 // 每轮结束的一行纯文本：首轮顺带报出新 session，其余轮只报耗时。
-// 不加符号，方便复制和在记录里阅读。
-turn_summary_line :: proc(new_session_id: string, elapsed: time.Duration) -> string {
+// 不加符号，方便复制和在记录里阅读。取消的轮次把原因并进同一行，
+// 避免「取消 / turn ended / 退出码 / stderr」重复说同一件事。
+turn_summary_line :: proc(
+	new_session_id: string,
+	elapsed: time.Duration,
+	cancelled: bool,
+) -> string {
+	base := fmt.tprintf("turn %s", format_elapsed(elapsed))
 	if len(new_session_id) > 0 {
-		return fmt.tprintf("using session: %s (%s)", new_session_id, format_elapsed(elapsed))
+		base = fmt.tprintf("using session: %s (%s)", new_session_id, format_elapsed(elapsed))
 	}
-	return fmt.tprintf("turn %s", format_elapsed(elapsed))
+	if cancelled {
+		return fmt.tprintf("%s · cancelled", base)
+	}
+	return base
 }
 
 render_error :: proc(r: ^Renderer, scope, message: string, retryable: bool) {
@@ -264,10 +275,12 @@ render_error :: proc(r: ^Renderer, scope, message: string, retryable: bool) {
 
 render_turn_end :: proc(r: ^Renderer, stop_reason: string) {
 	// handoff 不是失败：本轮正常结束，新 session 由 CLI 创建并把 id 写到 stderr。
+	// cancelled 由 cancel 事件（重放）或结束行（实时）表达，这里不重复。
 	if len(stop_reason) == 0 ||
 	   stop_reason == protocol.STOP_REASON_STOP ||
 	   stop_reason == protocol.STOP_REASON_TOOL_USE ||
-	   stop_reason == protocol.STOP_REASON_HANDOFF {
+	   stop_reason == protocol.STOP_REASON_HANDOFF ||
+	   stop_reason == protocol.STOP_REASON_CANCELLED {
 		return
 	}
 	finish_assistant(r)
@@ -322,7 +335,13 @@ render_event :: proc(r: ^Renderer, ev: protocol.Stream_Event, mode: Event_Mode) 
 	case protocol.EVENT_ERROR:
 		render_error(r, ev.scope, ev.message, ev.retryable)
 	case protocol.EVENT_CANCEL:
-		note(r, fmt.tprintf("cancelled [%s]", ev.scope))
+		// 实时取消交给结束行统一收尾，不再单独占一行。历史重放没有结束行，
+		// 不打个标记就看不出这一轮是被取消的。
+		if mode == .History {
+			note(r, fmt.tprintf("cancelled [%s]", ev.scope))
+		} else {
+			r.cancelled = true
+		}
 	case protocol.EVENT_TURN_END:
 		render_turn_end(r, ev.stop_reason)
 	case:

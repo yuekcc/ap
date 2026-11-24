@@ -29,7 +29,7 @@ print_commands :: proc() {
   /session   显示当前 session id
   /copy      复制最后一条 assistant 消息到系统剪贴板（OSC 52）
   /help      显示本帮助
-  /quit      退出（/exit 同义）
+  /quit      退出（/exit、/q 同义）
 `,
 	)
 }
@@ -59,7 +59,7 @@ Command_Result :: enum {
 
 handle_command :: proc(app: ^App, line: string) -> Command_Result {
 	switch line {
-	case "/quit", "/exit":
+	case "/quit", "/exit", "/q":
 		return .Quit
 	case "/help":
 		print_commands()
@@ -82,7 +82,28 @@ handle_command :: proc(app: ^App, line: string) -> Command_Result {
 		copy_last_message(app)
 		return .Handled
 	}
+	// `/` 开头的裸单词当作命令。未知命令只给提示，不当成提示词发给模型：
+	// `/q` 这类手滑会白跑一轮。绝对路径含第二个 `/`，仍按提示词发送。
+	if looks_like_command(line) {
+		renderer_note(app, fmt.tprintf("unknown command: %s", line))
+		renderer_note(app, "commands: /help · /new · /session · /copy · /quit")
+		return .Handled
+	}
 	return .Not_Command
+}
+
+// 命令名是不含空格与 `/` 的单词，因此能和绝对路径区分开。
+looks_like_command :: proc(line: string) -> bool {
+	if len(line) < 2 || line[0] != '/' {
+		return false
+	}
+	for i in 1 ..< len(line) {
+		switch line[i] {
+		case ' ', '\t', '/':
+			return false
+		}
+	}
+	return true
 }
 
 run_input_loop :: proc(app: ^App, input: ^Input, cancel: ^client.Cancel_Token) {

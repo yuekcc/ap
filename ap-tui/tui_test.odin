@@ -2,10 +2,13 @@ package aptui
 
 import client "../ap-core/client"
 import protocol "../ap-core/protocol"
+import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import "core:testing"
+import "core:thread"
 import "core:time"
 
 test_temp_dir :: proc(prefix: string) -> string {
@@ -541,10 +544,218 @@ test_format_elapsed :: proc(t: ^testing.T) {
 
 @(test)
 test_turn_summary_line :: proc(t: ^testing.T) {
-	testing.expect_value(t, turn_summary_line("", 3480 * time.Millisecond), "turn 3.4s")
+	testing.expect_value(t, turn_summary_line("", 3480 * time.Millisecond, false), "turn 3.4s")
 	testing.expect_value(
 		t,
-		turn_summary_line("ses_x", 15 * time.Millisecond),
+		turn_summary_line("ses_x", 15 * time.Millisecond, false),
 		"using session: ses_x (15ms)",
 	)
+	testing.expect_value(t, turn_summary_line("", 3480 * time.Millisecond, true), "turn 3.4s · cancelled")
+	testing.expect_value(
+		t,
+		turn_summary_line("ses_x", 15 * time.Millisecond, true),
+		"using session: ses_x (15ms) · cancelled",
+	)
+}
+
+// 取消的轮次不再重复报退出码和 stderr 预览。
+@(test)
+test_turn_cancelled_classification :: proc(t: ^testing.T) {
+	testing.expect(t, turn_cancelled({exit_code = 1, cancelled = true}, false))
+	testing.expect(t, turn_cancelled({exit_code = 1}, true))
+	testing.expect(t, turn_cancelled({exit_code = 130}, false))
+	testing.expect(t, turn_cancelled({exit_code = 143}, false))
+	testing.expect(t, !turn_cancelled({exit_code = 1}, false))
+	testing.expect(t, !turn_cancelled({exit_code = 0}, false))
+}
+
+// 实时取消不单独占行：cancel 与 turn_end 都不上屏，由结束行带上 cancelled。
+@(test)
+test_render_live_cancel_deferred_to_summary :: proc(t: ^testing.T) {
+	dir := test_temp_dir("cancel")
+	defer os.remove_all(dir)
+	project := client.Project {
+		config_dir = dir,
+		root = dir,
+		hash = "test",
+		dir = dir,
+		blobs_dir = fmt.aprintf("%s/blobs", dir),
+	}
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	r := Renderer {
+		out = file,
+		color = false,
+		project = &project,
+		at_line_start = true,
+	}
+
+	cancel_line := `{"type":"cancel","scope":"step"}`
+	cancel_ev, cancel_ok := protocol.parse_stream_event(cancel_line)
+	testing.expect(t, cancel_ok)
+	render_event(&r, cancel_ev, .Live)
+	free_all(context.temp_allocator)
+	testing.expect(t, r.cancelled)
+
+	turn_end := `{"type":"turn_end","turn":1,"stop_reason":"cancelled"}`
+	end_ev, end_ok := protocol.parse_stream_event(turn_end)
+	testing.expect(t, end_ok)
+	render_event(&r, end_ev, .Live)
+	free_all(context.temp_allocator)
+
+	note(&r, turn_summary_line("", 1500 * time.Millisecond, r.cancelled))
+	os.close(file)
+
+	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
+	testing.expect_value(t, string(data), "turn 1.5s · cancelled\n")
+}
+
+// 重放没有结束行，取消记录仍需留痕；turn_end(cancelled) 不额外打印。
+@(test)
+test_render_history_cancel_note :: proc(t: ^testing.T) {
+	out := test_render_to_file(
+		t,
+		{
+			`{"type":"cancel","scope":"step"}`,
+			`{"type":"turn_end","turn":1,"stop_reason":"cancelled"}`,
+		},
+		.History,
+	)
+	testing.expect(t, strings.contains(out, "cancelled [step]"))
+	testing.expect(t, !strings.contains(out, "turn ended"))
+}
+
+// ---- 端到端：Ctrl+C 取消一轮后的收尾 ----
+
+FAKE_AGENT_SOURCE :: #load("testdata/fake_agent/main.odin", string)
+
+// 测试进程内只编译一次假 agent。
+FAKE_AGENT_EXE: string
+
+fake_agent_path :: proc(t: ^testing.T) -> string {
+	if len(FAKE_AGENT_EXE) > 0 {
+		return FAKE_AGENT_EXE
+	}
+	dir := test_temp_dir("fake-agent")
+	src_dir := fmt.aprintf("%s/pkg", dir)
+	test_write_file(fmt.aprintf("%s/main.odin", src_dir), FAKE_AGENT_SOURCE)
+	exe := fmt.aprintf("%s/fake-agent", dir)
+	when ODIN_OS == .Windows {
+		exe = strings.concatenate({exe, ".exe"})
+	}
+	state, out, errout, err := os.process_exec(
+		{command = []string{"odin", "build", src_dir, fmt.aprintf("-out:%s", exe)}},
+		context.allocator,
+	)
+	defer {
+		delete(out)
+		delete(errout)
+	}
+	if err != nil || !state.exited || state.exit_code != 0 {
+		fmt.eprintfln("cannot build fake agent: %v\nstdout:\n%s\nstderr:\n%s", err, out, errout)
+		testing.fail(t)
+		return ""
+	}
+	// 这个路径要活过整个测试进程；测试的 context.allocator 是每个测试任务
+	// 结束后回滚的 arena，不能直接存。
+	FAKE_AGENT_EXE = strings.clone(exe, runtime.heap_allocator())
+	return FAKE_AGENT_EXE
+}
+
+test_cancel_thread_token: ^client.Cancel_Token
+
+test_cancel_after_delay :: proc() {
+	time.sleep(300 * time.Millisecond)
+	if token := test_cancel_thread_token; token != nil {
+		// 线程没有 Odin context 可用，直接写原子标志，和信号处理器一致。
+		sync.atomic_store(&token.value, 1)
+	}
+}
+
+// 取消的一轮只留一行 `turn … · cancelled`：不再报退出码，也不 dump stderr。
+@(test)
+test_run_turn_cancel_keeps_single_summary :: proc(t: ^testing.T) {
+	agent_bin := fake_agent_path(t)
+	if len(agent_bin) == 0 {
+		return
+	}
+	dir := test_temp_dir("turn-cancel")
+	defer os.remove_all(dir)
+	project := client.Project {
+		config_dir = dir,
+		root       = dir,
+		hash       = "test",
+		dir        = dir,
+		blobs_dir  = fmt.aprintf("%s/blobs", dir),
+	}
+	os.make_directory_all(project.blobs_dir)
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+
+	app := App {
+		project   = project,
+		agent_bin = agent_bin,
+		renderer  = {out = file, color = false, project = &project, at_line_start = true},
+	}
+
+	cancel: client.Cancel_Token
+	test_cancel_thread_token = &cancel
+	defer test_cancel_thread_token = nil
+	th := thread.create_and_start(test_cancel_after_delay)
+	exit_code := run_agent_turn(&app, "[scenario:cancel]", &cancel)
+	thread.join(th)
+	os.close(file)
+
+	testing.expect(t, exit_code != 0)
+	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
+	out := string(data)
+	testing.expect(t, strings.contains(out, "· cancelled"))
+	// 取消被当成预期操作：退出码、stderr 预览和 turn ended 都不该出现。
+	testing.expect(t, !strings.contains(out, "agent exited with code"))
+	testing.expect(t, !strings.contains(out, "agent stderr"))
+	testing.expect(t, !strings.contains(out, "## Step 1"))
+	testing.expect(t, !strings.contains(out, "turn ended"))
+	testing.expect(t, !strings.contains(out, "cancelled [step]"))
+}
+
+// `/` 开头的裸单词按命令处理：未知命令只提示，不当提示词发给模型。
+@(test)
+test_unknown_slash_command_is_not_a_prompt :: proc(t: ^testing.T) {
+	dir := test_temp_dir("unknown-cmd")
+	defer os.remove_all(dir)
+
+	out_path := fmt.aprintf("%s/out.txt", dir)
+	file, ferr := os.open(out_path, {.Read, .Write, .Create, .Trunc})
+	testing.expect_value(t, ferr, nil)
+	if ferr != nil {
+		return
+	}
+	app := App {
+		renderer = {out = file, at_line_start = true},
+	}
+
+	testing.expect_value(t, handle_command(&app, "/q"), Command_Result.Quit)
+	testing.expect_value(t, handle_command(&app, "/qxit"), Command_Result.Handled)
+	testing.expect_value(t, handle_command(&app, "/tmp"), Command_Result.Handled)
+	// 绝对路径和带空格的输入不是命令，仍是提示词。
+	testing.expect_value(t, handle_command(&app, "/z/projects/ap/x.odin"), Command_Result.Not_Command)
+	testing.expect_value(t, handle_command(&app, "/quit now"), Command_Result.Not_Command)
+	testing.expect_value(t, handle_command(&app, "plain"), Command_Result.Not_Command)
+	os.close(file)
+
+	data, _ := os.read_entire_file_from_path(out_path, context.allocator)
+	out := string(data)
+	testing.expect(t, strings.contains(out, "unknown command: /qxit"))
+	testing.expect(t, strings.contains(out, "unknown command: /tmp"))
+	testing.expect(t, !strings.contains(out, "/z/projects/ap/x.odin"))
 }

@@ -35,10 +35,21 @@ on_agent_stderr_line :: proc(user: rawptr, line: string) {
 	free_all(context.temp_allocator)
 }
 
+// 取消是用户主动操作，不是失败：不再报退出码，也不 dump stderr 预览
+// （那里面主要是 step 进度块，看起来像报错）。
+turn_cancelled :: proc(result: client.Turn_Result, renderer_cancelled: bool) -> bool {
+	if result.cancelled || renderer_cancelled {
+		return true
+	}
+	// ap 自己也收到了同一个 Ctrl+C 时会以 130/143 退出。
+	return result.exit_code == 130 || result.exit_code == 143
+}
+
 // 执行一个 turn：每轮都启动一个新的 ap 进程，stdout 读 stream-json，stderr 收集后按需展示。
 run_agent_turn :: proc(app: ^App, prompt: string, cancel: ^client.Cancel_Token) -> int {
 	// 上一轮可能被 Ctrl+C 置过位；新一轮从干净状态开始。
 	sync.atomic_store(&cancel.value, 0)
+	app.renderer.cancelled = false
 	had_session := len(app.session_id) > 0
 	options := client.Turn_Options {
 		agent_bin  = app.agent_bin,
@@ -68,21 +79,24 @@ run_agent_turn :: proc(app: ^App, prompt: string, cancel: ^client.Cancel_Token) 
 	finish_assistant(&app.renderer)
 	ensure_line_start(&app.renderer)
 
+	cancelled := turn_cancelled(result, app.renderer.cancelled)
+
 	// 测的是整个 ap 子进程的生命周期：spawn、事件流和退出都算在一轮里。
+	new_session := ""
+	if !had_session {
+		new_session = app.session_id
+	}
+	summary := turn_summary_line(new_session, elapsed, cancelled)
 	if !had_session && len(app.session_id) > 0 {
-		renderer_note(app, fmt.tprintf("\n---\n\n%s", turn_summary_line(app.session_id, elapsed)))
+		renderer_note(app, fmt.tprintf("\n---\n\n%s", summary))
 	} else {
-		renderer_note(app, turn_summary_line("", elapsed))
+		renderer_note(app, summary)
 	}
 
-	if exit_code != 0 {
-		if exit_code == 130 || exit_code == 143 {
-			renderer_note(app, "agent interrupted")
-		} else {
-			renderer_note(app, fmt.tprintf("agent exited with code %d", exit_code))
-		}
+	if exit_code != 0 && !cancelled {
+		renderer_note(app, fmt.tprintf("agent exited with code %d", exit_code))
 	}
-	if !app.options.verbose && len(result.stderr_preview) > 0 && exit_code != 0 {
+	if !cancelled && !app.options.verbose && len(result.stderr_preview) > 0 && exit_code != 0 {
 		renderer_note(app, "── agent stderr ──")
 		for line in strings.split_lines(result.stderr_preview, context.temp_allocator) {
 			if len(strings.trim_space(line)) > 0 {

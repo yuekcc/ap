@@ -90,7 +90,7 @@ ap 不会静默降级。这个会话无法完整恢复。能做的只有：
 
 **中文参数乱码。** Windows 控制台代码页不是 UTF-8 时可能出现。改用 `--input-file` 传提示词，或把终端切到 UTF-8。
 
-**TUI 运行中按 Ctrl+C 后整个界面退出。** 这是当前行为。运行中的 Ctrl+C 是内核信号，会同时终止 `ap-tui` 和 `ap`。
+**TUI 运行中按 Ctrl+C 后只剩一行 `cancelled`。** 这是预期行为：Ctrl+C 只取消当前这一轮，收尾行显示 `turn 1.7s · cancelled`，然后回到输入框。要退出整个界面再按一次 Ctrl+C（1 秒内）或用 `/quit`。
 
 **TUI 不显示 reasoning 和 usage。** 当前版本不支持。需要 token 数据时用 `--output-format json`。
 

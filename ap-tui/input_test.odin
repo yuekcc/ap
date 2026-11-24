@@ -39,6 +39,15 @@ test_tui_complete_commands :: proc(t: ^testing.T) {
 	}
 
 	clear_completions(&out)
+	tui_complete(nil, "/q", 2, &out)
+	testing.expect_value(t, len(out), 2)
+	if len(out) == 2 {
+		// 先列正式命令名，再列 /q 这个缩写。
+		testing.expect_value(t, out[0].text, "/quit")
+		testing.expect_value(t, out[1].text, "/q")
+	}
+
+	clear_completions(&out)
 	tui_complete(nil, "hello", 5, &out)
 	testing.expect_value(t, len(out), 0)
 

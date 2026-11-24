@@ -106,9 +106,10 @@ ap-tui [options]
 - `message_end` 只在没有收到过文本 delta 时补全文，避免重复。
 - 每个 `message_end`（实时和历史重放都算）把文本块按空行拼接后保存为「最后一条 assistant 文本」，供 `/copy` 使用。没有正文的消息不覆盖上一条；文本用 `context.allocator` 复制，`/copy` 发送的是原始 Markdown 而不是 glow 输出。
 - `error` 中 `retryable=true` 显示为黄色警告，否则显示为红色错误，并带上 `scope`。
-- `cancel` 显示为 `cancelled [<scope>]`。
-- `turn_end.stop_reason` 为空或 `stop` 时不提示。`tool_use` 也按正常结束处理，这是防御性兼容；正常的 `turn_end` 不会带 `tool_use`。其他值打印 `turn ended: <reason>`。
-- 每轮 `ap` 子进程退出后打印一行耗时，计时从 spawn 开始到进程退出结束，覆盖事件流、stderr 收集和异常退出。首轮并入新 session 提示，写成 `using session: <id> (3.4s)`；其余轮写成 `turn 3.4s`。粒度随长度切换：`842ms`、`3.4s`、`1m05s`、`1h02m`。取消的 turn 同样打印。历史重放不启动子进程，不打印耗时。
+- `cancel` 在实时渲染时不单独上屏，只把本轮标记为已取消；结束行带上 `· cancelled`。历史重放没有结束行，仍显示 `cancelled [<scope>]`。
+- `turn_end.stop_reason` 为空或 `stop` 时不提示。`tool_use` 也按正常结束处理，这是防御性兼容；正常的 `turn_end` 不会带 `tool_use`。`cancelled` 已由取消标记或结束行表达，不再打 `turn ended`。其他值打印 `turn ended: <reason>`。
+- 取消的轮次不报子进程退出码，也不 dump stderr 预览（那里面主要是 step 进度块）。
+- 每轮 `ap` 子进程退出后打印一行耗时，计时从 spawn 开始到进程退出结束，覆盖事件流、stderr 收集和异常退出。首轮并入新 session 提示，写成 `using session: <id> (3.4s)`；其余轮写成 `turn 3.4s`。粒度随长度切换：`842ms`、`3.4s`、`1m05s`、`1h02m`。取消的 turn 写成 `turn 1.7s · cancelled`。历史重放不启动子进程，不打印耗时。
 - 每轮 turn 结束后先空一行，再画下一条提示符。
 - ANSI 颜色在 stdout 不是 TTY、设置了 `NO_COLOR` 或传了 `--no-color` 时关闭。
 - reasoning delta 不展示。
@@ -180,7 +181,7 @@ stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前�
 | `/session` | 显示当前 session id。没有 id 时显示“尚未发送提示词” |
 | `/copy` | 用 OSC 52 把最后一条 assistant 文本写进系统剪贴板 |
 | `/help` | 显示命令列表 |
-| `/quit`、`/exit` | 退出 |
+| `/quit`、`/exit`、`/q` | 退出 |
 
 `/copy` 的实现要点：
 
@@ -189,7 +190,7 @@ stdin 是 TTY 时，`ap-tui` 把行编辑交给 `lineedit`。每轮 prompt 前�
 - 没有 assistant 文本时提示 `nothing to copy`。没有发送长度上限；部分终端会丢弃过长的 OSC 52。终端拒绝或忽略时 `ap-tui` 无从得知，仍报告已复制。
 - 复制目标在进程内跨 session 保留，`/new` 不清空。
 
-未知的 `/...` 不当作命令，按普通提示词发送。因此可以直接发送绝对路径等内容。
+`looks_like_command` 把「`/` 开头、且不含空格和第二个 `/` 的单词」当命令。不认识的命令输出 `unknown command: <行>` 加一行命令清单，返回 `Handled` 不调 agent。含第二个 `/` 的绝对路径和带空格的句子仍然当提示词（返回 `Not_Command`）。
 
 ## 构建与运行
 
