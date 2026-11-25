@@ -213,6 +213,8 @@ odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 npm --prefix ap-web test
 ```
 
+前端测试分五层：`render.test.mjs` 测纯 reducer；`store.test.mjs` 测信号、派生值与批量语义；`controller.test.mjs` 用假 api / stream 测会话切换时序；`dom.test.mjs` 用最小 fake 节点测写入函数和 `keyedChildren`；`markup.test.mjs` 直接读 `index.html` 与 `ui/*.js` 做结构断言。不引入 jsdom。
+
 仓库根目录的 `./test.sh` 会依次测试 `ap-core`、`ap-tui`、`ap-web`，最后运行 `tools/check-deps.sh`；前端测试需要单独执行 `npm --prefix ap-web test`。
 
 ## 安全与限制

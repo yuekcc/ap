@@ -133,6 +133,7 @@ export function mountThread({ store, controller }) {
 	const fileName = ref(document, "thread-file-name");
 	const messages = ref(document, "messages");
 	const empty = ref(document, "messages-empty");
+	const emptyTitle = ref(document, "messages-empty-title");
 	const emptyLoading = ref(document, "messages-empty-loading");
 	const emptyHint = ref(document, "messages-empty-hint");
 	const thinking = ref(document, "thinking");
@@ -192,6 +193,8 @@ export function mountThread({ store, controller }) {
 		bindText(fileName, () => store.currentFileName());
 		bindAttr(messages, "aria-busy", () => (store.running() ? "true" : null));
 		bindVisible(empty, () => store.items().length === 0);
+		// 载入中只显示进度提示，不摆出「今天要做什么？」误导用户以为会话是空的。
+		bindVisible(emptyTitle, () => !store.loading());
 		bindVisible(emptyLoading, () => store.loading());
 		bindVisible(emptyHint, () => !store.loading());
 		bindVisible(thinking, () => store.thinking());

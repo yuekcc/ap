@@ -16,7 +16,8 @@ import {
 } from "./prefs.js";
 import { createEventStream } from "./sse.js";
 
-export function createController(store) {
+// api / streams 可注入：controller 不依赖 DOM，测试可以直接喂假接口。
+export function createController(store, { api: apiClient = api, streams = createEventStream } = {}) {
 	let stream = null;
 	let wasOpen = false;
 	let resyncing = false;
@@ -101,7 +102,7 @@ export function createController(store) {
 			}
 		} else if (saved?.key) {
 			try {
-				const current = await api.currentSession(saved.key);
+				const current = await apiClient.currentSession(saved.key);
 				if (current?.session_key === saved.key) {
 					const cwd = current.cwd || saved.cwd || defaultCwd();
 					activateSession(saved.key, current.session_id || null, cwd);
@@ -139,7 +140,7 @@ export function createController(store) {
 	async function syncSession(key = store.sessionKey()) {
 		if (!key) return;
 		try {
-			const current = await api.currentSession(key);
+			const current = await apiClient.currentSession(key);
 			if (store.sessionKey() !== key) return;
 			store.syncCurrent(current ?? {});
 			persistSession();
@@ -151,15 +152,16 @@ export function createController(store) {
 	// 打开一个已有 session：恢复指针 → 载入该 project 的 history → 订阅 SSE。
 	// 不做 loading 守卫，boot 与公开入口都复用它。
 	async function openSession(sessionId, cwd, { reloadProjects = true } = {}) {
-		const resumed = await api.resumeSession(sessionId, cwd);
+		const resumed = await apiClient.resumeSession(sessionId, cwd);
 		const key = resumed?.session_key || sessionId;
 		const projectCwd = resumed?.cwd || cwd || projectCwdFor(sessionId);
 		activateSession(key, sessionId, projectCwd);
-		store.reset(sessionId);
+		// 不先清空视图：新 transcript 到达后一次替换，切换对话时不会闪过空状态。
 		try {
 			await loadHistory(sessionId, projectCwd);
 		} catch (error) {
-			// history 失败也要连上 SSE；运行中的 session 仍能继续显示增量。
+			// history 失败时不能把上一个会话的内容留给新会话，再连 SSE 兜底。
+			store.reset(sessionId);
 			fail("读取历史失败", error);
 		}
 		// history 只还原 transcript；运行态与 turn 号以 current 为准。
@@ -172,7 +174,7 @@ export function createController(store) {
 
 	async function loadConfig() {
 		try {
-			store.setConfig(await api.config());
+			store.setConfig(await apiClient.config());
 		} catch (error) {
 			fail("读取配置失败", error);
 		}
@@ -180,7 +182,7 @@ export function createController(store) {
 
 	async function loadProjects() {
 		try {
-			store.setProjects(await api.projects());
+			store.setProjects(await apiClient.projects());
 		} catch (error) {
 			fail("读取工作目录失败", error);
 		}
@@ -188,7 +190,7 @@ export function createController(store) {
 
 	async function loadCwd() {
 		try {
-			const data = await api.cwd();
+			const data = await apiClient.cwd();
 			if (data?.cwd) store.setCwd(data.cwd);
 		} catch {
 			// 老服务端可能还没有这个端点；config.cwd 仍可作为回显。
@@ -201,7 +203,7 @@ export function createController(store) {
 			store.reset(null);
 			return;
 		}
-		const data = await api.history(sessionId, cwd);
+		const data = await apiClient.history(sessionId, cwd);
 		store.ingest(data?.events ?? [], sessionId);
 	}
 
@@ -243,7 +245,7 @@ export function createController(store) {
 			store.setConnection("closed");
 			return;
 		}
-		stream = createEventStream({
+		stream = streams({
 			url: eventsUrl(key),
 			getLastSeq: () => store.lastSeq(),
 			onEvent: (event) => {
@@ -288,7 +290,7 @@ export function createController(store) {
 		const cwd = store.projectCwd();
 		if (!key || !sessionId || !cwd) return;
 		try {
-			const data = await api.history(sessionId, cwd);
+			const data = await apiClient.history(sessionId, cwd);
 			if (store.sessionKey() !== key || store.sessionId() !== sessionId) return;
 			store.mergeHistory(data?.events ?? []);
 			store.requestScroll();
@@ -303,14 +305,14 @@ export function createController(store) {
 		if (resyncing || !key) return;
 		resyncing = true;
 		try {
-			const current = await api.currentSession(key);
+			const current = await apiClient.currentSession(key);
 			if (store.sessionKey() !== key) return;
 			store.syncCurrent(current ?? {});
 			persistSession();
 			const sessionId = store.sessionId();
 			const cwd = store.projectCwd();
 			if (sessionId && cwd) {
-				const data = await api.history(sessionId, cwd);
+				const data = await apiClient.history(sessionId, cwd);
 				if (store.sessionKey() !== key) return;
 				store.mergeHistory(data?.events ?? []);
 			}
@@ -344,7 +346,7 @@ export function createController(store) {
 		store.requestScroll(true);
 
 		try {
-			await api.startTurn({
+			await apiClient.startTurn({
 				prompt,
 				session_key: key,
 				cwd: store.projectCwd() ?? "",
@@ -382,7 +384,7 @@ export function createController(store) {
 			store.notice(focus ? "正在交接并继续…" : "正在生成交接文档…", "muted");
 		});
 		try {
-			await api.startTurn({
+			await apiClient.startTurn({
 				prompt: focus,
 				handoff: true,
 				session_key: key,
@@ -409,7 +411,7 @@ export function createController(store) {
 		if (store.titlePending() || store.running() || store.loading() || !store.sessionId()) return;
 		store.setTitlePending(true);
 		try {
-			const result = await api.sessionTitle(store.sessionKey());
+			const result = await apiClient.sessionTitle(store.sessionKey());
 			const title = typeof result?.title === "string" ? result.title : "";
 			store.setTitle(title);
 			store.setSessionTitle(store.sessionId(), title);
@@ -432,7 +434,7 @@ export function createController(store) {
 		if (!store.running() || store.cancelling() || !key) return;
 		store.setCancelling(true);
 		try {
-			const result = await api.cancelTurn(key);
+			const result = await apiClient.cancelTurn(key);
 			if (store.sessionKey() !== key) return;
 			if (!result?.cancelled) {
 				store.batch(() => {
@@ -453,7 +455,7 @@ export function createController(store) {
 		const key = store.sessionKey();
 		if (!key) return;
 		try {
-			const current = await api.currentSession(key);
+			const current = await apiClient.currentSession(key);
 			if (store.sessionKey() !== key) return;
 			store.syncCurrent(current ?? {});
 			persistSession();
@@ -488,7 +490,7 @@ export function createController(store) {
 		closeOverlays();
 		store.setLoading(true);
 		try {
-			const created = await api.newSession(target);
+			const created = await apiClient.newSession(target);
 			const key = created?.session_key;
 			if (!key) throw new Error("服务端没有返回 session_key");
 			// 先设 key/cwd 再 reset：reset 只清空 transcript。
@@ -536,7 +538,7 @@ export function createController(store) {
 	function openWorkdir(target) {
 		const cwd = store.projectCwd() || defaultCwd();
 		if (!cwd) return undefined;
-		const request = target === "terminal" ? api.openTerminal(cwd) : api.openFiles(cwd);
+		const request = target === "terminal" ? apiClient.openTerminal(cwd) : apiClient.openFiles(cwd);
 		return request.catch((error) => {
 			fail(target === "terminal" ? "打开终端失败" : "打开文件管理器失败", error);
 		});
@@ -581,7 +583,7 @@ export function createController(store) {
 		if (store.picking()) return;
 		store.setPicking(true);
 		try {
-			const result = await api.pickCwd();
+			const result = await apiClient.pickCwd();
 			if (result?.cwd) {
 				// 目录只是「打开一个 project」，不再替换全局 cwd、也不再清空
 				// 其他 project 的 session；直接在该目录开一个新 slot。
@@ -661,9 +663,11 @@ export function createController(store) {
 	}
 
 	// 切到后台时 rAF 会停，先把队列冲掉，之后的事件改走定时器合批。
-	document.addEventListener("visibilitychange", () => {
-		if (document.hidden) flushEvents();
-	});
+	if (typeof document !== "undefined") {
+		document.addEventListener("visibilitychange", () => {
+			if (document.hidden) flushEvents();
+		});
+	}
 
 	return {
 		boot,

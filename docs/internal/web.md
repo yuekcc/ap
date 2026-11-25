@@ -247,7 +247,7 @@ main.js ──► controller.js ──► store.js ──► render.js / alien-s
 - 工作空间列表按 `/api/projects` 的 `cwd` 分组。当前 project 即使还没有落盘 session，也在列表里本地合成一个空组。
 - 对话栏只展示当前工作空间的对话记录，按浏览器本地自然日分成「今天 / 昨天 / 7天内（2–7 天前）/ 更早」，空组不渲染；取不到时间戳的会话落进「更早」。每项两行，第一行标题，第二行是本地时间（`MM-DD HH:mm`）和状态点，`running` 为真时是脉冲点。列表排序（最近活动 / 名称）只决定组内先后：分组顺序固定为今天到更早，排序和工作空间排序共用一个 `localStorage` 偏好，都只在浏览器本地完成，不改服务端返回顺序。切换工作空间时打开该目录最近一条 session，没有记录就在该目录新建 slot。
 - 每个标签页持有自己的 `session_key`，SSE 按该 key 过滤。
-- 打开已有 session 的顺序是 `POST /api/session/resume`、`GET /api/history`、`GET /api/events`。
+- 打开已有 session 的顺序是 `POST /api/session/resume`、`GET /api/history`、`GET /api/events`。history 到达前保留旧 transcript，新内容一次性替换；history 读取失败才清空旧内容并落 notice，避免切换对话时闪过空状态。
 - 首次订阅成功后补一次 history，填上 history 与 subscribe 之间的空档。
 - 断线重连后先读 `GET /api/session/current` 修正 `running` 和 `turn`，再读 history 补齐，按 `seq` 去重。
 - 单页应用，没有路由库。客户端按 `running` 阻止重复发送，服务端再用 409 兜底。
@@ -367,6 +367,7 @@ npm --prefix ap-web test
 - runner：完整 turn、单飞、跨 session 并发、取消、stderr、线程回收、关停。
 - 前端纯函数：delta 累积、工具卡片、history 重放、`seq` 去重、`turn_done` 状态机、请求构造、Markdown 转义。
 - store 信号层：批量发布只触发一次 effect、派生值（标题、用量、状态、侧栏可见性、分组与排序）、`syncCurrent` / 交接的视图重置、`setSessionTitle` 的不可变更新、焦点与滚动请求计数器。
+- controller 层：注入假 api / stream 后验证会话切换——history 到达前保留旧 transcript，读取失败才清空并落 notice。
 - dom 层：`diffKeys` 纯逻辑、写入函数「值相同不写」、`keyedChildren` 复用与重排、条目 effect 不受外层列表 effect 牵连（owner scope + `setActiveSub` 回归用例）、`afterRender` 按帧去重。
 - 结构断言：`index.html` 不含 Alpine 指令、模板 id 与 `ui/*.js` 的 `data-ref` / `cloneTemplate` 对齐、`[hidden]` 规则、图标占位与 dist 内联。
 - 集成测试使用本地 fake agent，不访问外网。

@@ -476,6 +476,23 @@ test("图标来自 bootstrap-icons：源码只留 data-icon 占位，dist 已内
 	assert.ok(distHtml.includes('data-ref="messages"'), "dist 里包含挂载点");
 });
 
+test("载入会话时消息区只显示进度提示", async () => {
+	const { html, ui } = await loadSources();
+	const thread = ui[UI_FILES.indexOf("thread.js")];
+	assert.ok(
+		html.includes('data-ref="messages-empty-title"'),
+		"空状态标题有挂载点",
+	);
+	assert.ok(
+		thread.includes('bindVisible(emptyTitle, () => !store.loading())'),
+		"载入中不摆出「今天要做什么？」，避免切换会话时闪一下空状态",
+	);
+	assert.ok(
+		thread.includes('bindVisible(emptyLoading, () => store.loading())'),
+		"载入中显示「正在载入会话…」",
+	);
+});
+
 test("对话项是标题 + 时间 + 状态点，工具卡片和当前文件各有状态指示", async () => {
 	const { html, css, ui } = await loadSources();
 	const sessions = ui[UI_FILES.indexOf("sessions.js")];

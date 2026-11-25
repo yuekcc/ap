@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
-    "test": "node --test frontend/render.test.mjs frontend/markup.test.mjs frontend/dom.test.mjs frontend/store.test.mjs frontend/markdown.test.mjs frontend/mermaid-blocks.test.mjs frontend/api.test.mjs"
+    "test": "node --test frontend/render.test.mjs frontend/markup.test.mjs frontend/dom.test.mjs frontend/store.test.mjs frontend/controller.test.mjs frontend/markdown.test.mjs frontend/mermaid-blocks.test.mjs frontend/api.test.mjs"
   },
   "dependencies": {
     "alien-signals": "^3.2.1",
