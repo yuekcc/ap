@@ -3,6 +3,7 @@
 > 设计稿：[v3.png](v3.png)（Excalidraw 场景，标注为红色）
 > 状态：已实现（v3）。定稿行为已同步到 [../internal/web.md](../internal/web.md) 与 [../11-web.md](../11-web.md)。
 > 影响范围：只改 `ap-web` 前端。HTTP API、SSE 帧格式、transcript 和 `ap` 本体不动。
+> 实现补充：三栏布局不变，视图层已从 Alpine.js 迁移到 alien-signals + 原生 DOM，见 [../internal/proposals/web-alien-signals.md](../internal/proposals/web-alien-signals.md)。
 
 ## 问题陈述
 

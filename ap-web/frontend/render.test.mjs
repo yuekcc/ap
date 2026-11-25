@@ -1,4 +1,4 @@
-// render.js 的纯函数验证：不依赖浏览器、Alpine 或任何第三方测试框架。
+// render.js 的纯函数验证：不依赖浏览器、信号库或任何第三方测试框架。
 // 运行：node --test frontend/render.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";

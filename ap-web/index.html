@@ -9,69 +9,56 @@
 <link rel="stylesheet" href="/styles.css">
 <script defer src="/app.js"></script>
 </head>
-<body x-data="apApp" x-init="init()" x-cloak>
+<body>
 
-<!-- 三栏工作台：工作空间栏 / 对话栏 / 对话正文。 -->
-<div
-  class="app"
-  :class="{
-    'app--rail-hidden': !$store.ap.railVisible,
-    'app--sessions-hidden': !$store.ap.sessionsVisible,
-    'app--resizing': resizing !== '',
-  }"
-  :style="`--rail-w: ${$store.ap.railWidth}px; --sessions-w: ${$store.ap.sessionsWidth}px`"
->
-  <aside class="rail" id="workspace-rail" aria-label="工作空间">
+<!--
+  静态骨架 + <template>。页面不跑任何模板运行时：frontend/ui/*.js 在挂载时取
+  [data-ref] 节点、克隆模板，再用 signal effect 写 textContent / 属性。
+  条目按 key 插入到下面两个注释锚点之前；注释不参与 :nth-last-child。
+-->
+<div class="app" data-ref="app">
+
+  <!-- 三栏工作台：工作空间栏 / 对话栏 / 对话正文。 -->
+  <aside class="rail" id="workspace-rail" aria-label="工作空间" data-ref="rail">
     <div class="rail__head">
       <span class="brand__mark" aria-hidden="true">ap</span>
       <div class="rail__actions">
         <button
           class="icon-btn"
           type="button"
-          @click="openWorkspace()"
-          :disabled="$store.ap.loading || $store.ap.picking"
+          data-ref="rail-open-workspace"
           title="打开新的工作空间"
           aria-label="打开新的工作空间"
         >
           <svg viewBox="0 0 16 16" fill="currentColor" data-icon="plus-lg" aria-hidden="true"></svg>
         </button>
 
-        <div class="rail__sort" @click.outside="closeSortMenu()" @keydown.escape="closeSortMenu()">
+        <div class="rail__sort" data-ref="sort-root">
           <button
             class="icon-btn"
             type="button"
             id="sort-trigger"
-            @click="toggleSortMenu()"
-            :aria-expanded="sortOpen ? 'true' : 'false'"
+            data-ref="sort-trigger"
+            aria-expanded="false"
             aria-controls="sort-menu"
-            :title="'排序：' + $store.ap.sortLabel"
-            :aria-label="'排序：' + $store.ap.sortLabel"
+            title="排序：最近活动"
+            aria-label="排序：最近活动"
           >
             <svg viewBox="0 0 16 16" fill="currentColor" data-icon="arrow-down-up" aria-hidden="true"></svg>
           </button>
           <!-- 两个互斥的开关按钮。这里不用 role="menu"：菜单语义要求方向键导航，
                而我们只是个两选项的排序面板，用 aria-pressed 说明当前选中项。 -->
-          <div class="menu" id="sort-menu" x-show="sortOpen" x-cloak aria-label="排序">
-            <button
-              class="menu__item"
-              type="button"
-              :aria-pressed="$store.ap.sortOrder === 'recent' ? 'true' : 'false'"
-              @click="setSortOrder('recent')"
-            >最近活动</button>
-            <button
-              class="menu__item"
-              type="button"
-              :aria-pressed="$store.ap.sortOrder === 'name' ? 'true' : 'false'"
-              @click="setSortOrder('name')"
-            >名称</button>
+          <div class="menu" id="sort-menu" data-ref="sort-menu" hidden aria-label="排序">
+            <button class="menu__item" type="button" data-sort="recent" aria-pressed="false">最近活动</button>
+            <button class="menu__item" type="button" data-sort="name" aria-pressed="false">名称</button>
           </div>
         </div>
 
         <button
           class="icon-btn"
           type="button"
-          @click="toggleRail()"
-          :aria-expanded="$store.ap.railVisible ? 'true' : 'false'"
+          data-ref="rail-toggle"
+          aria-expanded="true"
           aria-controls="workspace-rail"
           title="折叠工作空间栏"
           aria-label="折叠工作空间栏"
@@ -81,22 +68,7 @@
       </div>
     </div>
 
-    <nav class="rail__list" aria-label="工作空间">
-      <template x-for="project in $store.ap.workspaceProjects" :key="project.cwd">
-        <button
-          class="workspace-item"
-          type="button"
-          :class="{ 'is-active': isActiveProject(project) }"
-          :aria-current="isActiveProject(project) ? 'true' : null"
-          :title="project.cwd"
-          :disabled="$store.ap.loading"
-          @click="switchWorkspace(project)"
-        >
-          <svg class="workspace-item__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="folder2" aria-hidden="true"></svg>
-          <span class="workspace-item__name" x-text="projectName(project)"></span>
-        </button>
-      </template>
-    </nav>
+    <nav class="rail__list" data-ref="workspace-list" aria-label="工作空间"></nav>
   </aside>
 
   <!-- 栏宽分隔条：tabindex 加 role="separator"，指针拖动和方向键都能调。 -->
@@ -107,24 +79,21 @@
     aria-label="工作空间栏宽度"
     aria-valuemin="176"
     aria-valuemax="420"
-    :aria-valuenow="$store.ap.railWidth"
-    :data-active="resizing === 'rail' ? 'true' : null"
+    aria-valuenow="260"
+    data-panel="rail"
+    data-ref="rail-resizer"
     tabindex="0"
     title="拖动调整宽度 · 双击恢复默认"
-    x-show="$store.ap.layoutMode === 'wide' && $store.ap.railVisible"
-    @pointerdown="startResize($event, 'rail')"
-    @keydown="onResizeKey($event, 'rail')"
-    @dblclick="resetPanelWidth('rail')"
   ></div>
 
-  <aside class="sessions-col" id="session-sidebar">
+  <aside class="sessions-col" id="session-sidebar" data-ref="sessions-col">
     <div class="sessions__head">
       <button
         class="icon-btn"
         type="button"
-        x-show="!$store.ap.railVisible"
-        @click="toggleRail()"
-        :aria-expanded="$store.ap.railVisible ? 'true' : 'false'"
+        data-ref="rail-expand"
+        hidden
+        aria-expanded="true"
         aria-controls="workspace-rail"
         title="展开工作空间栏"
         aria-label="展开工作空间栏"
@@ -136,8 +105,7 @@
         <button
           class="icon-btn"
           type="button"
-          @click="openWorkdirFiles()"
-          :disabled="!$store.ap.projectCwd"
+          data-ref="open-files"
           title="在当前工作目录打开文件管理器"
           aria-label="在当前工作目录打开文件管理器"
         >
@@ -146,8 +114,7 @@
         <button
           class="icon-btn"
           type="button"
-          @click="openWorkdirTerminal()"
-          :disabled="!$store.ap.projectCwd"
+          data-ref="open-terminal"
           title="在当前工作目录打开终端"
           aria-label="在当前工作目录打开终端"
         >
@@ -156,63 +123,24 @@
       </div>
     </div>
 
-    <button
-      class="new-session"
-      type="button"
-      @click="newSession()"
-      :disabled="$store.ap.loading"
-    >
+    <button class="new-session" type="button" data-ref="new-session">
       <svg class="new-session__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="plus-lg" aria-hidden="true"></svg>
       新对话
     </button>
 
-    <nav class="sessions" aria-label="对话记录">
-      <button
-        class="session session--draft is-active"
-        type="button"
-        x-show="showsDraftSession()"
-        :disabled="$store.ap.loading"
-        title="新会话"
-        @click="newSession()"
-      >
-        <span class="session__title" x-text="$store.ap.sessionId ? sessionTitle({ session_id: $store.ap.sessionId }) : '新会话'"></span>
+    <nav class="sessions" data-ref="session-list" aria-label="对话记录">
+      <!-- 新 slot 尚未落盘时的占位会话；真实对话按时间分组插到锚点之前。 -->
+      <button class="session session--draft" type="button" data-ref="session-draft" hidden title="新会话">
+        <span class="session__title" data-ref="session-draft-title"></span>
         <span class="session__foot">
-          <span class="session__time" x-text="$store.ap.running ? '运行中' : '尚未开始'"></span>
-          <span class="session__dot" :data-running="$store.ap.running ? 'true' : null" aria-hidden="true"></span>
+          <span class="session__time" data-ref="session-draft-time"></span>
+          <span class="session__dot" data-ref="session-draft-dot" aria-hidden="true"></span>
         </span>
       </button>
 
-      <!-- 按时间分组：今天 / 昨天 / 7 天内 / 更早，空组不渲染。 -->
-      <template x-for="group in $store.ap.sessionGroups" :key="group.key">
-        <div class="session-group">
-          <p class="session-group__label" x-text="group.label"></p>
+      <!-- session-groups-anchor -->
 
-          <template x-for="session in group.sessions" :key="session.session_id">
-            <button
-              class="session"
-              type="button"
-              :class="{ 'is-active': session.session_id === $store.ap.sessionId }"
-              :aria-current="session.session_id === $store.ap.sessionId ? 'true' : null"
-              :disabled="$store.ap.loading"
-              :title="session.session_id"
-              @click="selectSession(session)"
-            >
-              <span class="session__title" x-text="sessionTitle(session)"></span>
-              <span class="session__foot">
-                <span class="session__time" x-text="sessionTime(session.ts)"></span>
-                <span
-                  class="session__dot"
-                  x-show="session.running || session.session_id === $store.ap.sessionId"
-                  :data-running="session.running ? 'true' : null"
-                  aria-hidden="true"
-                ></span>
-              </span>
-            </button>
-          </template>
-        </div>
-      </template>
-
-      <p class="sessions__empty" x-show="showsEmptySessions()">暂无对话</p>
+      <p class="sessions__empty" data-ref="sessions-empty" hidden>暂无对话</p>
     </nav>
   </aside>
 
@@ -223,14 +151,11 @@
     aria-label="对话栏宽度"
     aria-valuemin="176"
     aria-valuemax="420"
-    :aria-valuenow="$store.ap.sessionsWidth"
-    :data-active="resizing === 'sessions' ? 'true' : null"
+    aria-valuenow="260"
+    data-panel="sessions"
+    data-ref="sessions-resizer"
     tabindex="0"
     title="拖动调整宽度 · 双击恢复默认"
-    x-show="$store.ap.layoutMode === 'wide'"
-    @pointerdown="startResize($event, 'sessions')"
-    @keydown="onResizeKey($event, 'sessions')"
-    @dblclick="resetPanelWidth('sessions')"
   ></div>
 
   <div class="workspace">
@@ -238,9 +163,9 @@
       <button
         class="icon-btn topbar__sessions-btn"
         type="button"
-        x-show="$store.ap.layoutMode === 'compact'"
-        @click="toggleSessions()"
-        :aria-expanded="$store.ap.sessionsVisible ? 'true' : 'false'"
+        data-ref="topbar-sessions-btn"
+        hidden
+        aria-expanded="true"
         aria-controls="session-sidebar"
         title="对话记录"
         aria-label="对话记录"
@@ -249,12 +174,11 @@
       </button>
 
       <div class="topbar__heading">
-        <h1 class="topbar__title" x-text="$store.ap.currentTitle"></h1>
+        <h1 class="topbar__title" data-ref="topbar-title"></h1>
         <button
           class="topbar__title-btn"
           type="button"
-          @click="refreshTitle()"
-          :disabled="$store.ap.running || $store.ap.loading || titlePending || !$store.ap.sessionId"
+          data-ref="topbar-title-btn"
           title="重新生成会话标题"
           aria-label="重新生成会话标题"
         >
@@ -265,94 +189,35 @@
       <div class="topbar__right">
         <span
           class="status"
-          x-show="$store.ap.statusKind !== 'idle'"
-          :data-state="$store.ap.statusKind"
-          :title="$store.ap.statusLabel"
-          :aria-label="$store.ap.statusLabel"
+          data-ref="status"
+          data-state="connecting"
+          title="连接中"
+          aria-label="连接中"
         ></span>
-        <span
-          class="chip chip--usage"
-          x-show="$store.ap.usageLabel"
-          :title="$store.ap.usageTitle"
-          x-text="$store.ap.usageLabel"
-        ></span>
+        <span class="chip chip--usage" data-ref="usage" hidden></span>
       </div>
     </header>
 
     <div class="thread">
       <!-- 本会话最近一次被改写的文件；点击复制完整路径。 -->
-      <div class="thread-file" x-show="$store.ap.currentFile">
-        <button
-          class="thread-file__btn"
-          type="button"
-          @click="copyCurrentPath()"
-          :title="'复制路径：' + $store.ap.currentFile"
-        >
+      <div class="thread-file" data-ref="thread-file" hidden>
+        <button class="thread-file__btn" type="button" data-ref="thread-file-btn" title="">
           <svg viewBox="0 0 16 16" fill="currentColor" data-icon="file-earmark-code" aria-hidden="true"></svg>
-          <span class="thread-file__name" x-text="$store.ap.currentFileName"></span>
+          <span class="thread-file__name" data-ref="thread-file-name"></span>
         </button>
       </div>
 
-      <main
-        class="messages"
-        x-ref="messages"
-        @scroll.passive="onMessagesScroll()"
-        :aria-busy="$store.ap.running ? 'true' : null"
-      >
-        <div class="messages__empty" x-show="$store.ap.items.length === 0">
+      <main class="messages" data-ref="messages" aria-busy="false">
+        <div class="messages__empty" data-ref="messages-empty">
           <span class="messages__empty-mark" aria-hidden="true">a</span>
           <p class="messages__empty-title">今天要做什么？</p>
-          <p class="messages__empty-hint" x-show="$store.ap.loading">正在载入会话…</p>
-          <p class="messages__empty-hint" x-show="!$store.ap.loading">输入提示词，ap 会在当前工作目录里开始一轮。</p>
+          <p class="messages__empty-hint" data-ref="messages-empty-loading" hidden>正在载入会话…</p>
+          <p class="messages__empty-hint" data-ref="messages-empty-hint">输入提示词，ap 会在当前工作目录里开始一轮。</p>
         </div>
 
-        <template x-for="item in $store.ap.items" :key="item.key">
-          <div class="event">
-            <template x-if="item.kind === 'user'">
-              <article class="msg msg--user">
-                <p class="msg__text" x-text="item.text"></p>
-              </article>
-            </template>
+        <!-- messages-anchor -->
 
-            <template x-if="item.kind === 'assistant'">
-              <article class="msg msg--assistant">
-                <div
-                  class="msg__text msg__text--markdown markdown-body"
-                  :class="{ 'is-streaming': !item.ended }"
-                  :data-streaming="item.ended ? null : 'true'"
-                  x-html="renderMarkdown(item.text)"
-                ></div>
-              </article>
-            </template>
-
-            <template x-if="item.kind === 'tool'">
-              <details class="tool" :data-status="item.status">
-                <summary class="tool__head" :title="item.args || item.name">
-                  <span class="tool__dot" aria-hidden="true"></span>
-                  <span class="tool__name" x-text="item.name"></span>
-                  <span class="tool__args" x-show="item.args" x-text="item.args"></span>
-                  <span class="tool__meta" x-show="item.durationMs !== null" x-text="formatDuration(item.durationMs)"></span>
-                  <span class="tool__meta" x-show="item.exitCode !== null" x-text="'exit ' + item.exitCode"></span>
-                  <svg class="tool__chevron" viewBox="0 0 16 16" fill="currentColor" data-icon="chevron-right" aria-hidden="true"></svg>
-                </summary>
-                <pre class="tool__output" x-show="item.streamed || item.result" x-text="item.streamed || item.result"></pre>
-                <p class="tool__error" x-show="item.error" x-text="item.error"></p>
-                <p class="tool__note" x-show="item.truncated">… 已截断，完整内容在 transcript</p>
-              </details>
-            </template>
-
-            <template x-if="item.kind === 'notice'">
-              <p
-                class="notice"
-                :data-tone="item.tone"
-                :role="item.tone === 'error' ? 'alert' : null"
-                x-text="item.text"
-              ></p>
-            </template>
-          </div>
-        </template>
-
-        <div class="thinking" x-show="$store.ap.thinking" aria-live="polite">
+        <div class="thinking" data-ref="thinking" hidden aria-live="polite">
           <span class="thinking__dots" aria-hidden="true"><span></span><span></span><span></span></span>
           <span>思考中</span>
         </div>
@@ -361,8 +226,8 @@
       <button
         class="scroll-bottom"
         type="button"
-        x-show="!$store.ap.atBottom"
-        @click="scrollToBottom()"
+        data-ref="scroll-bottom"
+        hidden
         aria-label="回到底部"
         title="回到底部"
       >
@@ -376,30 +241,21 @@
         <textarea
           id="prompt"
           class="composer__input"
-          x-ref="input"
+          data-ref="prompt"
           rows="1"
-          x-model="$store.ap.draft"
-          @keydown="onKeydown($event)"
-          :disabled="$store.ap.loading"
           placeholder="给 ap 一个提示词…（Enter 发送 · Shift+Enter 换行）"
         ></textarea>
 
         <div class="composer__bar">
           <div class="composer__actions">
-            <span
-              class="composer__cwd"
-              x-show="$store.ap.projectCwd ?? $store.ap.config?.cwd"
-              :title="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
-              x-text="$store.ap.projectCwd ?? $store.ap.config?.cwd ?? ''"
-            ></span>
+            <span class="composer__cwd" data-ref="composer-cwd" hidden></span>
           </div>
 
           <div class="composer__buttons">
             <button
               class="control composer__handoff"
               type="button"
-              @click="sendHandoff()"
-              :disabled="$store.ap.running || $store.ap.loading || !$store.ap.sessionId"
+              data-ref="handoff"
               title="把当前会话交接给一个新会话；输入框里的文字会作为交接后的首个提示词"
             >
               <svg viewBox="0 0 16 16" fill="currentColor" data-icon="box-arrow-right" aria-hidden="true"></svg>
@@ -408,19 +264,17 @@
             <button
               class="control composer__stop"
               type="button"
-              x-show="$store.ap.running"
-              @click="cancel"
-              :disabled="$store.ap.cancelling"
+              data-ref="stop"
+              hidden
               title="停止当前 turn"
             >
               <span class="composer__stop-mark" aria-hidden="true"><svg viewBox="0 0 16 16" fill="currentColor" data-icon="stop-fill"></svg></span>
-              <span x-text="$store.ap.cancelling ? '取消中' : '停止'"></span>
+              <span data-ref="stop-label">停止</span>
             </button>
             <button
               class="composer__send"
               type="button"
-              @click="send"
-              :disabled="$store.ap.running || $store.ap.loading || !$store.ap.draft.trim()"
+              data-ref="send"
               aria-label="发送"
               title="发送"
             >
@@ -432,8 +286,79 @@
     </footer>
   </div>
 
-  <div class="scrim" x-show="$store.ap.overlayOpen" @click="closeOverlays()" aria-hidden="true"></div>
+  <div class="scrim" data-ref="scrim" hidden aria-hidden="true"></div>
 </div>
+
+<!-- ---------------------------------------------------------------------- -->
+<!-- 重复结构：ui/*.js 用 cloneTemplate 克隆，用户数据只经 textContent 写入。 -->
+<!-- ---------------------------------------------------------------------- -->
+
+<template id="tpl-workspace-item">
+  <button class="workspace-item" type="button" title="">
+    <svg class="workspace-item__icon" viewBox="0 0 16 16" fill="currentColor" data-icon="folder2" aria-hidden="true"></svg>
+    <span class="workspace-item__name" data-ref="name"></span>
+  </button>
+</template>
+
+<template id="tpl-session-group">
+  <div class="session-group">
+    <p class="session-group__label" data-ref="label"></p>
+  </div>
+</template>
+
+<template id="tpl-session-item">
+  <button class="session" type="button" title="">
+    <span class="session__title" data-ref="title"></span>
+    <span class="session__foot">
+      <span class="session__time" data-ref="time"></span>
+      <span class="session__dot" data-ref="dot" hidden aria-hidden="true"></span>
+    </span>
+  </button>
+</template>
+
+<template id="tpl-message-user">
+  <div class="event">
+    <article class="msg msg--user">
+      <p class="msg__text" data-ref="text" data-render="text"></p>
+    </article>
+  </div>
+</template>
+
+<template id="tpl-message-assistant">
+  <div class="event">
+    <article class="msg msg--assistant">
+      <div
+        class="msg__text msg__text--markdown markdown-body"
+        data-ref="body"
+        data-render="markdown"
+      ></div>
+    </article>
+  </div>
+</template>
+
+<template id="tpl-tool-card">
+  <div class="event">
+    <details class="tool" data-ref="tool" data-status="running">
+      <summary class="tool__head" data-ref="head" title="">
+        <span class="tool__dot" aria-hidden="true"></span>
+        <span class="tool__name" data-ref="name"></span>
+        <span class="tool__args" data-ref="args" hidden></span>
+        <span class="tool__meta" data-ref="duration" hidden></span>
+        <span class="tool__meta" data-ref="exit" hidden></span>
+        <svg class="tool__chevron" viewBox="0 0 16 16" fill="currentColor" data-icon="chevron-right" aria-hidden="true"></svg>
+      </summary>
+      <pre class="tool__output" data-ref="output" data-render="text" hidden></pre>
+      <p class="tool__error" data-ref="error" hidden></p>
+      <p class="tool__note" data-ref="note" hidden>… 已截断，完整内容在 transcript</p>
+    </details>
+  </div>
+</template>
+
+<template id="tpl-notice">
+  <div class="event">
+    <p class="notice" data-ref="notice" data-tone="muted"></p>
+  </div>
+</template>
 
 </body>
 </html>

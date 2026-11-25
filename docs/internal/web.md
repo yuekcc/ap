@@ -9,7 +9,7 @@
                      │◄── SSE: 转发的事件 ────┤  stdout: 事件
                      │                        │  stderr: 日志（缓存）
                      ▼
-               Web UI（Alpine.js SPA，内置于 exe）
+               Web UI（alien-signals + 原生 DOM，内置于 exe）
 ```
 
 一个 `ap-web/` 目录承载 Odin 服务器、前端源码和前端构建配置。产物是单个 `ap-web.exe`。Web 资源在编译期读入 exe，不需要随 exe 分发文件。
@@ -181,11 +181,42 @@ Unix 上的实现如下。
 
 前端依赖下面这些包。
 
-- `alpinejs`、`markdown-exit`、`github-markdown-css`、`mermaid`。
-- 构建期依赖 `esbuild`。
-- `EventSource` 和 `fetch` 使用浏览器原生实现。
+- `alien-signals`、`markdown-exit`、`github-markdown-css`、`mermaid`。
+- 构建期依赖 `esbuild`；`bootstrap-icons` 只在构建期内联图标，不进 bundle。
+- `EventSource` 和 `fetch` 使用浏览器原生实现。视图用原生 DOM API（`<template>`、`cloneNode`、`addEventListener`、`AbortController`、`matchMedia`、`requestAnimationFrame`），没有模板运行时，也不做表达式求值。
 - `build.mjs` 的目标是 Chrome 110、Edge 110、Firefox 110、Safari 16。不写 polyfill 和厂商前缀。
 - `dist/` 的产物是 `index.html`、`app.js`、`styles.css`、`mermaid.js`。`mermaid.js` 单独打包、按需加载，`index.html` 不直接引用它。
+
+前端结构遵循下面的分层。
+
+```text
+main.js ──► controller.js ──► store.js ──► render.js / alien-signals
+   │             │                ▲
+   │             └──► api / sse / prefs
+   └──► ui/* ─────────────────────┘（只读 store、调用 controller 的 action）
+         └──► dom.js / markdown.js / mermaid-blocks.js
+```
+
+- `main.js` 是唯一组装根：创建 store → 恢复本地偏好 → 创建 controller → 挂载 `ui/*` → `boot()`。页面生命周期内不卸载，仍保留一个全局 `dispose()`。
+- `controller.js` 承接会话与 SSE 编排（boot、恢复指针、history、订阅、发送、交接、标题、取消、目录选择、事件队列），不碰 DOM。需要滚动或聚焦时只递增 `store.scrollRequest` / `store.focusNonce`，由 `ui/*` 在下一帧处理。
+- `store.js` 用 `signal` / `computed` 保存 transcript 投影、会话与 UI 状态，并提供只改信号的 action。一次改多个信号的 action 走 `startBatch` / `endBatch`，一帧只 flush 一次。信号按引用比较，嵌套数组和对象一律替换，不原地改。
+- `render.js` 仍是「事件 → 纯视图状态」的 reducer，不依赖 DOM 或信号库。同一 transcript 与事件序列产出逐字节相同的结果。
+- `dom.js` 是最小绑定层：`ref` / `cloneTemplate` / `set*` / `bind*` / `afterRender` / `keyedChildren` / `diffKeys`。它不是模板引擎；`bind*` 只把写入函数包进 effect。
+- `prefs.js` 统一 `localStorage` / `sessionStorage` 的安全读写与键名常量。键名 `ap-web:session`、`ap-web:sidebar-collapsed`、`ap-web:sort`、`ap-web:split` 保持不变。
+- `ui/*` 按区域拆成 shell、rail、sessions、thread、composer、splitter，只读 store、调用 controller 的 action、写 DOM。每个区域在 `mount()` 里建一个 `effectScope` 和一个 `AbortController`，监听器用 `{ signal }` 挂载，返回 `dispose()` 一起释放。
+
+视图与调度遵循下面的规则。
+
+- `index.html` 只放静态骨架与 `<template>`。动态节点带 `data-ref`，重复结构按 kind 一个模板。模板是可信静态内容，用户数据、工具输出和事件文本一律走 `textContent`，只有 assistant 文本经 `dom.setMarkdown` 写 `innerHTML`。
+- 初始应收起的节点直接写 `hidden`；CSS 用 `[hidden] { display: none !important; }`，不再有 `x-cloak`。
+- 消息列表用 `dom.keyedChildren` 做 O(n) 的 key diff：外层只有一个 effect 读 `items`，只有内容变化的条目重跑自己的 effect。条目 effect 挂在 `keyedChildren` 自己的 owner scope 下，条目移除时 `stop()` + `abort()` + `el.remove()`。注释锚点保证条目仍是 `.messages` 的直接子元素。
+- SSE 增量继续先入队：页面可见时用 `requestAnimationFrame`，后台标签页用 `setTimeout(..., 250)`，一次 flush 只调用一次 `store.handleEvents`。`turn_done` 必须排在本轮增量之后应用。
+- effect 只写 DOM，不写应用状态。需要读 `scrollHeight` / `getBoundingClientRect` 的后续动作统一走 `afterRender`（按帧去重，替代 `$nextTick`）。
+- 滚动语义不变：距底部 ≤ 120px 时自动跟随；距底部 > 32px 时露出「回到底部」；平滑滚动优先，`scrollend` 不可用时 400ms 后补一次贴底；`prefers-reduced-motion: reduce` 时直接跳到底。
+- 分隔条拖动期间只给正在拖的那条高亮；`pointermove` / `pointerup` / `pointercancel` / `blur` / `visibilitychange` 挂在 window / document 上，用一次性的 `AbortController` 收尾，不使用 `setPointerCapture`。
+- 调试入口是 `window.apWeb = { store, controller, dispose }`。store 的字段是函数；`dispose()` 释放所有区域。
+
+样式与安全边界不变：只有 assistant 文本走 Markdown，用户输入与工具输出仍是 `textContent`；mermaid 占位块保留源码，消息结束后才渲染，`securityLevel` 固定为 `strict`。
 
 样式遵循下面的基线。
 
@@ -334,7 +365,10 @@ npm --prefix ap-web test
 - 路由、内置资源和磁盘资源查找、ETag、路径穿越。
 - 目录选择：成功、取消、并发 busy、Unix 501、Windows vtable。
 - runner：完整 turn、单飞、跨 session 并发、取消、stderr、线程回收、关停。
-- 前端：delta 累积、工具卡片、history 重放、`seq` 去重、`turn_done` 状态机、请求构造、Markdown 转义。
+- 前端纯函数：delta 累积、工具卡片、history 重放、`seq` 去重、`turn_done` 状态机、请求构造、Markdown 转义。
+- store 信号层：批量发布只触发一次 effect、派生值（标题、用量、状态、侧栏可见性、分组与排序）、`syncCurrent` / 交接的视图重置、`setSessionTitle` 的不可变更新、焦点与滚动请求计数器。
+- dom 层：`diffKeys` 纯逻辑、写入函数「值相同不写」、`keyedChildren` 复用与重排、条目 effect 不受外层列表 effect 牵连（owner scope + `setActiveSub` 回归用例）、`afterRender` 按帧去重。
+- 结构断言：`index.html` 不含 Alpine 指令、模板 id 与 `ui/*.js` 的 `data-ref` / `cloneTemplate` 对齐、`[hidden]` 规则、图标占位与 dist 内联。
 - 集成测试使用本地 fake agent，不访问外网。
 
 手动矩阵：Chrome、Edge、Firefox 的 `EventSource` 行为，两个标签页各跑一个 session，Windows 和 Linux 的进程树终止。

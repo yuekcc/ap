@@ -1,4 +1,4 @@
-// ap-web 前端构建：frontend/main.js -> dist/app.js（含 Alpine，bundle + minify），
+// ap-web 前端构建：frontend/main.js -> dist/app.js（含 alien-signals，bundle + minify），
 // 从同一个 bundle 抽出 dist/styles.css，并把 index.html 写进 dist/（图标在这一步内联）。
 // frontend/mermaid-renderer.js 另打成 dist/mermaid.js，页面第一次出现图表时才加载。
 // dist/ 不提交进仓库，Odin 侧 #load_directory("dist") 在编译期直接读它。

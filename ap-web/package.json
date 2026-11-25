@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "ap-web 浏览器端 UI（Alpine.js + esbuild）",
+  "description": "ap-web 浏览器端 UI（alien-signals + 原生 Web API + esbuild）",
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
-    "test": "node --test frontend/render.test.mjs frontend/markup.test.mjs frontend/markdown.test.mjs frontend/mermaid-blocks.test.mjs frontend/api.test.mjs"
+    "test": "node --test frontend/render.test.mjs frontend/markup.test.mjs frontend/dom.test.mjs frontend/store.test.mjs frontend/markdown.test.mjs frontend/mermaid-blocks.test.mjs frontend/api.test.mjs"
   },
   "dependencies": {
-    "alpinejs": "^3.17.5",
+    "alien-signals": "^3.2.1",
     "github-markdown-css": "^5.9.0",
     "markdown-exit": "^1.3.0",
     "mermaid": "^12.3.0"

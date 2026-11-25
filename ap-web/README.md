@@ -1,6 +1,6 @@
 # ap-web
 
-`ap-web` 是 [ap](../README.md) 的浏览器客户端：一个用 Odin 手写的 HTTP/SSE 服务器 + 内置 Alpine.js 单页应用。它把 `ap` 的 `stream-json` 事件实时渲染到浏览器，但自身不实现 agent、provider、工具或 transcript 写入——每个用户 turn 都启动一个新的 `ap` 子进程。
+`ap-web` 是 [ap](../README.md) 的浏览器客户端：一个用 Odin 手写的 HTTP/SSE 服务器 + 内置单页应用。前端用 `alien-signals` 管状态、用原生 DOM API 管视图，没有模板运行时。它把 `ap` 的 `stream-json` 事件实时渲染到浏览器，但自身不实现 agent、provider、工具或 transcript 写入——每个用户 turn 都启动一个新的 `ap` 子进程。
 
 ```
 浏览器 ──fetch/EventSource──► ap-web ──spawn──► ap --print0 --output-format stream-json
@@ -188,13 +188,18 @@ ap-web/
 ├── opendir.odin         # 在工作目录打开文件管理器 / 终端
 ├── net_windows.odin     # Windows socket / 监听 / DPI / 关停信号
 ├── net_unix.odin        # Unix socket / 监听 / 关停信号
-├── index.html           # Alpine 模板（图标是 <svg data-icon="…"> 占位）
-├── frontend/            # 前端源码（api/sse/store/render/markdown/app）
+├── index.html           # 静态骨架 + <template>（图标是 <svg data-icon="…"> 占位）
+├── frontend/            # 前端源码：main / controller / store / dom / prefs / api / sse / render
+│   └── ui/              # 按区域拆分：shell / rail / sessions / thread / composer / splitter
 ├── dist/                # esbuild 产物，不提交进仓库
 └── build.mjs            # esbuild 构建脚本
 ```
 
-前端使用 Alpine.js、原生 `fetch`/`EventSource`、`markdown-exit`、`github-markdown-css` 和 `bootstrap-icons`，由 esbuild 打包成单个 IIFE；不依赖 CDN。`bootstrap-icons` 只是构建期依赖（`devDependencies`），不会进 bundle。
+前端使用 `alien-signals`、原生 `fetch`/`EventSource` 与 DOM API、`markdown-exit`、`github-markdown-css`，由 esbuild 打包成单个 IIFE；不依赖 CDN。`bootstrap-icons` 只是构建期依赖（`devDependencies`），不会进 bundle。
+
+分三层：`render.js` 是「事件 → 纯视图状态」的 reducer；`store.js` 用 `signal` / `computed` 发布状态并派生 UI 状态；`controller.js` 负责会话与 SSE 编排，不碰 DOM。`ui/*` 只读 store、调用 controller 的 action、写 DOM；`dom.js` 提供 `<template>` 克隆、属性绑定和按 key 复用节点的最小帮手。一次 SSE flush 只触发一次批量渲染，消息列表按 key 做 O(n) diff。
+
+浏览器控制台里可以访问 `window.apWeb = { store, controller, dispose }` 调试：`store` 的字段是函数（例如 `store.items()`），`dispose()` 释放所有区域的 effect 与监听器。
 
 `index.html` 里的图标写成空的 `<svg … data-icon="folder2"></svg>`（值就是 `bootstrap-icons/icons/` 下的文件名），`build.mjs` 在构建时把对应 SVG 的内层路径内联进 `dist/index.html`。因此运行时不请求图标字体或 sprite，图标也不额外落成 dist 文件；名字写错时构建直接失败。`ap`、`a` 这类文字标记不算图标，仍是文本。
 
