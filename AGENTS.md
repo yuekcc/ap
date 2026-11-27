@@ -4,13 +4,14 @@
 
 ## 项目形态
 
-ap 是用 Odin 写的 coding agent。`ap` 本体是一次性 CLI：一条提示词进，一个 turn 出。`ap-tui` 和 `ap-web` 是独立前端，每轮启动一个 `ap` 子进程，通过 `--output-format stream-json` 交互。任何协议改动都可能同时影响 CLI、子代理、TUI 和 Web 四个消费者。
+ap 是用 Odin 写的 coding agent。`ap` 本体是一次性 CLI：一条提示词进，一个 turn 出。`ap-tui` 和 `ap-web` 是独立前端，每轮启动一个 `ap` 子进程，通过 `--output-format stream-json` 交互。Windows 另有 `ap-tray`，在系统托盘里启动和重启 `ap-web.exe`。任何协议改动都可能同时影响 CLI、子代理、TUI、Web 和托盘五个消费者。
 
 ## 环境
 
 - Odin nightly，开发和验证使用 `dev-2026-11-nightly:9a69916`。nightly 的 stdlib 会变，不要依赖更新版本的 API；升级 Odin 后必须重跑完整测试。
 - Windows 需要 Git for Windows 提供 `bash.exe`。ap 会跳过 `C:\Windows\System32` 下的 WSL `bash.exe`；`AP_BASH` 可指定绝对路径。
 - Linux 和 macOS 需要系统 libcurl 开发包。Windows 使用 Odin 随附的静态 libcurl。
+- `ap-tray` 只支持 Windows，编译为 GUI subsystem，运行时要求 `ap-web.exe` 与它在同一目录。托盘图标是根目录 `tray.ico`，编译期内嵌；换图标后重新编译 ap-tray。
 - `ap-web/dist/` 是构建产物，不提交进仓库；编译 `ap-web` 前必须用 Node 和 npm 生成它。
 - 构建入口是 `./build.sh`，测试入口是 `./test.sh`。仓库没有 `build.ps1` 或 `test.ps1`，不要引用不存在的脚本。
 - 不要提交 `build/`、`tmp/`、`.ap/`、`node_modules/`、`ap-web/dist/`、日志、真实 API key 或其他密钥。
@@ -18,7 +19,7 @@ ap 是用 Odin 写的 coding agent。`ap` 本体是一次性 CLI：一条提示�
 ## 构建与测试
 
 ```sh
-./build.sh                 # 构建前端并编译四个入口
+./build.sh                 # 构建前端并编译四个通用入口（Windows 另含 ap-tray）
 ./test.sh                  # 全部 Odin 测试 + tools/check-deps.sh
 tools/check-deps.sh        # 只检查包边界
 tools/check-deps.sh --self-test   # 验证检查器本身能抓到违规
@@ -35,6 +36,7 @@ odin test ap-cli -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fals
 odin test ap-web -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test magi -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+odin test ap-tray -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 ```
 
 测试不调用真实 LLM，也不依赖外网。需要 HTTP 或 agent 时使用本地替身，例如 `ap-web/testdata/fake_agent/`。
@@ -45,7 +47,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 
 | 包 | 职责 | 关键禁止 |
 | --- | --- | --- |
-| `cmd/ap`、`cmd/ap-tui`、`cmd/ap-web`、`cmd/magi-cli` | 只放 `main`，调用对应库的 `run` | 不承载业务逻辑 |
+| `cmd/ap`、`cmd/ap-tui`、`cmd/ap-web`、`cmd/ap-tray`、`cmd/magi-cli` | 只放 `main`，调用对应库的 `run` | 不承载业务逻辑 |
 | `ap-cli`（`apcli`） | CLI adapter 与组装根：argv、环境变量、`settings.json`、agent、技能、prompt、输出、退出码、信号 | 不直接 import `ap-core/engine` |
 | `ap-cli/tools`（`aptools`） | 五个工具的实现、工具配置、进程树、子代理启动 | 不 import `apcore`、`engine` |
 | `ap-cli/skills`（`apskills`） | 技能发现、frontmatter、提示词块 | 不 import `apcore`、`engine`、`aptools` |
@@ -57,6 +59,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | `ap-core/client` | 前端 kit：spawn、逐行泵、取消、只读 session | 不 import engine 或 `apcore` |
 | `ap-tui`、`ap-web` | 前端库，提供 `run` | 本地包只允许 `ap-core/client`、`ap-core/protocol`；`ap-tui` 另可用 `lineedit`；不互相 import |
 | `magi` | 三角色投票 CLI：参数、输入、提示词、并行 session、一票否决 | 不直接 import `ap-core/engine`、`ap-cli` 或前端；不执行工具 |
+| `ap-tray`（`aptray`） | Windows 托盘：图标、菜单、启动与结束 `ap-web.exe` | 只允许 `core:`/`base:`/`vendor:`；不 import ap-core、前端或 `ap-web` |
 | `lineedit` | 独立行编辑器：decoder、editor、layout、render、history、transport | 不 import 任何 ap 本地包；只允许 `core:`/`base:`/`vendor:` |
 
 改 import 后先跑 `tools/check-deps.sh`。不要用别名、条件编译或注释绕过检查器；需要放宽边界时，先改规格和检查器。
@@ -100,6 +103,7 @@ odin test lineedit -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=fa
 | Web 后端 | `ap-web/server.odin`、`api.odin`、`sse.odin`、`runner.odin` | `docs/web.md`、对应 `*_test.odin` |
 | Web 前端 | `ap-web/frontend/`、`ap-web/index.html` | 本地重新生成 `ap-web/dist/`（不提交），跑 `npm --prefix ap-web test`；不要手改 `dist/`；图标是 `data-icon` 占位，由 `build.mjs` 从 `bootstrap-icons` 内联 |
 | MAGI 决策 | `magi/`、`cmd/magi-cli/` | `docs/magi.md`、`docs/README.md`、README 的 MAGI 段落 |
+| Windows 托盘 | `ap-tray/`、`cmd/ap-tray/`、`tray.ico` | `ap-tray/tray_test.odin`、`ap-tray/tray_windows_test.odin`、`docs/11-web.md`、`docs/internal/architecture.md`、`docs/internal/dependencies.md` |
 | 包边界 | `tools/check-deps.sh`、`tools/check-deps.ps1` | `docs/dependencies.md`、`docs/architecture.md` |
 
 ## 代码约定

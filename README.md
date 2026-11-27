@@ -4,7 +4,7 @@ ap 是一个用 [Odin](https://odin-lang.org/) 写的命令行 coding agent。�
 
 名字取自 **agent process**：一条提示词对应一个进程、一个 turn；子代理和前端每轮也各自拉起一个 `ap` 子进程。
 
-`ap` 本体是一次性 CLI。`ap-tui`（终端）和 `ap-web`（浏览器）是独立前端，每轮启动一个 `ap` 子进程，读取 `stream-json` 事件并渲染。`magi-cli` 是三名角色独立投票、一票否决的决策工具，基于 `apcore` SDK。
+`ap` 本体是一次性 CLI。`ap-tui`（终端）和 `ap-web`（浏览器）是独立前端，每轮启动一个 `ap` 子进程，读取 `stream-json` 事件并渲染。`magi-cli` 是三名角色独立投票、一票否决的决策工具，基于 `apcore` SDK。Windows 上另有 `ap-tray`，在系统托盘里启动和重启 `ap-web`。
 
 **用户手册见 [docs/README.md](docs/README.md)。** 安装、配置、日常使用、三种界面、安全边界和参数速查都在手册里；本文件只保留仓库入口和开发信息。
 
@@ -24,7 +24,7 @@ ap 是一个用 [Odin](https://odin-lang.org/) 写的命令行 coding agent。�
 ./build.sh
 ```
 
-脚本会用 `npm --prefix ap-web run build` 重新生成 `ap-web/dist`、运行 `tools/check-deps.sh`，再编译四个入口。产物在 `build/`：`ap`、`ap-tui`、`ap-web`、`magi-cli`；Windows 为对应的 `.exe`。
+脚本会用 `npm --prefix ap-web run build` 重新生成 `ap-web/dist`，再编译四个通用入口。产物在 `build/`：`ap`、`ap-tui`、`ap-web`、`magi-cli`；Windows 为对应的 `.exe`，并额外编译 `ap-tray.exe`。
 
 配置并运行：
 

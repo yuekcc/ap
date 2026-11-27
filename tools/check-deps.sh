@@ -187,6 +187,27 @@ check_imports() {
 		done <"$f"
 	done
 
+	for f in ap-tray/*.odin; do
+		[ -f "$f" ] || continue
+		while IFS= read -r line; do
+			t=${line#"${line%%[![:space:]]*}"}
+			case "$t" in
+			import\ *)
+				rest=${t#*\"}
+				[ "$rest" = "$t" ] && continue
+				path=${rest%%\"*}
+				case "$path" in
+				core:* | base:* | vendor:*) ;;
+				*)
+					echo "check-deps: $f: ap-tray 不允许 import 本地包 \"$path\"（只允许 core:/base:/vendor:）"
+					fail=1
+					;;
+				esac
+				;;
+			esac
+		done <"$f"
+	done
+
 	for f in ap-core/engine/*.odin; do
 		[ -f "$f" ] || continue
 		while IFS= read -r line; do
@@ -383,6 +404,15 @@ if $self_test; then
 	if check_imports >/dev/null 2>&1; then
 		rm -f "$probe"
 		echo "check-deps: self-test 失败：lineedit 依赖本地包没有被检出"
+		exit 1
+	fi
+	rm -f "$probe"
+
+	probe=ap-tray/__check_deps_probe.odin
+	printf '%s\n' 'package aptray' '' 'import "../ap-core"' >"$probe"
+	if check_imports >/dev/null 2>&1; then
+		rm -f "$probe"
+		echo "check-deps: self-test 失败：ap-tray 依赖本地包没有被检出"
 		exit 1
 	fi
 	rm -f "$probe"

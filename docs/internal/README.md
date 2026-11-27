@@ -4,10 +4,11 @@ ap 是用 Odin 写的 coding agent。输入一条提示词，它进入 ReAct 循
 
 本文件是规格入口，说明 ap 的设计取舍、硬约束、已定决策、术语和文档地图。参数表、事件字段和模块契约分别由各分篇定义。
 
-## 三种进程形态
+## 四种进程形态
 
 - `ap` 是一次性 CLI。一条提示词进，一个 turn 出，然后退出。
 - `ap-tui` 与 `ap-web` 是独立前端。每个 turn 启动一个 `ap` 子进程，提示词走 stdin，事件走 stdout。
+- `ap-tray` 是 Windows 托盘启动器。它启动并管理同目录的 `ap-web.exe`，不直接处理对话。
 - `magi-cli` 是第二个进程内宿主。它直接调用 `apcore`，为三名角色各开一个隔离 session。
 
 `ap` 本体不跨 turn 保存交互状态。session 的历史在 transcript 里，下一轮由 `-s` 或 `-c` 恢复。`ap-tui` 与 `ap-web` 因此可以随时重启，也能在刷新后从 transcript 重放。`magi-cli` 不启动 `ap` 子进程，也不注册工具。
@@ -88,10 +89,12 @@ cmd/ap ──► ap-cli ──► apcore ──► engine
 cmd/ap-tui ──► ap-tui ──┐
 cmd/ap-web ──► ap-web ──┴──► ap-core/client ──► ap-core/platform
 
+cmd/ap-tray ──► ap-tray（Windows，只依赖标准库）
+
 cmd/magi-cli ──► magi ──► apcore ──► engine
 ```
 
-`ap-cli` 是组装根，负责把外部输入变成 `apcore.Config`。`ap-tui`、`ap-web` 与 `magi` 都不链接 agent loop。模块职责与依赖方向见 [architecture.md](architecture.md)，允许的 import 边见 [dependencies.md](dependencies.md)。
+`ap-cli` 是组装根，负责把外部输入变成 `apcore.Config`。`ap-tui`、`ap-web` 与 `magi` 都不链接 agent loop；`ap-tray` 只负责拉起和结束 `ap-web.exe`。模块职责与依赖方向见 [architecture.md](architecture.md)，允许的 import 边见 [dependencies.md](dependencies.md)。
 
 ## 文档地图
 

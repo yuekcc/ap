@@ -115,6 +115,18 @@ function Test-ImportRules {
         }
     }
 
+    Get-ChildItem "ap-tray/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_.FullName
+        Get-Content $file | ForEach-Object {
+            if ($_ -match '^\s*import\s+(?:[A-Za-z_]\w*\s+)?"([^"]+)"') {
+                $path = $Matches[1]
+                if ($path -notmatch '^(core:|base:|vendor:)') {
+                    Fail-Check ('{0}: ap-tray 不允许 import 本地包 "{1}"（只允许 core:/base:/vendor:）' -f $file, $path)
+                }
+            }
+        }
+    }
+
     Get-ChildItem "ap-core/engine/*.odin" -ErrorAction SilentlyContinue | ForEach-Object {
         $file = $_.FullName
         Get-Content $file | ForEach-Object {
@@ -247,6 +259,15 @@ if ($SelfTest) {
     Remove-Item $probe -Force
     if ($ok) {
         Write-Host "check-deps: self-test 失败：lineedit 依赖本地包没有被检出" -ForegroundColor Red
+        exit 1
+    }
+
+    $probe = "ap-tray/__check_deps_probe.odin"
+    Set-Content -Path $probe -Value "package aptray`n`nimport `"../ap-core`"" -Encoding utf8
+    $ok = Test-ImportRules-Bool
+    Remove-Item $probe -Force
+    if ($ok) {
+        Write-Host "check-deps: self-test 失败：ap-tray 依赖本地包没有被检出" -ForegroundColor Red
         exit 1
     }
     Write-Host "check-deps: self-test 通过"

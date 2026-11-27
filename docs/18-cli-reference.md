@@ -124,6 +124,14 @@ ap-web [--port 8417] [--host 127.0.0.1] [--web-root <dir>]
 
 `-s` 和 `-c` 互斥。`ap-web` 不暴露 `--no-agents-md` 和 `--no-skills`。
 
+## ap-tray
+
+```text
+ap-tray
+```
+
+Windows 专用的托盘入口，不接收参数。启动时拉起同目录的 `ap-web.exe`（默认端口 8417），双击托盘图标打开页面，右键菜单可以打开页面、重启 `ap-web` 或退出。托盘退出时会结束它启动的 `ap-web.exe`。详细行为见 [11. 浏览器界面](11-web.md#windows-托盘)。
+
 ## 环境变量
 
 | 变量 | 作用 |

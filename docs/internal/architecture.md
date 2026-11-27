@@ -4,12 +4,13 @@
 
 ## 进程形态
 
-ap 有三种进程形态，共用同一套 SDK 或进程协议。
+ap 有四种进程形态，共用同一套 SDK 或进程协议。
 
 | 形态 | 入口 | 启动方式 | 主要通道 |
 | --- | --- | --- | --- |
 | 一次性 CLI | `cmd/ap` 调 `apcli.run` | 用户或脚本直接执行 | 结果写 stdout，诊断与进度写 stderr |
 | 前端 | `cmd/ap-tui` 调 `aptui.run`，`cmd/ap-web` 调 `apweb.run` | 每个 turn 启动一个 `ap` 子进程 | 提示词走 stdin，事件走 stdout |
+| Windows 托盘 | `cmd/ap-tray` 调 `aptray.run` | 启动时拉起同目录 `ap-web.exe`，并记录进程句柄 | 无 stdin/stdout，只处理 Win32 托盘消息 |
 | 决策器 | `cmd/magi-cli` 调 `magi.run` | 进程内 import `apcore` | 决议写 stdout，进度写 stderr |
 
 ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具，没有工作线程池。ap 创建的子进程只有两类：`bash` 工具启动的 shell，以及 `task` 工具启动的子代理。两者都在取消时终止整棵进程树。`bash` 另有超时，超时同样终止整棵进程树；`task` 本身不设超时。
@@ -17,6 +18,8 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 `ap-tui` 与 `ap-web` 不链接 agent 代码。它们每轮拼出 `ap --print0 --output-format stream-json`，把提示词写入子进程 stdin，逐行解析 stdout。前端只理解 `ap-core/protocol` 的宽松事件结构和 `ap-core/client` 的进程辅助。`ap-tui` 直接读 transcript 做历史重放。`ap-web` 还维护 HTTP/SSE 连接和按 session 的单飞。
 
 `magi` 是第二个进程内宿主。它 import `apcore` 与 `ap-core/platform`，为三名角色各开一个隔离 session。它不启动 `ap` 子进程，不链接 `ap-cli`，不注册工具。
+
+`ap-tray` 是 Windows 专用启动器。它不链接 ap 的任何库，只在启动时用 `CreateProcessW` 拉起同目录的 `ap-web.exe`，记录进程句柄，并在重启或退出时结束它。托盘只操作 `ap-web`，不直接启动 `ap` 子进程。它启动时启用 Per-Monitor V2 DPI 感知（旧系统退回 system aware），图标来自编译期内嵌的根目录 `tray.ico`。
 
 ## 模块职责
 
@@ -34,6 +37,7 @@ ap 本体只有一条控制流。一个 turn 内按顺序执行 step 和工具�
 | `ap-core/client` | spawn、拼 argv、逐行泵、取消、只读 project/session/blob、历史展示辅助 | 不 import engine 或 `apcore` 根包，不含 agent |
 | `ap-tui`（`aptui`） | 终端渲染、输入、编辑器、按键、terminal 控制、历史重放 | 不 import engine 或 platform，不含 agent |
 | `ap-web`（`apweb`） | HTTP/1.1、SSE、API、turn runner、前端资源、目录选择 | 不 import engine 或 platform，不含 agent |
+| `ap-tray`（`aptray`） | Windows 托盘：图标、菜单、启动与结束 `ap-web.exe` | 只用标准库，不 import ap-core、前端或 `ap-web` |
 | `magi` | 三角色提示词、并行 session、投票聚合、一票否决、输出 | 不 import engine 或 `ap-cli`，不执行工具 |
 
 `ap-core/engine` 内部按文件分工：
@@ -58,12 +62,14 @@ flowchart TD
         C_AP["cmd/ap"]
         C_TUI["cmd/ap-tui"]
         C_WEB["cmd/ap-web"]
+        C_TRAY["cmd/ap-tray"]
         C_MAGI["cmd/magi-cli"]
     end
 
     subgraph FRONT["前端库"]
         APTUI["ap-tui · aptui"]
         APWEB["ap-web · apweb"]
+        APTRAY["ap-tray · aptray<br/>Windows 托盘，只依赖标准库"]
     end
 
     subgraph HOST["宿主 / 组装根"]
@@ -87,6 +93,7 @@ flowchart TD
     C_AP --> APCLI
     C_TUI --> APTUI
     C_WEB --> APWEB
+    C_TRAY --> APTRAY
     C_MAGI --> MAGI
 
     APCLI --> APCORE
@@ -122,7 +129,7 @@ flowchart TD
     APWEB --> PROTO
 ```
 
-图上没有画出的本地 import 边都是禁止的。`lineedit` 不参与 ap 的宿主依赖图，`ap-web` 不能用它；`platform` 与 `protocol` 的本地依赖为空，叶子方向只到 `core:`、`base:`、`vendor:`。
+图上没有画出的本地 import 边都是禁止的。`lineedit` 不参与 ap 的宿主依赖图，`ap-web` 不能用它；`ap-tray` 只依赖标准库，不参与库依赖图；`platform` 与 `protocol` 的本地依赖为空，叶子方向只到 `core:`、`base:`、`vendor:`。
 
 维持这条方向的五条规则：
 

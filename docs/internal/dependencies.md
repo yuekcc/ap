@@ -11,6 +11,7 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 | `cmd/ap/` | `main` | 入口，调用 `apcli.run(os.args)` |
 | `cmd/ap-tui/` | `main` | 入口，调用 `aptui.run(os.args)` |
 | `cmd/ap-web/` | `main` | 入口，调用 `apweb.run(os.args)` |
+| `cmd/ap-tray/` | `main` | 入口，调用 `aptray.run()`（Windows 专用） |
 | `cmd/magi-cli/` | `main` | 入口，调用 `magi.run(os.args)` |
 | `ap-cli/` | `apcli` | CLI adapter 与组装根：argv、环境发现、`settings.json(c)`、agent 定义、prompt sections、输出格式、退出码、信号 |
 | `ap-cli/tools/` | `aptools` | 五个内置工具、`Tool_Config`、进程树清理、子代理启动 |
@@ -24,11 +25,12 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 | `ap-tui/` | `aptui` | 终端前端库：参数、agent 调度、渲染、输入、编辑器、按键、终端控制 |
 | `lineedit/` | `lineedit` | 独立行编辑器：decoder、editor、layout、render、history、transport；不依赖 ap 本地包，可整体迁出 |
 | `ap-web/` | `apweb` | HTTP 与 SSE 前端库：server、api、sse、runner、assets、pickdir、net |
+| `ap-tray/` | `aptray` | Windows 托盘：图标、菜单、启动与结束同目录 `ap-web.exe`；只依赖标准库 |
 | `magi/` | `magi` | 三角色投票：参数、输入、提示词、并行 session、聚合、输出、信号 |
 
 同目录即同包。`ap-cli/tools` 与 `ap-cli/skills` 是独立子包，不是 `apcli` 的一部分。`cmd/*` 每个目录只有 `main`，没有业务逻辑。`ap-core/*.odin` 的包名是 `apcore`，它不得定义 `main`，否则导入它的宿主会把入口链进来。
 
-`ap-cli` 是 ap 的组装根。它解析 argv、读取 `settings.jsonc` 或 `settings.json`（JSON5 解析，`.jsonc` 优先）、定位 bash、解析 agent 文件、发现技能、组装 prompt sections、安装信号、选择输出格式并映射退出码。`magi/settings.odin` 另有一份只读的同类读取器，只取 SDK 设置字段。`apcore` 只接收宿主传入的 `Config`，不读 argv、环境变量或 `settings.json`，不写 stdout，不装信号，不调用 `os.exit`。`ap-tui` 与 `ap-web` 通过 `ap-core/client` 读取 `AP_CONFIG`、`AP_AGENT_BIN` 与 `AP_BIN`。
+`ap-cli` 是 ap 的组装根。它解析 argv、读取 `settings.jsonc` 或 `settings.json`（JSON5 解析，`.jsonc` 优先）、定位 bash、解析 agent 文件、发现技能、组装 prompt sections、安装信号、选择输出格式并映射退出码。`magi/settings.odin` 另有一份只读的同类读取器，只取 SDK 设置字段。`apcore` 只接收宿主传入的 `Config`，不读 argv、环境变量或 `settings.json`，不写 stdout，不装信号，不调用 `os.exit`。`ap-tui` 与 `ap-web` 通过 `ap-core/client` 读取 `AP_CONFIG`、`AP_AGENT_BIN` 与 `AP_BIN`。`ap-tray` 不参与 ap 的库依赖图，只用 `core:sys/windows` 等标准库直接管理托盘和 `ap-web.exe` 进程。
 
 ## 允许的 import 边
 
@@ -48,11 +50,12 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 | `ap-core/platform/*.odin`、`ap-core/protocol/*.odin` | `core:`、`base:`、`vendor:` |
 | `ap-core/*.odin` | `core:`、`base:`、`vendor:`、`engine`、`platform`、`protocol`、`tool` |
 | `lineedit/*.odin` | `core:`、`base:`、`vendor:` |
+| `ap-tray/*.odin` | `core:`、`base:`、`vendor:` |
 | `cmd/*/*.odin` | `core:`、`base:`、`vendor:`，加该入口对应的一个库包 |
 
 `lineedit` 是独立库，不参与 ap 的宿主依赖图。它只允许标准库 import，不得依赖 `ap-core/*`、`ap-cli/*` 或任何前端，以便整体迁出仓库。
 
-`cmd/*` 的对应关系是：`cmd/ap` 允许 `../../ap-cli`，`cmd/magi-cli` 允许 `../../magi`，其余入口允许 `../../<目录名>`。
+`cmd/*` 的对应关系是：`cmd/ap` 允许 `../../ap-cli`，`cmd/magi-cli` 允许 `../../magi`，其余入口允许 `../../<目录名>`（`cmd/ap-tray` 对应 `../../ap-tray`）。
 
 几条关键边由这张表直接推出：
 
@@ -62,6 +65,7 @@ Odin 没有 Go 的 `internal` 机制。同仓库的相对 `import` 永远可达�
 - `ap-tui` 与 `ap-web` 不能 import `ap-core/engine`、`ap-core/platform`、`apcore` 根包、`ap-cli` 或彼此。前端只通过进程协议和 `ap-core/client` 工作。
 - `ap-tui` 可以用 `lineedit` 做行编辑；`ap-web` 不允许 import `lineedit`。
 - `magi` 不能 import `ap-core/engine`、`ap-cli`、`ap-core/client` 或前端。它是 `apcore` 的第二个宿主，不与 CLI 共享代码。
+- `ap-tray` 是 Windows 专用的小型启动器，只允许标准库。它不能 import `ap-core`、前端库或 `ap-web`；与 `ap-web.exe` 的交互只通过进程和命令行完成。
 
 不要用 import 别名、条件编译或注释绕过检查器。别名不改变被扫描的路径。需要放宽边界时，先改这份规格与两个检查脚本，再改代码。
 
@@ -92,11 +96,11 @@ odin build cmd/ap-web -out:<tmp> -export-dependencies:json -export-dependencies-
 odin build cmd/ap-tui -out:<tmp> -export-dependencies:json -export-dependencies-file:<tmp>/ap-tui.json
 ```
 
-随后断言导出的依赖清单里不出现 `ap-core/engine/`。POSIX 脚本直接匹配 JSON 文本，PowerShell 脚本检查 `source_files` 字段。这条断言证明 agent 代码没有进入前端二进制。`odin build` 失败也算检查失败。检查只构建这两个前端，不构建 `cmd/ap` 或 `cmd/magi-cli`。
+随后断言导出的依赖清单里不出现 `ap-core/engine/`。POSIX 脚本直接匹配 JSON 文本，PowerShell 脚本检查 `source_files` 字段。这条断言证明 agent 代码没有进入前端二进制。`odin build` 失败也算检查失败。检查只构建这两个前端，不构建 `cmd/ap`、`cmd/magi-cli` 或仅支持 Windows 的 `cmd/ap-tray`。
 
 ### `--self-test` 验证什么
 
-自检临时写入六个探针文件，每次只写一个，跑完立即删除：
+自检临时写入七个探针文件，每次只写一个，跑完立即删除：
 
 | 探针 | 写入的违规 import |
 | --- | --- |
@@ -106,8 +110,9 @@ odin build cmd/ap-tui -out:<tmp> -export-dependencies:json -export-dependencies-
 | `ap-cli/__check_deps_probe.odin` | `../ap-core/engine` |
 | `ap-core/engine/__check_deps_probe.odin` | `../../ap-cli/tools` |
 | `lineedit/__check_deps_probe.odin` | `../ap-core` |
+| `ap-tray/__check_deps_probe.odin` | `../ap-core` |
 
-每个探针都必须让 import 扫描失败。只要有一个探针通过，自检就报失败并以 1 退出。六个都检出后，脚本打印 `check-deps: self-test 通过` 并以 0 退出。`ap-web` 的 `../lineedit` 探针验证只有 `ap-tui` 被允许使用 `lineedit`。
+每个探针都必须让 import 扫描失败。只要有一个探针通过，自检就报失败并以 1 退出。七个都检出后，脚本打印 `check-deps: self-test 通过` 并以 0 退出。`ap-web` 的 `../lineedit` 探针验证只有 `ap-tui` 被允许使用 `lineedit`。
 
 自检只验证 import 扫描能抓到禁止的边。它不验证编译文件清单，也不能替代一次正常的 `tools/check-deps.sh`。自检期间探针文件短暂存在于源码树，正常运行不会写入任何源文件。
 

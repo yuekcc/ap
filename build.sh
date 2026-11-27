@@ -32,4 +32,14 @@ odin build ../cmd/ap -out:ap$ext -vet "${FLAGS[@]}"
 odin build ../cmd/ap-tui -out:ap-tui$ext -vet "${FLAGS[@]}"
 odin build ../cmd/ap-web -out:ap-web$ext -vet "${FLAGS[@]}"
 odin build ../cmd/magi-cli -out:magi-cli$ext -vet "${FLAGS[@]}"
-echo "built ${out}/ap$ext ${out}/ap-tui$ext ${out}/ap-web$ext ${out}/magi-cli$ext"
+built="${out}/ap$ext ${out}/ap-tui$ext ${out}/ap-web$ext ${out}/magi-cli$ext"
+
+# ap-tray 只支持 Windows，用 GUI subsystem 编译，避免启动时弹出控制台。
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    odin build ../cmd/ap-tray -out:ap-tray$ext -vet -subsystem:windows "${FLAGS[@]}"
+    built="$built ${out}/ap-tray$ext"
+    ;;
+esac
+
+echo "built $built"

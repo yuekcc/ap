@@ -1,11 +1,12 @@
 # 2. 安装 ap
 
-当前版本没有面向普通用户的预编译安装包。你需要从源码构建。构建一次会得到四个可执行文件：
+当前版本没有面向普通用户的预编译安装包。你需要从源码构建。构建一次会得到四个通用可执行文件，Windows 还会额外得到托盘入口：
 
 - `ap`：一次性命令行。
 - `ap-tui`：终端界面。
 - `ap-web`：浏览器界面。
 - `magi-cli`：三名角色投票的决策工具。
+- `ap-tray`：Windows 专用的托盘入口，启动和管理 `ap-web.exe`。
 
 ## 准备环境
 
@@ -29,7 +30,7 @@ Windows 用户请在 Git Bash 里执行构建命令，不要在 `cmd.exe` 或 Po
 脚本会做两件事：
 
 1. 用 `npm --prefix ap-web run build` 重新生成 `ap-web/dist`。
-2. 编译四个入口。
+2. 编译四个通用入口；在 Windows 上再编译 `ap-tray`。
 
 产物在 `build/`：
 
@@ -40,7 +41,7 @@ build/ap-web
 build/magi-cli
 ```
 
-Windows 下是对应的 `.exe` 文件。
+Windows 下是对应的 `.exe` 文件，并额外生成 `build/ap-tray.exe`。`ap-tray` 只支持 Windows，需要和 `ap-web.exe` 放在同一目录。
 
 如果 `build.sh` 在前端构建处停下，通常是 `ap-web/node_modules` 不存在。先安装依赖：
 
